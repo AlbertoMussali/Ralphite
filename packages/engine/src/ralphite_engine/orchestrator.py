@@ -114,6 +114,14 @@ class LocalOrchestrator:
         plans = self.list_plans()
         if not plans:
             raise FileNotFoundError("no plans found in .ralphite/plans")
+
+        # Prefer a parseable v2 plan, so legacy v1 files don't break default runs.
+        for candidate in plans:
+            try:
+                parse_plan_yaml(candidate.read_text(encoding="utf-8"))
+                return candidate
+            except Exception:
+                continue
         return plans[0]
 
     def goal_to_plan(self, goal: str, filename_hint: str = "goal") -> Path:

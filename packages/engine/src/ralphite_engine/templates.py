@@ -137,6 +137,26 @@ def dump_yaml(plan: dict) -> str:
     return yaml.safe_dump(plan, sort_keys=False, allow_unicode=False)
 
 
+def _is_v2_plan_file(path: Path) -> bool:
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if not isinstance(raw, dict):
+        return False
+    try:
+        return int(raw.get("version", 1)) == 2
+    except (TypeError, ValueError):
+        return False
+
+
+def _starter_target_path(plans_dir: Path) -> Path:
+    default = plans_dir / "starter_block.yaml"
+    if not default.exists():
+        return default
+    return plans_dir / "starter_block.v2.yaml"
+
+
 def seed_starter_if_missing(plans_dir: Path) -> Path | None:
     plans_dir.mkdir(parents=True, exist_ok=True)
     existing = [p for p in plans_dir.iterdir() if p.is_file() and p.suffix.lower() in {".yaml", ".yml"}]
@@ -144,8 +164,11 @@ def seed_starter_if_missing(plans_dir: Path) -> Path | None:
     task_file = workspace_root / "RALPHEX_TASK.md"
     if not task_file.exists():
         task_file.write_text(make_starter_task_markdown(), encoding="utf-8")
-    if existing:
+
+    # Keep user-provided plans, but ensure at least one v2 starter exists.
+    if existing and any(_is_v2_plan_file(path) for path in existing):
         return None
-    path = plans_dir / "starter_block.yaml"
+
+    path = _starter_target_path(plans_dir)
     path.write_text(dump_yaml(make_starter_plan()), encoding="utf-8")
     return path
