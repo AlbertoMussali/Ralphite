@@ -75,41 +75,6 @@ class PlanDraftState(BaseModel):
     meta: dict[str, Any] = Field(default_factory=dict)
 
 
-class StepRowState(BaseModel):
-    id: str
-    kind: str
-    group: str = "default"
-    depends_on: list[str] = Field(default_factory=list)
-    agent_id: str | None = None
-    task: str | None = None
-    gate_mode: str | None = None
-    gate_pass_if: str | None = None
-
-
-class EdgeRowState(BaseModel):
-    from_node: str
-    to: str
-    when: str = "success"
-    loop_id: str | None = None
-
-
-class AgentRowState(BaseModel):
-    id: str
-    provider: str
-    model: str
-    system_prompt: str = ""
-    tools_allow: list[str] = Field(default_factory=list)
-
-
-class EditorSessionState(BaseModel):
-    draft_id: str
-    plan_path: str
-    dirty: bool = False
-    selected_panel: str = "steps"
-    selected_index: int = 0
-    last_saved_at: str | None = None
-
-
 class ValidationFix(BaseModel):
     code: str
     title: str

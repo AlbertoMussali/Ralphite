@@ -28,13 +28,13 @@ FAILURE_MAP: dict[str, FailureAdvice] = {
         code="unknown_node_kind",
         title="Unsupported Node",
         message="Plan contains an unsupported node kind for local engine execution.",
-        next_action="Run `ralphite migrate` and convert unsupported nodes to agent/gate.",
+        next_action="Use only v2 execution_structure lanes and role-specific agent profiles.",
     ),
     "validation_error": FailureAdvice(
         code="validation_error",
         title="Plan Validation Failed",
         message="Plan schema or graph constraints failed validation.",
-        next_action="Open plan editor and apply suggested autofixes.",
+        next_action="Fix validation errors in the v2 plan and task source, then rerun.",
     ),
     "runtime_error": FailureAdvice(
         code="runtime_error",

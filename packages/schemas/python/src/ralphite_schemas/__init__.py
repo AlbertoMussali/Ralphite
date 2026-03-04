@@ -1,11 +1,15 @@
 from .events import EventEnvelope
-from .plan import PlanSpecV1
+from .plan_common import MaterialsSpec, OutputsSpec, WorkspaceSpec
+from .plan_v2 import PlanSpecV2
 from .validation import ValidationIssue, compile_plan, validate_plan
 
 __all__ = [
     "EventEnvelope",
-    "PlanSpecV1",
+    "MaterialsSpec",
+    "OutputsSpec",
+    "PlanSpecV2",
     "ValidationIssue",
+    "WorkspaceSpec",
     "compile_plan",
     "validate_plan",
 ]

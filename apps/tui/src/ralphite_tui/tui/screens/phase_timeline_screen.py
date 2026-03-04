@@ -10,18 +10,18 @@ if TYPE_CHECKING:
     from ralphite_tui.tui.app_shell import AppShell
 
 
-class RunDetailScreen(Vertical):
+class PhaseTimelineScreen(Vertical):
     DEFAULT_CSS = """
-    RunDetailScreen {
+    PhaseTimelineScreen {
       height: 1fr;
       padding: 1;
     }
-    #run-detail-summary {
+    #phase-summary {
       border: round $accent;
       padding: 1;
       margin-bottom: 1;
     }
-    #run-detail-events {
+    #phase-events {
       height: 1fr;
     }
     """
@@ -35,19 +35,19 @@ class RunDetailScreen(Vertical):
         return self.app  # type: ignore[return-value]
 
     def compose(self) -> ComposeResult:
-        yield Static("No active run selected.", id="run-detail-summary")
-        events = DataTable(id="run-detail-events")
-        events.add_columns("#", "Event", "Level", "Message")
+        yield Static("No active run selected.", id="phase-summary")
+        events = DataTable(id="phase-events")
+        events.add_columns("#", "Event", "Phase", "Lane", "Level", "Message")
         yield events
 
     def on_mount(self) -> None:
         self.set_interval(0.25, self._tick)
 
     def _summary(self) -> Static:
-        return self.query_one("#run-detail-summary", Static)
+        return self.query_one("#phase-summary", Static)
 
     def _events(self) -> DataTable:
-        return self.query_one("#run-detail-events", DataTable)
+        return self.query_one("#phase-events", DataTable)
 
     def _tick(self) -> None:
         run_id = self.shell.current_run_id
@@ -60,8 +60,11 @@ class RunDetailScreen(Vertical):
             self._summary().update(f"Run {run_id} not found")
             return
 
+        done_phases = run.metadata.get("v2_phase_done", [])
+        recovery = run.metadata.get("recovery", {})
         self._summary().update(
-            f"Run {run.id} | status={run.status} | active={run.active_node_id or '-'} | retries={run.retry_count}"
+            f"Run {run.id} | status={run.status} | active={run.active_node_id or '-'} | "
+            f"phase_done={len(done_phases)} | recovery={recovery.get('status', 'none')}"
         )
 
         table = self._events()
@@ -70,13 +73,30 @@ class RunDetailScreen(Vertical):
             if event_id in self._seen_ids:
                 continue
             self._seen_ids.add(event_id)
-            table.add_row(str(event_id), event.get("event", ""), event.get("level", ""), event.get("message", ""))
+            meta = event.get("meta") or {}
+            lane = meta.get("lane") if isinstance(meta, dict) else ""
+            table.add_row(
+                str(event_id),
+                event.get("event", ""),
+                event.get("group", "") or "",
+                str(lane or ""),
+                event.get("level", ""),
+                event.get("message", ""),
+            )
 
-        # Backfill from persisted events so screen works after restart/recover.
         if not table.row_count:
             for event in self.shell.orchestrator.stream_events(run_id):
                 event_id = int(event.get("id", 0))
                 if event_id in self._seen_ids:
                     continue
                 self._seen_ids.add(event_id)
-                table.add_row(str(event_id), event.get("event", ""), event.get("level", ""), event.get("message", ""))
+                meta = event.get("meta") or {}
+                lane = meta.get("lane") if isinstance(meta, dict) else ""
+                table.add_row(
+                    str(event_id),
+                    event.get("event", ""),
+                    event.get("group", "") or "",
+                    str(lane or ""),
+                    event.get("level", ""),
+                    event.get("message", ""),
+                )

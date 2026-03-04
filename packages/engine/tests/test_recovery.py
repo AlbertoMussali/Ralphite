@@ -14,16 +14,17 @@ def _build_stub_run(workspace: Path, run_id: str) -> RunViewState:
     # Use starter plan nodes for realistic replay state.
     from ralphite_engine.validation import parse_plan_yaml
 
-    plan_model = parse_plan_yaml(plan_path.read_text(encoding="utf-8"))
+    plan_document = parse_plan_yaml(plan_path.read_text(encoding="utf-8"))
+    runtime, _meta = orch._materialize_runtime_plan(plan_document)  # noqa: SLF001
     nodes = {
         node.id: NodeRuntimeState(
             node_id=node.id,
-            kind=node.kind.value,
+            kind=node.kind,
             group=node.group,
             status="queued",
             depends_on=list(node.depends_on),
         )
-        for node in plan_model.graph.nodes
+        for node in runtime.nodes
     }
 
     return RunViewState(

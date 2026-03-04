@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections import defaultdict, deque
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
@@ -13,28 +14,32 @@ from typing import Any, Generator
 from uuid import uuid4
 
 from ralphite_engine.config import LocalConfig, ensure_workspace_layout, load_config
+from ralphite_engine.git_worktree import GitWorktreeManager
 from ralphite_engine.models import ArtifactIndex, NodeRuntimeState, RunCheckpoint, RunPersistenceState, RunViewState
 from ralphite_engine.recovery import recoverable_run_ids, to_paused_for_recovery
 from ralphite_engine.run_store import RunStore
 from ralphite_engine.store import HistoryStore
+from ralphite_engine.structure_compiler import RuntimeExecutionPlan, RuntimeNodeSpec, compile_execution_structure
+from ralphite_engine.task_parser import parse_task_file
 from ralphite_engine.taxonomy import classify_failure
 from ralphite_engine.templates import make_goal_plan, seed_starter_if_missing
-from ralphite_engine.validation import parse_plan_yaml, validate_plan_content
-from ralphite_schemas.plan import EdgeWhen, PlanSpecV1
+from ralphite_engine.validation import parse_plan_yaml, resolve_task_source_path, validate_plan_content
+from ralphite_schemas.plan_v2 import AgentProfileSpec, PlanSpecV2
 from ralphite_schemas.validation import compile_plan
 
 
 @dataclass
 class RuntimeHandle:
     run: RunViewState
-    plan: PlanSpecV1
+    plan: PlanSpecV2
+    runtime: RuntimeExecutionPlan
+    profile_map: dict[str, AgentProfileSpec]
     permission_snapshot: dict[str, list[str]]
     event_queue: Queue[dict[str, Any]] = field(default_factory=Queue)
     pause_event: threading.Event = field(default_factory=threading.Event)
     cancel_event: threading.Event = field(default_factory=threading.Event)
     finished_event: threading.Event = field(default_factory=threading.Event)
     seq: int = 0
-    loop_counts: dict[str, int] = field(default_factory=dict)
     thread: threading.Thread | None = None
 
 
@@ -110,20 +115,65 @@ class LocalOrchestrator:
 
     def goal_to_plan(self, goal: str, filename_hint: str = "goal") -> Path:
         plan = make_goal_plan(goal)
-        from ralphite_engine.templates import dump_yaml, versioned_filename
+        from ralphite_engine.templates import dump_yaml, make_starter_task_markdown, versioned_filename
 
         filename = versioned_filename(plan["plan_id"], filename_hint)
+        task_filename = f"{Path(filename).stem}.tasks.md"
+        task_path = self.paths["plans"] / task_filename
+        task_path.write_text(make_starter_task_markdown(goal), encoding="utf-8")
+        plan["task_source"]["path"] = str(task_path.relative_to(self.workspace_root)).replace("\\", "/")
         path = self.paths["plans"] / filename
         path.write_text(dump_yaml(plan), encoding="utf-8")
         return path
+
+    def _runtime_metadata(self, runtime: RuntimeExecutionPlan) -> dict[str, Any]:
+        lane_map: dict[str, str] = {}
+        phase_map: dict[str, str] = {}
+        role_map: dict[str, str] = {}
+        phase_nodes: dict[str, list[str]] = defaultdict(list)
+
+        for node in runtime.nodes:
+            lane_map[node.id] = node.lane
+            phase_map[node.id] = node.phase
+            role_map[node.id] = node.role
+            phase_nodes[node.phase].append(node.id)
+
+        return {
+            "plan_version": 2,
+            "v2_lane_map": lane_map,
+            "v2_phase_map": phase_map,
+            "v2_role_map": role_map,
+            "v2_phase_nodes": dict(phase_nodes),
+            "v2_parallel_limit": int(runtime.parallel_limit),
+            "task_parse_issues": list(runtime.task_parse_issues),
+            "recovery": {
+                "status": "none",
+                "options": ["manual", "agent_best_effort", "abort_phase"],
+                "selected_mode": None,
+                "prompt": None,
+                "attempts": 0,
+            },
+        }
+
+    def _materialize_runtime_plan(self, plan: PlanSpecV2) -> tuple[RuntimeExecutionPlan, dict[str, Any]]:
+        task_file = resolve_task_source_path(plan.task_source.path, self.workspace_root)
+        tasks, parse_issues = parse_task_file(task_file)
+        runtime, compile_issues = compile_execution_structure(plan, tasks, task_parse_issues=parse_issues)
+        if runtime is None or compile_issues:
+            details = [
+                {"code": "execution_structure.invalid", "message": issue, "path": "execution_structure"}
+                for issue in compile_issues
+            ]
+            raise ValueError(f"validation_error: {json.dumps(details)}")
+        return runtime, self._runtime_metadata(runtime)
 
     def collect_requirements(self, plan_ref: str | None = None, plan_content: str | None = None) -> dict[str, list[str]]:
         if plan_content is None:
             path = self._resolve_plan_path(plan_ref)
             plan_content = path.read_text(encoding="utf-8")
         plan = parse_plan_yaml(plan_content)
-        tools = sorted({item for agent in plan.agents for item in agent.tools_allow if item.startswith("tool:")})
-        mcps = sorted({item for agent in plan.agents for item in agent.tools_allow if item.startswith("mcp:")})
+        tools = sorted({item for profile in plan.agent_profiles for item in profile.tools_allow if item.startswith("tool:")})
+        mcps = sorted({item for profile in plan.agent_profiles for item in profile.tools_allow if item.startswith("mcp:")})
         return {"tools": tools, "mcps": mcps}
 
     def _persist_runtime_state(self, handle: RuntimeHandle, status: str) -> None:
@@ -132,7 +182,7 @@ class LocalOrchestrator:
             status=status,
             plan_path=handle.run.plan_path,
             run=handle.run,
-            loop_counts=handle.loop_counts,
+            loop_counts={},
             last_seq=handle.seq,
         )
         self.run_store.write_state(state)
@@ -145,7 +195,7 @@ class LocalOrchestrator:
             status=status,
             plan_path=handle.run.plan_path,
             last_seq=handle.seq,
-            loop_counts=dict(handle.loop_counts),
+            loop_counts={},
             retry_count=handle.run.retry_count,
             node_attempts={node_id: node.attempt_count for node_id, node in handle.run.nodes.items()},
             node_statuses={node_id: node.status for node_id, node in handle.run.nodes.items()},
@@ -165,34 +215,43 @@ class LocalOrchestrator:
         source_path = self._resolve_plan_path(plan_ref) if plan_content is None else self.paths["plans"] / "inline.yaml"
         content = plan_content if plan_content is not None else source_path.read_text(encoding="utf-8")
 
-        valid, issues, summary = validate_plan_content(content)
+        valid, issues, summary = validate_plan_content(content, workspace_root=self.workspace_root)
         if not valid:
             raise ValueError(f"validation_error: {json.dumps(issues)}")
 
-        plan = parse_plan_yaml(content)
-        compile_plan(plan)
+        plan_document = parse_plan_yaml(content)
+        compile_plan(plan_document)
+        runtime, runtime_meta = self._materialize_runtime_plan(plan_document)
 
-        run_id = str(uuid4())
+        profile_map = {profile.id: profile for profile in plan_document.agent_profiles}
         nodes = {
             node.id: NodeRuntimeState(
                 node_id=node.id,
-                kind=node.kind.value,
+                kind=node.kind,
                 group=node.group,
                 status="queued",
                 attempt_count=0,
                 depends_on=list(node.depends_on),
             )
-            for node in plan.graph.nodes
+            for node in runtime.nodes
         }
 
         snapshot = permission_snapshot or self.default_permission_snapshot()
+        git_manager = GitWorktreeManager(self.workspace_root, "pending")
+        run_id = str(uuid4())
         run = RunViewState(
             id=run_id,
             plan_path=str(source_path),
             status="queued",
             started_at=datetime.now(timezone.utc).isoformat(),
             nodes=nodes,
-            metadata={"plan": summary, "permission_snapshot": snapshot, **(metadata or {})},
+            metadata={
+                "plan": summary,
+                "permission_snapshot": snapshot,
+                **runtime_meta,
+                "git_state": git_manager.bootstrap_state(),
+                **(metadata or {}),
+            },
         )
 
         if not self.run_store.acquire_lock(run_id):
@@ -200,9 +259,10 @@ class LocalOrchestrator:
 
         handle = RuntimeHandle(
             run=run,
-            plan=plan,
+            plan=plan_document,
+            runtime=runtime,
+            profile_map=profile_map,
             permission_snapshot=snapshot,
-            loop_counts={loop.id: 0 for loop in plan.graph.loops},
         )
 
         self.active[run_id] = handle
@@ -254,7 +314,13 @@ class LocalOrchestrator:
         if not handle or handle.finished_event.is_set():
             return False
         handle.cancel_event.set()
-        self._emit(handle, stage="orchestrator", event="RUN_CANCEL_REQUESTED", level="warn", message="run cancellation requested")
+        self._emit(
+            handle,
+            stage="orchestrator",
+            event="RUN_CANCEL_REQUESTED",
+            level="warn",
+            message="run cancellation requested",
+        )
         self._persist_runtime_state(handle, handle.run.status)
         return True
 
@@ -286,23 +352,73 @@ class LocalOrchestrator:
         run.events = events
 
         plan_content = Path(run.plan_path).read_text(encoding="utf-8")
-        plan = parse_plan_yaml(plan_content)
-        compile_plan(plan)
+        plan_document = parse_plan_yaml(plan_content)
+        compile_plan(plan_document)
+        runtime, runtime_meta = self._materialize_runtime_plan(plan_document)
+
+        run.metadata.setdefault("plan_version", runtime_meta.get("plan_version", 2))
+        run.metadata.setdefault("v2_parallel_limit", runtime_meta.get("v2_parallel_limit", 1))
+        run.metadata.setdefault("v2_lane_map", runtime_meta.get("v2_lane_map", {}))
+        run.metadata.setdefault("v2_phase_map", runtime_meta.get("v2_phase_map", {}))
+        run.metadata.setdefault("v2_role_map", runtime_meta.get("v2_role_map", {}))
+        run.metadata.setdefault("v2_phase_nodes", runtime_meta.get("v2_phase_nodes", {}))
+        run.metadata.setdefault("task_parse_issues", runtime_meta.get("task_parse_issues", []))
+        run.metadata.setdefault(
+            "recovery",
+            {
+                "status": "none",
+                "options": ["manual", "agent_best_effort", "abort_phase"],
+                "selected_mode": None,
+                "prompt": None,
+                "attempts": 0,
+            },
+        )
+        run.metadata.setdefault("git_state", GitWorktreeManager(self.workspace_root, run_id).bootstrap_state())
 
         snapshot = run.metadata.get("permission_snapshot")
         if not isinstance(snapshot, dict):
             snapshot = self.default_permission_snapshot()
 
+        profile_map = {profile.id: profile for profile in plan_document.agent_profiles}
         handle = RuntimeHandle(
             run=run,
-            plan=plan,
+            plan=plan_document,
+            runtime=runtime,
+            profile_map=profile_map,
             permission_snapshot=snapshot,
             seq=paused_state.last_seq,
-            loop_counts=dict(paused_state.loop_counts),
         )
         handle.pause_event.set()
         self.active[run_id] = handle
         self._persist_runtime_state(handle, "paused")
+        return True
+
+    def set_recovery_mode(self, run_id: str, mode: str, prompt: str | None = None) -> bool:
+        handle = self.active.get(run_id)
+        if not handle:
+            if not self.recover_run(run_id):
+                return False
+            handle = self.active.get(run_id)
+        if not handle:
+            return False
+
+        allowed = {"manual", "agent_best_effort", "abort_phase"}
+        if mode not in allowed:
+            return False
+
+        recovery = handle.run.metadata.setdefault("recovery", {})
+        recovery["selected_mode"] = mode
+        recovery["prompt"] = prompt
+        recovery["status"] = "selected"
+        self._emit(
+            handle,
+            stage="orchestrator",
+            event="RECOVERY_MODE_SELECTED",
+            level="warn",
+            message=f"recovery mode selected: {mode}",
+            meta={"mode": mode, "has_prompt": bool(prompt)},
+        )
+        self._checkpoint(handle, status="paused_recovery_required")
         return True
 
     def resume_from_checkpoint(self, run_id: str) -> bool:
@@ -312,6 +428,23 @@ class LocalOrchestrator:
         handle = self.active[run_id]
         if handle.thread and handle.thread.is_alive():
             return False
+
+        recovery = handle.run.metadata.get("recovery", {})
+        if handle.run.status == "paused_recovery_required":
+            selected = recovery.get("selected_mode")
+            if selected == "abort_phase":
+                handle.run.status = "failed"
+                self._emit(
+                    handle,
+                    stage="orchestrator",
+                    event="RECOVERY_ABORTED",
+                    level="error",
+                    message="recovery aborted by user",
+                )
+                self._finalize_terminal_run(handle)
+                return True
+            if selected not in {"manual", "agent_best_effort"}:
+                return False
 
         if not self.run_store.acquire_lock(run_id):
             if not self.run_store.lock_is_stale(run_id):
@@ -324,7 +457,13 @@ class LocalOrchestrator:
         handle.cancel_event.clear()
         handle.finished_event.clear()
         handle.run.status = "running"
-        self._emit(handle, stage="orchestrator", event="RUN_RESUME_FROM_CHECKPOINT", level="info", message="run resumed from checkpoint")
+        self._emit(
+            handle,
+            stage="orchestrator",
+            event="RUN_RESUME_FROM_CHECKPOINT",
+            level="info",
+            message="run resumed from checkpoint",
+        )
         self._persist_runtime_state(handle, "running")
         handle.thread = threading.Thread(target=self._execute_run, args=(handle,), daemon=False)
         handle.thread.start()
@@ -430,8 +569,13 @@ class LocalOrchestrator:
             return True
         return mcp_id in allow
 
-    def _execute_agent(self, node: dict[str, Any], snapshot: dict[str, list[str]]) -> tuple[bool, dict[str, Any]]:
-        requested = list(node.get("agent", {}).get("tools_allow") or [])
+    def _execute_agent(
+        self,
+        node: RuntimeNodeSpec,
+        profile: AgentProfileSpec,
+        snapshot: dict[str, list[str]],
+    ) -> tuple[bool, dict[str, Any]]:
+        requested = list(profile.tools_allow or [])
         denied: list[str] = []
         for item in requested:
             if item.startswith("tool:") and not self._tool_allowed(item, snapshot):
@@ -442,87 +586,220 @@ class LocalOrchestrator:
         if denied:
             return False, {"reason": "permission_denied", "denied": denied}
 
-        task = str(node.get("task") or "")
+        task = str(node.task or "")
         if "[fail]" in task.lower():
             return False, {"reason": "task_marker_failure", "task": task}
 
         time.sleep(float(os.getenv("RALPHITE_RUNNER_SIMULATED_TASK_SECONDS", "0.2")))
         return True, {
             "summary": f"Executed task: {task[:120]}",
-            "agent_id": node.get("agent_id"),
-            "model": node.get("agent", {}).get("model"),
+            "agent_profile_id": profile.id,
+            "model": profile.model,
+            "role": node.role,
+            "phase": node.phase,
+            "lane": node.lane,
         }
 
-    def _reset_subgraph(self, run: RunViewState, start_node: str) -> list[str]:
-        adjacency: dict[str, list[str]] = defaultdict(list)
-        for node in run.nodes.values():
-            for dep in node.depends_on:
-                adjacency[dep].append(node.node_id)
+    def _emit_v2_node_started(self, handle: RuntimeHandle, node: RuntimeNodeSpec) -> None:
+        metadata = handle.run.metadata
+        phase = node.phase
+        lane = node.lane
 
-        touched: list[str] = []
-        queue = deque([start_node])
-        visited: set[str] = set()
-        while queue:
-            nid = queue.popleft()
-            if nid in visited:
-                continue
-            visited.add(nid)
-            rec = run.nodes.get(nid)
-            if rec and rec.status in {"succeeded", "failed", "blocked"}:
-                rec.status = "queued"
-                rec.result = None
-                touched.append(nid)
-            for nxt in adjacency.get(nid, []):
-                queue.append(nxt)
-        return touched
+        phase_started = set(metadata.get("v2_phase_started", []))
+        if phase and phase not in phase_started:
+            self._emit(handle, stage="plan", event="PHASE_STARTED", level="info", message=f"phase started: {phase}", group=phase)
+            phase_started.add(phase)
+            metadata["v2_phase_started"] = sorted(phase_started)
 
-    def _execute_gate(
+        if node.role == "worker":
+            lane_started = set(metadata.get("v2_lane_started", []))
+            lane_key = f"{phase}:{lane}"
+            if lane_key not in lane_started:
+                self._emit(
+                    handle,
+                    stage="plan",
+                    event="LANE_STARTED",
+                    level="info",
+                    message=f"lane started: {lane}",
+                    group=phase,
+                    meta={"lane": lane},
+                )
+                lane_started.add(lane_key)
+                metadata["v2_lane_started"] = sorted(lane_started)
+            self._emit(
+                handle,
+                stage="task",
+                event="WORKER_STARTED",
+                level="info",
+                message="worker task started",
+                group=phase,
+                task_id=node.id,
+                meta={"lane": lane},
+            )
+        elif node.role == "orchestrator_pre":
+            self._emit(
+                handle,
+                stage="orchestrator",
+                event="ORCH_PRE_STARTED",
+                level="info",
+                message="pre-orchestrator started",
+                group=phase,
+                task_id=node.id,
+            )
+        elif node.role == "orchestrator_post":
+            self._emit(
+                handle,
+                stage="orchestrator",
+                event="ORCH_POST_STARTED",
+                level="info",
+                message="post-orchestrator started",
+                group=phase,
+                task_id=node.id,
+            )
+
+    def _emit_v2_node_completed(self, handle: RuntimeHandle, node: RuntimeNodeSpec, success: bool) -> None:
+        metadata = handle.run.metadata
+        phase = node.phase
+
+        if node.role == "worker" and success:
+            self._emit(
+                handle,
+                stage="task",
+                event="WORKER_MERGED",
+                level="info",
+                message="worker output integrated to phase branch",
+                group=phase,
+                task_id=node.id,
+                meta={"lane": node.lane},
+            )
+        elif node.role == "orchestrator_pre":
+            self._emit(
+                handle,
+                stage="orchestrator",
+                event="ORCH_PRE_DONE",
+                level="info" if success else "error",
+                message="pre-orchestrator completed" if success else "pre-orchestrator failed",
+                group=phase,
+                task_id=node.id,
+            )
+        elif node.role == "orchestrator_post":
+            self._emit(
+                handle,
+                stage="orchestrator",
+                event="ORCH_POST_DONE",
+                level="info" if success else "error",
+                message="post-orchestrator completed" if success else "post-orchestrator failed",
+                group=phase,
+                task_id=node.id,
+                meta={"commit_strategy": "preserve_worker_commits", "cleanup_done": bool(success)},
+            )
+
+        phase_done = set(metadata.get("v2_phase_done", []))
+        phase_node_ids = list(metadata.get("v2_phase_nodes", {}).get(phase, []))
+        if phase and phase not in phase_done and phase_node_ids:
+            statuses = [handle.run.nodes[node_id].status for node_id in phase_node_ids if node_id in handle.run.nodes]
+            terminal = {"succeeded", "failed", "blocked"}
+            if statuses and all(status in terminal for status in statuses):
+                self._emit(
+                    handle,
+                    stage="summary",
+                    event="PHASE_DONE",
+                    level="info" if all(status == "succeeded" for status in statuses) else "error",
+                    message=f"phase completed: {phase}",
+                    group=phase,
+                )
+                phase_done.add(phase)
+                metadata["v2_phase_done"] = sorted(phase_done)
+
+    def _start_node_execution(self, handle: RuntimeHandle, node: RuntimeNodeSpec) -> None:
+        rec = handle.run.nodes[node.id]
+        rec.status = "running"
+        rec.attempt_count += 1
+        handle.run.active_node_id = node.id
+        self._emit(
+            handle,
+            stage="task",
+            event="NODE_STARTED",
+            level="info",
+            message="node started",
+            group=node.group,
+            task_id=node.id,
+            meta={"attempt": rec.attempt_count},
+        )
+        self._emit_v2_node_started(handle, node)
+
+    def _handle_recovery_required(
         self,
         handle: RuntimeHandle,
-        node_data: dict[str, Any],
-        attempt_count: int,
-        loop_max: dict[str, int],
-    ) -> tuple[str, dict[str, Any]]:
-        gate = node_data.get("gate") or {}
-        pass_if = str(gate.get("pass_if", "")).lower()
+        node: RuntimeNodeSpec,
+        details: dict[str, Any],
+    ) -> None:
+        recovery = handle.run.metadata.setdefault("recovery", {})
+        recovery["status"] = "required"
+        recovery["phase"] = node.phase
+        recovery["details"] = details
+        recovery["attempts"] = int(recovery.get("attempts") or 0) + 1
 
-        decision = "pass"
-        retry_once_enabled = os.getenv("RALPHITE_GATE_RETRY_ONCE", "1") == "1"
-        if retry_once_enabled and "all_acceptance_checks_pass" in pass_if and attempt_count == 1:
-            decision = "retry"
-        if "always_fail" in pass_if:
-            decision = "fail"
+        self._emit(
+            handle,
+            stage="orchestrator",
+            event="RECOVERY_REQUIRED",
+            level="error",
+            message="merge/integration conflict requires recovery",
+            group=node.phase,
+            task_id=node.id,
+            meta=details,
+        )
 
-        if decision == "pass":
-            return "pass", {"pass_if": gate.get("pass_if")}
-        if decision == "fail":
-            return "fail", {"pass_if": gate.get("pass_if")}
+        handle.run.status = "paused_recovery_required"
+        handle.run.active_node_id = None
+        handle.pause_event.set()
 
-        retry_edges = [
-            edge
-            for edge in (handle.run.metadata.get("edges") or [])
-            if edge.get("from") == node_data.get("id") and edge.get("when") == EdgeWhen.RETRY.value
-        ]
-        touched: list[str] = []
-        exhausted = False
-        for edge in retry_edges:
-            loop_id = edge.get("loop_id")
-            target = edge.get("to")
-            if loop_id:
-                count = int(handle.loop_counts.get(loop_id, 0))
-                max_count = int(loop_max.get(loop_id, 1))
-                if count >= max_count:
-                    exhausted = True
-                    continue
-                handle.loop_counts[loop_id] = count + 1
-            if isinstance(target, str):
-                touched.extend(self._reset_subgraph(handle.run, target))
+    def _apply_agent_result(
+        self,
+        handle: RuntimeHandle,
+        node: RuntimeNodeSpec,
+        *,
+        success: bool,
+        result: dict[str, Any],
+        fail_fast: bool,
+    ) -> None:
+        rec = handle.run.nodes[node.id]
+        if success:
+            rec.status = "succeeded"
+            rec.result = result
+            self._emit(
+                handle,
+                stage="task",
+                event="NODE_RESULT",
+                level="info",
+                message="node completed",
+                group=node.group,
+                task_id=node.id,
+                meta={"status": rec.status, "result": result},
+            )
+            self._emit_v2_node_completed(handle, node, True)
+            return
 
-        if exhausted and not touched:
-            return "retry_exhausted", {"loop_counts": handle.loop_counts}
+        rec.status = "failed"
+        rec.result = result
+        advice = classify_failure(str(result.get("reason", "runtime_error")))
+        self._emit(
+            handle,
+            stage="task",
+            event="NODE_RESULT",
+            level="error",
+            message=f"{advice.title}: {advice.message}",
+            group=node.group,
+            task_id=node.id,
+            meta={"status": rec.status, "reason": result.get("reason"), "next_action": advice.next_action},
+        )
+        self._emit_v2_node_completed(handle, node, False)
 
-        handle.run.retry_count += 1
-        return "retry", {"loop_counts": handle.loop_counts, "touched_nodes": touched}
+        if fail_fast:
+            for queued in handle.run.nodes.values():
+                if queued.status == "queued":
+                    queued.status = "blocked"
 
     def _write_artifacts(self, run: RunViewState) -> ArtifactIndex:
         artifacts_dir = self.paths["artifacts"] / run.id
@@ -532,6 +809,9 @@ class LocalOrchestrator:
         failed = len([n for n in run.nodes.values() if n.status == "failed"])
         blocked = len([n for n in run.nodes.values() if n.status == "blocked"])
 
+        phase_done = run.metadata.get("v2_phase_done", [])
+        recovery = run.metadata.get("recovery", {})
+
         report = "\n".join(
             [
                 f"# Run {run.id} Summary",
@@ -540,6 +820,8 @@ class LocalOrchestrator:
                 f"Succeeded nodes: {succeeded}",
                 f"Failed nodes: {failed}",
                 f"Blocked nodes: {blocked}",
+                f"Completed phases: {', '.join(phase_done) if phase_done else 'none'}",
+                f"Recovery status: {recovery.get('status', 'none')}",
                 "",
                 "## Timeline",
             ]
@@ -554,6 +836,7 @@ class LocalOrchestrator:
             "plan_path": run.plan_path,
             "retry_count": run.retry_count,
             "nodes": {k: v.model_dump(mode="json") for k, v in run.nodes.items()},
+            "metadata": run.metadata,
         }
         bundle_path = artifacts_dir / "machine_bundle.json"
         bundle_path.write_text(json.dumps(bundle, indent=2), encoding="utf-8")
@@ -565,27 +848,126 @@ class LocalOrchestrator:
         run.artifacts = items
         return ArtifactIndex(run_id=run.id, artifacts_dir=str(artifacts_dir), items=items)
 
+    def _choose_batch(self, handle: RuntimeHandle, ready_nodes: list[RuntimeNodeSpec]) -> list[RuntimeNodeSpec]:
+        if not ready_nodes:
+            return []
+
+        phase_order = {phase.id: idx for idx, phase in enumerate(handle.plan.execution_structure.phases)}
+        ready_nodes = sorted(ready_nodes, key=lambda node: (phase_order.get(node.phase, 10_000), node.id))
+        first_phase = ready_nodes[0].phase
+        same_phase = [node for node in ready_nodes if node.phase == first_phase]
+
+        parallel_limit = max(1, int(handle.runtime.parallel_limit or 1))
+        parallel_ready = [node for node in same_phase if node.lane == "parallel"]
+        if parallel_ready:
+            return parallel_ready[:parallel_limit]
+
+        return [same_phase[0]]
+
+    def _run_node(
+        self,
+        handle: RuntimeHandle,
+        node: RuntimeNodeSpec,
+        git_manager: GitWorktreeManager,
+    ) -> tuple[str, dict[str, Any]]:
+        profile = handle.profile_map.get(node.agent_profile_id)
+        if not profile:
+            return "failure", {"reason": "runtime_error", "error": f"unknown agent_profile_id {node.agent_profile_id}"}
+
+        if node.role == "orchestrator_post":
+            agent_ok, agent_result = self._execute_agent(node, profile, handle.permission_snapshot)
+            if not agent_ok:
+                return "failure", agent_result
+
+            recovery = handle.run.metadata.setdefault("recovery", {})
+            selected_mode = str(recovery.get("selected_mode") or "manual")
+            selected_prompt = recovery.get("prompt")
+
+            if selected_mode == "agent_best_effort":
+                self._emit(
+                    handle,
+                    stage="orchestrator",
+                    event="RECOVERY_AGENT_STARTED",
+                    level="warn",
+                    message="best-effort recovery agent started",
+                    group=node.phase,
+                    task_id=node.id,
+                )
+
+            status, merge_meta = git_manager.integrate_phase(
+                handle.run.metadata.setdefault("git_state", {}),
+                node.phase,
+                recovery_mode=selected_mode,
+                recovery_prompt=str(selected_prompt) if selected_prompt else None,
+            )
+
+            if selected_mode == "agent_best_effort":
+                self._emit(
+                    handle,
+                    stage="orchestrator",
+                    event="RECOVERY_AGENT_DONE",
+                    level="info" if status == "success" else "error",
+                    message="best-effort recovery agent finished",
+                    group=node.phase,
+                    task_id=node.id,
+                    meta={"status": status},
+                )
+
+            if status == "recovery_required":
+                return "recovery_required", merge_meta
+            if status == "failed":
+                return "failure", {"reason": "runtime_error", **merge_meta}
+
+            cleanup = git_manager.cleanup_phase(handle.run.metadata.setdefault("git_state", {}), node.phase)
+            return "success", {**agent_result, "integration": merge_meta, "cleanup": cleanup}
+
+        if node.role == "worker":
+            git_manager.prepare_phase(handle.run.metadata.setdefault("git_state", {}), node.phase)
+            ok, result = self._execute_agent(node, profile, handle.permission_snapshot)
+            if not ok:
+                return "failure", result
+
+            commit_ok, commit_meta = git_manager.commit_worker(
+                handle.run.metadata.setdefault("git_state", {}),
+                node.phase,
+                node.id,
+                f"task({node.source_task_id or node.id}): {node.task[:72]}",
+            )
+            if not commit_ok:
+                return "failure", commit_meta
+            return "success", {**result, "worktree": commit_meta}
+
+        ok, result = self._execute_agent(node, profile, handle.permission_snapshot)
+        return ("success", result) if ok else ("failure", result)
+
+    def _finalize_terminal_run(self, handle: RuntimeHandle) -> None:
+        run = handle.run
+        run.completed_at = datetime.now(timezone.utc).isoformat()
+        self._write_artifacts(run)
+        self._emit(
+            handle,
+            stage="summary",
+            event="RUN_DONE",
+            level="info" if run.status == "succeeded" else "error" if run.status == "failed" else "warn",
+            message=f"run {run.status}",
+        )
+        self._persist_runtime_state(handle, run.status)
+        self.run_store.release_lock(run.id)
+        handle.finished_event.set()
+
     def _execute_run(self, handle: RuntimeHandle) -> None:
         run = handle.run
-        plan = handle.plan
+        runtime = handle.runtime
+        git_manager = GitWorktreeManager(self.workspace_root, run.id)
+        run.metadata["git_state"] = git_manager.bootstrap_state(run.metadata.get("git_state"))
 
-        node_payload = {node.id: node.model_dump(mode="json") for node in plan.graph.nodes}
-        agent_map = {agent.id: agent.model_dump(mode="json") for agent in plan.agents}
-        for node_id, payload in node_payload.items():
-            if payload.get("agent_id"):
-                payload["agent"] = agent_map.get(payload["agent_id"], {})
-
-        run.metadata["edges"] = [edge.model_dump(mode="json", by_alias=True) for edge in plan.graph.edges]
-        for loop in plan.graph.loops:
-            handle.loop_counts.setdefault(loop.id, 0)
-        loop_max = {loop.id: int(loop.max_iterations) for loop in plan.graph.loops}
-
-        max_steps = int(plan.constraints.max_total_steps)
-        max_runtime = int(plan.constraints.max_runtime_seconds)
-        fail_fast = bool(plan.constraints.fail_fast)
+        max_steps = int(handle.plan.constraints.max_total_steps)
+        max_runtime = int(handle.plan.constraints.max_runtime_seconds)
+        fail_fast = bool(handle.plan.constraints.fail_fast)
 
         steps = 0
         started_at = time.time()
+        node_by_id = {node.id: node for node in runtime.nodes}
 
         if run.status != "running":
             run.status = "running"
@@ -602,7 +984,6 @@ class LocalOrchestrator:
                     for node in run.nodes.values():
                         if node.status in {"queued", "running"}:
                             node.status = "blocked"
-                    self._emit(handle, stage="summary", event="RUN_DONE", level="warn", message="run cancelled")
                     break
 
                 if time.time() - started_at > max_runtime:
@@ -610,7 +991,7 @@ class LocalOrchestrator:
                     self._emit(handle, stage="summary", event="RUN_TIMEOUT", level="error", message="run exceeded max runtime")
                     break
 
-                if handle.pause_event.is_set():
+                if handle.pause_event.is_set() and run.status != "paused_recovery_required":
                     run.status = "paused"
                     self._persist_runtime_state(handle, "paused")
                     time.sleep(0.1)
@@ -618,7 +999,7 @@ class LocalOrchestrator:
 
                 ready_nodes = [
                     node
-                    for node in plan.graph.nodes
+                    for node in runtime.nodes
                     if run.nodes[node.id].status == "queued"
                     and all(run.nodes.get(dep) and run.nodes[dep].status == "succeeded" for dep in node.depends_on)
                 ]
@@ -636,127 +1017,52 @@ class LocalOrchestrator:
                     time.sleep(0.05)
                     continue
 
-                current = ready_nodes[0]
-                rec = run.nodes[current.id]
-                rec.status = "running"
-                rec.attempt_count += 1
-                run.active_node_id = current.id
-                steps += 1
+                batch = self._choose_batch(handle, ready_nodes)
+                for current in batch:
+                    self._start_node_execution(handle, current)
+                steps += len(batch)
 
-                self._emit(
-                    handle,
-                    stage="task",
-                    event="NODE_STARTED",
-                    level="info",
-                    message="node started",
-                    group=current.group,
-                    task_id=current.id,
-                    meta={"attempt": rec.attempt_count},
-                )
-
-                if current.kind.value == "agent":
-                    success, result = self._execute_agent(node_payload[current.id], handle.permission_snapshot)
-                    if success:
-                        rec.status = "succeeded"
-                        rec.result = result
-                        self._emit(
-                            handle,
-                            stage="task",
-                            event="NODE_RESULT",
-                            level="info",
-                            message="node completed",
-                            group=current.group,
-                            task_id=current.id,
-                            meta={"status": rec.status, "result": result},
-                        )
-                    else:
-                        rec.status = "failed"
-                        rec.result = result
-                        advice = classify_failure(str(result.get("reason", "runtime_error")))
-                        self._emit(
-                            handle,
-                            stage="task",
-                            event="NODE_RESULT",
-                            level="error",
-                            message=f"{advice.title}: {advice.message}",
-                            group=current.group,
-                            task_id=current.id,
-                            meta={"status": rec.status, "reason": result.get("reason"), "next_action": advice.next_action},
-                        )
-                        if fail_fast:
-                            for node in run.nodes.values():
-                                if node.status == "queued":
-                                    node.status = "blocked"
-
-                elif current.kind.value == "gate":
-                    decision, gate_meta = self._execute_gate(handle, node_payload[current.id], rec.attempt_count, loop_max)
-                    rec.result = gate_meta
-                    if decision == "pass":
-                        rec.status = "succeeded"
-                        self._emit(
-                            handle,
-                            stage="orchestrator",
-                            event="GATE_PASS",
-                            level="info",
-                            message="gate passed",
-                            group=current.group,
-                            task_id=current.id,
-                            meta=gate_meta,
-                        )
-                    elif decision in {"fail", "retry_exhausted"}:
-                        rec.status = "failed"
-                        self._emit(
-                            handle,
-                            stage="orchestrator",
-                            event="GATE_FAIL",
-                            level="error",
-                            message="gate failed",
-                            group=current.group,
-                            task_id=current.id,
-                            meta=gate_meta,
-                        )
-                        if fail_fast:
-                            for node in run.nodes.values():
-                                if node.status == "queued":
-                                    node.status = "blocked"
-                    else:
-                        rec.status = "succeeded"
-                        self._emit(
-                            handle,
-                            stage="orchestrator",
-                            event="GATE_RETRY",
-                            level="warn",
-                            message="gate requested retry",
-                            group=current.group,
-                            task_id=current.id,
-                            meta=gate_meta,
-                        )
-
-                    self._emit(
-                        handle,
-                        stage="task",
-                        event="NODE_RESULT",
-                        level="info" if rec.status == "succeeded" else "error",
-                        message="node completed",
-                        group=current.group,
-                        task_id=current.id,
-                        meta={"status": rec.status, "decision": decision},
-                    )
+                results: dict[str, tuple[str, dict[str, Any]]] = {}
+                if len(batch) > 1 and all(node.role == "worker" for node in batch):
+                    with ThreadPoolExecutor(max_workers=len(batch)) as pool:
+                        futures = {
+                            node.id: pool.submit(self._run_node, handle, node, git_manager)
+                            for node in batch
+                        }
+                        for node in batch:
+                            try:
+                                results[node.id] = futures[node.id].result()
+                            except Exception as exc:  # noqa: BLE001
+                                results[node.id] = ("failure", {"reason": "runtime_error", "error": str(exc)})
                 else:
-                    rec.status = "failed"
-                    advice = classify_failure(f"unknown_node_kind:{current.kind.value}")
-                    self._emit(
-                        handle,
-                        stage="task",
-                        event="NODE_RESULT",
-                        level="error",
-                        message=f"{advice.title}: {advice.message}",
-                        group=current.group,
-                        task_id=current.id,
-                        meta={"reason": f"unknown_node_kind:{current.kind.value}", "next_action": advice.next_action},
-                    )
+                    current = batch[0]
+                    try:
+                        results[current.id] = self._run_node(handle, current, git_manager)
+                    except Exception as exc:  # noqa: BLE001
+                        results[current.id] = ("failure", {"reason": "runtime_error", "error": str(exc)})
+
+                for current in batch:
+                    outcome, result = results[current.id]
+                    rec = run.nodes[current.id]
+
+                    if outcome == "recovery_required":
+                        rec.status = "queued"
+                        rec.result = result
+                        self._handle_recovery_required(handle, current, result)
+                        break
+
+                    if outcome == "success":
+                        self._apply_agent_result(handle, current, success=True, result=result, fail_fast=fail_fast)
+                    else:
+                        self._apply_agent_result(handle, current, success=False, result=result, fail_fast=fail_fast)
 
                 run.active_node_id = None
+
+                if run.status == "paused_recovery_required":
+                    self._checkpoint(handle, status="paused_recovery_required")
+                    self._persist_runtime_state(handle, "paused_recovery_required")
+                    break
+
                 self._checkpoint(handle, status="running")
 
                 if steps >= max_steps:
@@ -764,40 +1070,39 @@ class LocalOrchestrator:
                     self._emit(handle, stage="summary", event="RUN_LIMIT_REACHED", level="error", message="run exceeded max steps")
                     break
 
-            if run.status not in {"failed", "cancelled", "paused"}:
-                run.status = "failed" if any(node.status == "failed" for node in run.nodes.values()) else "succeeded"
+            if run.status == "running":
+                failed = any(node.status == "failed" for node in run.nodes.values())
+                blocked = any(node.status == "blocked" for node in run.nodes.values())
+                if failed or blocked:
+                    run.status = "failed"
+                else:
+                    run.status = "succeeded"
 
-            if run.status in {"succeeded", "failed", "cancelled"}:
-                run.completed_at = datetime.now(timezone.utc).isoformat()
-                artifacts = self._write_artifacts(run)
-                self._emit(
-                    handle,
-                    stage="summary",
-                    event="RUN_SUMMARY",
-                    level="info",
-                    message="run summary emitted",
-                    meta={
-                        "status": run.status,
-                        "artifacts": artifacts.items,
-                        "task_summary": {
-                            "succeeded": len([n for n in run.nodes.values() if n.status == "succeeded"]),
-                            "failed": len([n for n in run.nodes.values() if n.status == "failed"]),
-                            "blocked": len([n for n in run.nodes.values() if n.status == "blocked"]),
-                        },
-                    },
-                )
-                self._emit(
-                    handle,
-                    stage="summary",
-                    event="RUN_DONE",
-                    level="info" if run.status == "succeeded" else "error",
-                    message="run completed",
-                    meta={"status": run.status},
-                )
-
-            final_state = run.status if run.status in {"succeeded", "failed", "cancelled", "paused"} else "running"
-            self._checkpoint(handle, status=final_state)
-        finally:
-            if run.status in {"succeeded", "failed", "cancelled"}:
+            if run.status == "paused_recovery_required":
+                self._persist_runtime_state(handle, "paused_recovery_required")
                 self.run_store.release_lock(run.id)
-            handle.finished_event.set()
+                handle.finished_event.set()
+                return
+
+            cleanup_notes = git_manager.cleanup_all(run.metadata.setdefault("git_state", {}))
+            if cleanup_notes:
+                self._emit(
+                    handle,
+                    stage="orchestrator",
+                    event="CLEANUP_DONE",
+                    level="info",
+                    message="workspace cleanup completed",
+                    meta={"items": cleanup_notes},
+                )
+            self._finalize_terminal_run(handle)
+        except Exception as exc:  # noqa: BLE001
+            run.status = "failed"
+            self._emit(
+                handle,
+                stage="summary",
+                event="RUN_INTERNAL_ERROR",
+                level="error",
+                message=f"run crashed: {exc}",
+                meta={"error": str(exc)},
+            )
+            self._finalize_terminal_run(handle)

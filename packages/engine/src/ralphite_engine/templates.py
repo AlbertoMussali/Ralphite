@@ -17,11 +17,32 @@ def versioned_filename(plan_id: str, hint: str | None = None) -> str:
     return f"{_slug(hint or plan_id)}.{ts}.yaml"
 
 
+def make_starter_task_markdown(goal: str | None = None) -> str:
+    plan_task = "Decompose the objective into executable steps."
+    execute_task = "Implement the planned tasks and update project artifacts."
+    verify_task = "Validate outcomes and summarize decisions."
+    if goal:
+        plan_task = f"Decompose objective: {goal}"
+        execute_task = f"Execute objective: {goal}"
+        verify_task = f"Verify objective outcome: {goal}"
+
+    return "\n".join(
+        [
+            "# Ralphite Tasks",
+            "",
+            f"- [ ] {plan_task} <!-- id:task_plan phase:phase-1 lane:seq_pre agent_profile:worker_default -->",
+            f"- [ ] {execute_task} <!-- id:task_execute phase:phase-1 lane:parallel deps:task_plan agent_profile:worker_default -->",
+            f"- [ ] {verify_task} <!-- id:task_verify phase:phase-1 lane:seq_post deps:task_execute agent_profile:worker_default -->",
+            "",
+        ]
+    )
+
+
 def make_starter_plan() -> dict:
     return {
-        "version": 1,
-        "plan_id": "starter_loop",
-        "name": "Starter Loop",
+        "version": 2,
+        "plan_id": "starter_block",
+        "name": "Starter Block",
         "materials": {
             "autodiscover": {
                 "enabled": True,
@@ -31,60 +52,70 @@ def make_starter_plan() -> dict:
             "includes": [],
             "uploads": [],
         },
-        "agents": [
+        "task_source": {
+            "kind": "markdown_checklist",
+            "path": "RALPHEX_TASK.md",
+            "parser_version": 2,
+        },
+        "agent_profiles": [
             {
-                "id": "planner",
+                "id": "worker_default",
+                "role": "worker",
                 "provider": "openai",
-                "model": "gpt-4.1-mini",
-                "system_prompt": "Decompose and prioritize tasks.",
+                "model": "gpt-4.1",
+                "system_prompt": "Execute assigned task slices in isolated worker context.",
                 "tools_allow": ["tool:*", "mcp:*"],
             },
             {
-                "id": "worker",
+                "id": "orchestrator_pre_default",
+                "role": "orchestrator_pre",
                 "provider": "openai",
-                "model": "gpt-4.1",
-                "system_prompt": "Execute assigned tasks and produce artifacts.",
+                "model": "gpt-4.1-mini",
+                "system_prompt": (
+                    "You are the pre-orchestrator. Validate order/dependencies, workspace readiness, "
+                    "and how workers should execute in sequential_before -> parallel -> sequential_after order."
+                ),
+                "tools_allow": ["tool:*", "mcp:*"],
+            },
+            {
+                "id": "orchestrator_post_default",
+                "role": "orchestrator_post",
+                "provider": "openai",
+                "model": "gpt-4.1-mini",
+                "system_prompt": (
+                    "You are the post-orchestrator. Ensure worker outputs are integrated back to main while "
+                    "preserving worker commit intent, clean temporary artifacts/worktrees, and produce a concise summary."
+                ),
                 "tools_allow": ["tool:*", "mcp:*"],
             },
         ],
-        "graph": {
-            "nodes": [
+        "execution_structure": {
+            "phases": [
                 {
-                    "id": "n1_plan",
-                    "kind": "agent",
-                    "agent_id": "planner",
-                    "task": "Break objective into actionable tasks.",
-                    "group": "planning",
-                    "depends_on": [],
-                },
-                {
-                    "id": "n2_execute",
-                    "kind": "agent",
-                    "agent_id": "worker",
-                    "task": "Execute and update project artifacts.",
-                    "group": "execution",
-                    "depends_on": ["n1_plan"],
-                },
-                {
-                    "id": "n3_gate",
-                    "kind": "gate",
-                    "gate": {"mode": "rubric", "pass_if": "all_acceptance_checks_pass"},
-                    "group": "quality",
-                    "depends_on": ["n2_execute"],
-                },
-            ],
-            "edges": [
-                {"from": "n1_plan", "to": "n2_execute", "when": "success"},
-                {"from": "n2_execute", "to": "n3_gate", "when": "success"},
-                {"from": "n3_gate", "to": "n2_execute", "when": "retry", "loop_id": "main_loop"},
-            ],
-            "loops": [{"id": "main_loop", "max_iterations": 3}],
+                    "id": "phase-1",
+                    "label": "Default Phase",
+                    "pre_orchestrator": {
+                        "enabled": False,
+                        "agent_profile_id": "orchestrator_pre_default",
+                    },
+                    "workers": {
+                        "sequential_before": [],
+                        "parallel": [],
+                        "sequential_after": [],
+                    },
+                    "post_orchestrator": {
+                        "enabled": True,
+                        "agent_profile_id": "orchestrator_post_default",
+                    },
+                }
+            ]
         },
         "constraints": {
             "max_runtime_seconds": 3600,
             "max_total_steps": 120,
             "max_cost_usd": 10.0,
             "fail_fast": True,
+            "max_parallel": 3,
         },
         "outputs": {
             "required_artifacts": [
@@ -99,9 +130,6 @@ def make_goal_plan(goal: str) -> dict:
     plan = make_starter_plan()
     plan["plan_id"] = _slug(goal[:50], "goal-plan")
     plan["name"] = f"Goal Plan: {goal[:48]}"
-    nodes = plan["graph"]["nodes"]
-    nodes[0]["task"] = f"Create an execution plan for goal: {goal}"
-    nodes[1]["task"] = f"Execute the plan for goal: {goal}"
     return plan
 
 
@@ -112,8 +140,12 @@ def dump_yaml(plan: dict) -> str:
 def seed_starter_if_missing(plans_dir: Path) -> Path | None:
     plans_dir.mkdir(parents=True, exist_ok=True)
     existing = [p for p in plans_dir.iterdir() if p.is_file() and p.suffix.lower() in {".yaml", ".yml"}]
+    workspace_root = plans_dir.parent.parent
+    task_file = workspace_root / "RALPHEX_TASK.md"
+    if not task_file.exists():
+        task_file.write_text(make_starter_task_markdown(), encoding="utf-8")
     if existing:
         return None
-    path = plans_dir / "starter_loop.yaml"
+    path = plans_dir / "starter_block.yaml"
     path.write_text(dump_yaml(make_starter_plan()), encoding="utf-8")
     return path

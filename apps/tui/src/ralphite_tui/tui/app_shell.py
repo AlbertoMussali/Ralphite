@@ -1,23 +1,22 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Footer, Header, Static
 
-from ralphite_engine import LocalOrchestrator, PaletteCommand, migrate_plan_in_place
+from ralphite_engine import LocalOrchestrator, PaletteCommand
 from ralphite_tui.tui.command_palette import CommandPaletteScreen
-from ralphite_tui.tui.editor_screen import EditorScreen
-from ralphite_tui.tui.screens.artifacts_screen import ArtifactsScreen
 from ralphite_tui.tui.screens.history_screen import HistoryScreen
 from ralphite_tui.tui.screens.home_screen import HomeScreen
-from ralphite_tui.tui.screens.migration_screen import MigrationScreen
-from ralphite_tui.tui.screens.run_detail_screen import RunDetailScreen
+from ralphite_tui.tui.screens.phase_timeline_screen import PhaseTimelineScreen
+from ralphite_tui.tui.screens.recovery_screen import RecoveryScreen
+from ralphite_tui.tui.screens.run_setup_screen import RunSetupScreen
 from ralphite_tui.tui.screens.runs_screen import RunsScreen
 from ralphite_tui.tui.screens.settings_screen import SettingsScreen
+from ralphite_tui.tui.screens.summary_screen import SummaryScreen
 
 
 class AppShell(App[None]):
@@ -68,7 +67,7 @@ class AppShell(App[None]):
         yield Header(show_clock=True)
         with Horizontal(id="top-nav"):
             yield Static("Ralphite", id="nav-title")
-            for screen in ["home", "editor", "runs", "run_detail", "artifacts", "history", "settings", "migration"]:
+            for screen in ["home", "run_setup", "runs", "phase_timeline", "recovery", "summary", "history", "settings"]:
                 yield Button(screen.replace("_", " ").title(), id=f"nav-{screen}")
         yield Vertical(id="screen-body")
         yield Footer()
@@ -79,13 +78,13 @@ class AppShell(App[None]):
     def show_screen(self, screen: str, *, push: bool = True) -> None:
         factories: dict[str, Callable[[], Any]] = {
             "home": HomeScreen,
-            "editor": EditorScreen,
+            "run_setup": RunSetupScreen,
             "runs": RunsScreen,
-            "run_detail": RunDetailScreen,
-            "artifacts": ArtifactsScreen,
+            "phase_timeline": PhaseTimelineScreen,
+            "recovery": RecoveryScreen,
+            "summary": SummaryScreen,
             "history": HistoryScreen,
             "settings": SettingsScreen,
-            "migration": MigrationScreen,
         }
         factory = factories.get(screen)
         if not factory:
@@ -101,54 +100,43 @@ class AppShell(App[None]):
         else:
             self.nav_stack = [screen]
 
-    def _dispatch_screen_local(self, action_name: str) -> bool:
-        if self._current_widget is None:
-            return False
-        method = getattr(self._current_widget, action_name, None)
-        if callable(method):
-            method()
-            return True
-        return False
-
     def _command_map(self) -> tuple[list[PaletteCommand], dict[str, Callable[[], None]]]:
         commands: list[PaletteCommand] = [
             PaletteCommand(id="nav.home", title="Go Home", scope="global", shortcut="1"),
-            PaletteCommand(id="nav.editor", title="Open Editor", scope="global", shortcut="2"),
+            PaletteCommand(id="nav.run_setup", title="Open Run Setup", scope="global", shortcut="2"),
             PaletteCommand(id="nav.runs", title="Open Runs", scope="global", shortcut="3"),
-            PaletteCommand(id="nav.run_detail", title="Open Run Detail", scope="global", shortcut="4"),
-            PaletteCommand(id="nav.artifacts", title="Open Artifacts", scope="global", shortcut="5"),
-            PaletteCommand(id="nav.history", title="Open History", scope="global", shortcut="6"),
-            PaletteCommand(id="nav.settings", title="Open Settings", scope="global", shortcut="7"),
-            PaletteCommand(id="nav.migration", title="Open Migration", scope="global", shortcut="8"),
+            PaletteCommand(id="nav.phase_timeline", title="Open Phase Timeline", scope="global", shortcut="4"),
+            PaletteCommand(id="nav.recovery", title="Open Recovery Console", scope="global", shortcut="5"),
+            PaletteCommand(id="nav.summary", title="Open Post-Run Summary", scope="global", shortcut="6"),
+            PaletteCommand(id="nav.history", title="Open History", scope="global", shortcut="7"),
+            PaletteCommand(id="nav.settings", title="Open Settings", scope="global", shortcut="8"),
             PaletteCommand(id="run.start", title="Start Run", scope="run", shortcut="s"),
             PaletteCommand(id="run.pause", title="Pause Run", scope="run", shortcut="p"),
             PaletteCommand(id="run.resume", title="Resume Run", scope="run", shortcut="r"),
             PaletteCommand(id="run.cancel", title="Cancel Run", scope="run", shortcut="c"),
             PaletteCommand(id="run.recover", title="Recover Latest", scope="run"),
-            PaletteCommand(id="migration.strict", title="Run Strict Migration", scope="workspace"),
-            PaletteCommand(id="editor.validate", title="Validate Plan", scope="editor", shortcut="ctrl+v"),
-            PaletteCommand(id="editor.save", title="Save Plan", scope="editor", shortcut="ctrl+s"),
-            PaletteCommand(id="editor.fix", title="Apply Autofix", scope="editor", shortcut="ctrl+f"),
+            PaletteCommand(id="recovery.manual", title="Recovery: Manual", scope="recovery"),
+            PaletteCommand(id="recovery.agent", title="Recovery: Best Effort Agent", scope="recovery"),
+            PaletteCommand(id="recovery.abort", title="Recovery: Abort", scope="recovery"),
         ]
 
         handlers: dict[str, Callable[[], None]] = {
             "nav.home": lambda: self.show_screen("home"),
-            "nav.editor": lambda: self.show_screen("editor"),
+            "nav.run_setup": lambda: self.show_screen("run_setup"),
             "nav.runs": lambda: self.show_screen("runs"),
-            "nav.run_detail": lambda: self.show_screen("run_detail"),
-            "nav.artifacts": lambda: self.show_screen("artifacts"),
+            "nav.phase_timeline": lambda: self.show_screen("phase_timeline"),
+            "nav.recovery": lambda: self.show_screen("recovery"),
+            "nav.summary": lambda: self.show_screen("summary"),
             "nav.history": lambda: self.show_screen("history"),
             "nav.settings": lambda: self.show_screen("settings"),
-            "nav.migration": lambda: self.show_screen("migration"),
             "run.start": self.action_start_run,
             "run.pause": self.action_pause_run,
             "run.resume": self.action_resume_run,
             "run.cancel": self.action_cancel_run,
             "run.recover": self.action_recover_run,
-            "migration.strict": lambda: self.run_strict_migration(),
-            "editor.validate": lambda: self._dispatch_screen_local("action_validate"),
-            "editor.save": lambda: self._dispatch_screen_local("action_save"),
-            "editor.fix": lambda: self._dispatch_screen_local("action_apply_fix"),
+            "recovery.manual": lambda: self.action_set_recovery_mode("manual"),
+            "recovery.agent": lambda: self.action_set_recovery_mode("agent_best_effort"),
+            "recovery.abort": lambda: self.action_set_recovery_mode("abort_phase"),
         }
         return commands, handlers
 
@@ -170,9 +158,18 @@ class AppShell(App[None]):
         if button_id.startswith("nav-"):
             self.show_screen(button_id.split("nav-", 1)[1])
 
-    def action_start_run(self) -> None:
-        run_id = self.orchestrator.start_run(metadata={"source": "tui.shell"})
+    def start_run_for_plan(self, plan_ref: str | None) -> str | None:
+        try:
+            run_id = self.orchestrator.start_run(plan_ref=plan_ref, metadata={"source": "tui.shell"})
+        except Exception:
+            return None
         self.current_run_id = run_id
+        return run_id
+
+    def action_start_run(self) -> None:
+        run_id = self.start_run_for_plan(None)
+        if run_id:
+            self.show_screen("phase_timeline")
 
     def action_pause_run(self) -> None:
         if self.current_run_id:
@@ -180,7 +177,8 @@ class AppShell(App[None]):
 
     def action_resume_run(self) -> None:
         if self.current_run_id:
-            self.orchestrator.resume_run(self.current_run_id)
+            if not self.orchestrator.resume_run(self.current_run_id):
+                self.show_screen("recovery")
 
     def action_cancel_run(self) -> None:
         if self.current_run_id:
@@ -193,22 +191,14 @@ class AppShell(App[None]):
         run_id = recoverable[-1]
         if self.orchestrator.recover_run(run_id):
             self.current_run_id = run_id
+            self.show_screen("recovery")
 
-    def run_strict_migration(self) -> tuple[bool, list[str]]:
-        messages: list[str] = []
-        failed = False
-        for plan in self.orchestrator.list_plans():
-            result = migrate_plan_in_place(Path(plan))
-            if result.changed:
-                messages.append(f"migrated {result.source.name}")
+    def action_set_recovery_mode(self, mode: str) -> None:
+        if not self.current_run_id:
+            return
+        if self.orchestrator.set_recovery_mode(self.current_run_id, mode):
+            if mode != "abort_phase":
+                self.orchestrator.resume_from_checkpoint(self.current_run_id)
+                self.show_screen("phase_timeline")
             else:
-                messages.append(f"checked {result.source.name}")
-            for warning in result.warnings:
-                messages.append(f"  - {warning}")
-            if not result.valid:
-                failed = True
-                for issue in result.issues:
-                    messages.append(
-                        f"  - BLOCK {issue.get('code')}: {issue.get('message')} ({issue.get('path')})"
-                    )
-        return (not failed), messages
+                self.show_screen("summary")

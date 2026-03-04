@@ -60,13 +60,16 @@ uv run ralphite replay <RUN_ID> --workspace .
 uv run ralphite migrate --workspace . --strict
 ```
 
+`version: 1` plans are deprecated and rejected at validation/runtime boundaries.
+
 ## Workspace Layout
 
 Ralphite stores local state in `.ralphite/`:
 
 - `.ralphite/config.toml` local policy/profile
 - `.ralphite/plans/` canonical plan files
-- `.ralphite/drafts/` editor autosave snapshots
+- `RALPHEX_TASK.md` canonical task source for `version: 2` plans (or custom `task_source.path`)
+- `.ralphite/worktrees/` temporary worker/integration worktrees for phase execution
 - `.ralphite/runs/<run_id>/run_state.json` persisted run state
 - `.ralphite/runs/<run_id>/checkpoint.json` node-level resume checkpoint
 - `.ralphite/runs/<run_id>/event_log.ndjson` deterministic event journal

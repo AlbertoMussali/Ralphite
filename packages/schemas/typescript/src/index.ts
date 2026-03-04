@@ -1,8 +1,9 @@
-export type NodeKind = "agent" | "gate";
-export type EdgeWhen = "success" | "failure" | "retry" | "always";
+export type AgentRole = "worker" | "orchestrator_pre" | "orchestrator_post";
+export type TaskSourceKind = "markdown_checklist";
+export type TaskLane = "seq_pre" | "parallel" | "seq_post";
 
-export interface PlanSpecV1 {
-  version: 1;
+export interface PlanSpecV2 {
+  version: 2;
   plan_id: string;
   name: string;
   workspace?: { root?: string | null };
@@ -11,63 +12,64 @@ export interface PlanSpecV1 {
     includes?: string[];
     uploads?: string[];
   };
-  agents: AgentSpec[];
-  graph: GraphSpec;
-  constraints?: ConstraintsSpec;
+  task_source?: TaskSourceSpec;
+  agent_profiles: AgentProfileSpec[];
+  execution_structure: ExecutionStructureSpec;
+  constraints?: ConstraintsSpecV2;
   outputs?: OutputsSpec;
 }
 
-export interface AgentSpec {
+export interface OutputsSpec {
+  required_artifacts?: Array<{ id: string; format: string }>;
+}
+
+export interface TaskSourceSpec {
+  kind?: TaskSourceKind;
+  path?: string;
+  parser_version?: number;
+}
+
+export interface AgentProfileSpec {
   id: string;
+  role: AgentRole;
   provider: string;
   model: string;
   system_prompt?: string;
   tools_allow?: string[];
 }
 
-export interface GateSpec {
-  mode: string;
-  pass_if: string;
+export interface OrchestratorStepSpec {
+  enabled?: boolean;
+  agent_profile_id?: string;
 }
 
-export interface NodeSpec {
+export interface WorkerSegmentsSpec {
+  sequential_before?: string[];
+  parallel?: string[];
+  sequential_after?: string[];
+}
+
+export interface PhaseExecutionSpec {
   id: string;
-  kind: NodeKind;
-  group?: string;
-  depends_on?: string[];
-  agent_id?: string | null;
-  task?: string | null;
-  gate?: GateSpec | null;
+  label?: string;
+  pre_orchestrator?: OrchestratorStepSpec;
+  workers?: WorkerSegmentsSpec;
+  post_orchestrator?: OrchestratorStepSpec;
 }
 
-export interface EdgeSpec {
-  from: string;
-  to: string;
-  when: EdgeWhen;
-  loop_id?: string | null;
+export interface ExecutionStructureSpec {
+  phases: PhaseExecutionSpec[];
 }
 
-export interface LoopSpec {
-  id: string;
-  max_iterations: number;
-}
-
-export interface GraphSpec {
-  nodes: NodeSpec[];
-  edges?: EdgeSpec[];
-  loops?: LoopSpec[];
-}
-
-export interface ConstraintsSpec {
+export interface ConstraintsSpecV2 {
   max_runtime_seconds?: number;
   max_total_steps?: number;
   max_cost_usd?: number;
   fail_fast?: boolean;
+  max_parallel?: number;
 }
 
-export interface OutputsSpec {
-  required_artifacts?: Array<{ id: string; format: string }>;
-}
+export type PlanSpec = PlanSpecV2;
 
 export interface EventEnvelope {
   ts: string;
