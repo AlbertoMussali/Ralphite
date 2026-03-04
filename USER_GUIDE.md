@@ -53,7 +53,7 @@ Plan v3 configures:
 - pre/post orchestrator toggles per phase
 - run constraints (including `max_parallel`)
 
-Plan does not contain worker lane selectors.
+Plan does not contain per-task lane assignment tables.
 
 ## 3.3 Strict Phase Loop
 

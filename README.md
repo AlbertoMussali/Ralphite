@@ -67,6 +67,13 @@ uv run ralphite migrate --workspace . --strict
 
 Ralphite accepts only `version: 3` plans and rejects older plan versions at validation/runtime boundaries.
 
+## V3 Execution Model
+
+- Task ordering is defined in `RALPHEX_TASK.md` via task metadata (`phase`, `lane`, `parallel_group`, `deps`).
+- Plan files configure phase-level controls only (pre/post orchestrator toggles + constraints).
+- Phase execution order is deterministic: optional pre-orchestrator -> `seq_pre` -> grouped `parallel` -> `seq_post` -> optional post-orchestrator.
+- After successful phase integration, completed tasks are written back to the task file as checked items.
+
 ## Recovery Automation Contract
 
 `ralphite recover` supports machine-oriented workflows:
