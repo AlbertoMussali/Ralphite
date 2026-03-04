@@ -430,19 +430,6 @@ def replay(
         AppShell(orchestrator=orch, run_id=new_run_id, initial_screen="phase_timeline").run()
 
 
-@app.command()
-def migrate(
-    workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
-    strict: Annotated[bool, typer.Option("--strict", help="Validate in place and block deprecated/invalid plans")] = False,
-) -> None:
-    """Migration command is removed in v4-only mode."""
-    del workspace
-    del strict
-    console.print("[red]migrate is no longer supported in v4-only mode.[/red]")
-    console.print("Action: create/update plans with version: 4 unified YAML schema.")
-    raise typer.Exit(code=1)
-
-
 def _run_release_gate(orch: LocalOrchestrator) -> bool:
     suites = [
         [

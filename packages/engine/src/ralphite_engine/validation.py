@@ -15,7 +15,7 @@ from ralphite_schemas.plan_v4 import PlanSpecV4
 from ralphite_schemas.validation import ValidationError, compile_plan, validate_plan
 
 
-UNSUPPORTED_VERSION_MESSAGE = "PlanSpec versions 1-3 are no longer supported. Use version 4 unified YAML (tasks + run + agents)."
+UNSUPPORTED_VERSION_MESSAGE = "Unsupported plan version. Use version 4 unified YAML (tasks + run + agents)."
 
 
 PlanDocument = PlanSpecV4

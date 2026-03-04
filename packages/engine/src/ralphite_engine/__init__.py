@@ -1,7 +1,6 @@
 from ralphite_engine.config import LocalConfig, ensure_workspace_layout, load_config, save_config
 from ralphite_engine.drafts import autosave_snapshot, latest_snapshot, load_drafts, save_draft
 from ralphite_engine.git_worktree import GitWorktreeManager
-from ralphite_engine.migration import MigrationResult, StrictMigrationResult, migrate_plan_file, migrate_plan_in_place
 from ralphite_engine.models import (
     ArtifactIndex,
     PaletteCommand,
@@ -19,12 +18,10 @@ __all__ = [
     "GitWorktreeManager",
     "LocalConfig",
     "LocalOrchestrator",
-    "MigrationResult",
     "PaletteCommand",
     "RunCheckpoint",
     "RunPersistenceState",
     "RunViewState",
-    "StrictMigrationResult",
     "ValidationFix",
     "apply_fix",
     "autosave_snapshot",
@@ -34,8 +31,6 @@ __all__ = [
     "load_drafts",
     "make_goal_plan",
     "make_starter_plan",
-    "migrate_plan_file",
-    "migrate_plan_in_place",
     "parse_plan_yaml",
     "save_config",
     "save_draft",
