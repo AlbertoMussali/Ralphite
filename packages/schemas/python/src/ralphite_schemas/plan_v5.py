@@ -28,6 +28,8 @@ class ConstraintsSpecV5(BaseModel):
     max_cost_usd: Decimal = Field(default=Decimal("25.00"), ge=Decimal("0"))
     fail_fast: bool = True
     max_parallel: int = Field(default=3, ge=1)
+    acceptance_timeout_seconds: int = Field(default=120, ge=1)
+    max_retries_per_node: int = Field(default=0, ge=0)
 
 
 class TaskRoutingSpec(BaseModel):

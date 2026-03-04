@@ -214,3 +214,82 @@ def test_suggest_fixes_removes_forward_dependency() -> None:
     dep_fix = next(fix for fix in fixes if fix.code == "fix.clean_invalid_deps")
     updated = apply_fix(plan_data, dep_fix)
     assert updated["tasks"][0]["deps"] == []
+
+
+def test_validation_issues_are_deduplicated_for_branched_unassigned_tasks() -> None:
+    content = """
+version: 5
+plan_id: branched_dedupe
+name: branched_dedupe
+materials:
+  autodiscover:
+    enabled: false
+    path: .
+    include_globs: []
+  includes: []
+  uploads: []
+constraints:
+  max_parallel: 2
+agents:
+  - id: worker_default
+    role: worker
+    provider: openai
+    model: gpt-4.1-mini
+  - id: orchestrator_default
+    role: orchestrator
+    provider: openai
+    model: gpt-4.1-mini
+tasks:
+  - id: t1
+    title: Lane task
+    completed: false
+orchestration:
+  template: branched
+  inference_mode: mixed
+  behaviors:
+    - id: merge_default
+      kind: merge_and_conflict_resolution
+      agent: orchestrator_default
+      enabled: true
+  branched:
+    lanes: [lane_a, lane_b]
+  blue_red:
+    loop_unit: per_task
+  custom:
+    cells: []
+outputs:
+  required_artifacts: []
+"""
+    valid, issues, summary = validate_plan_content(content)
+    assert valid is False
+    keys = [(row.get("code"), row.get("path"), row.get("message"), row.get("level")) for row in issues]
+    assert len(keys) == len(set(keys))
+    assert summary.get("cell_counts") == summary.get("block_counts")
+
+
+def test_validation_rejects_out_of_bounds_artifact_glob() -> None:
+    content = _minimal_v5_content(
+        agents_block="""
+  - id: worker_default
+    role: worker
+    provider: openai
+    model: gpt-4.1-mini
+  - id: orchestrator_default
+    role: orchestrator
+    provider: openai
+    model: gpt-4.1-mini
+""",
+        tasks_block="""
+  - id: t1
+    title: Build
+    completed: false
+    acceptance:
+      required_artifacts:
+        - id: bundle
+          path_glob: ../../*
+          format: file
+""",
+    )
+    valid, issues, _summary = validate_plan_content(content)
+    assert valid is False
+    assert any(issue.get("code") == "tasks.acceptance.path_glob_out_of_bounds" for issue in issues)

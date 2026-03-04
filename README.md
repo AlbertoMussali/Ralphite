@@ -26,7 +26,13 @@ uv run ralphite init --workspace .
 ### Guided first run
 
 ```bash
-uv run ralphite quickstart --workspace . --no-tui --yes --output stream
+uv run ralphite quickstart --workspace . --no-tui --yes --output stream --bootstrap
+```
+
+Optional strict mode:
+
+```bash
+uv run ralphite quickstart --workspace . --no-tui --yes --strict-doctor --output table
 ```
 
 ### Run
@@ -73,6 +79,8 @@ constraints:
   max_total_steps: 250
   max_cost_usd: 25.0
   fail_fast: true
+  acceptance_timeout_seconds: 120
+  max_retries_per_node: 0
 
 agents:
   - id: worker_default
@@ -160,6 +168,8 @@ outputs:
 - `summary.resolved_execution.resolved_nodes`
 - `summary.resolved_execution.task_assignment`
 - `summary.resolved_execution.compile_warnings`
+- `summary.cell_counts` (canonical) and `summary.block_counts` (compat alias)
+- `data.recommended_commands` for one-step remediation (for example `migrate` on v4)
 
 Run Setup in TUI shows the same resolved run preview before execution.
 

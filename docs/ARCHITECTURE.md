@@ -49,6 +49,7 @@ Runtime node metadata includes:
 Execution remains DAG/block-aware with:
 
 - `constraints.max_parallel`
+- `constraints.max_retries_per_node`
 - dependency enforcement
 - fail-fast handling
 
@@ -59,6 +60,7 @@ Per worker node completion:
 1. run `task.acceptance.commands` in task worktree
 2. verify `task.acceptance.required_artifacts` globs
 3. attach rubric context
+4. enforce `constraints.acceptance_timeout_seconds` per acceptance command
 
 Failures are typed runtime failures and participate in fail-fast/recovery behavior.
 
@@ -79,6 +81,8 @@ Failures are typed runtime failures and participate in fail-fast/recovery behavi
 - `resolved_nodes`
 - `task_assignment`
 - `compile_warnings`
+- `cell_counts` (canonical summary metric) with `block_counts` alias retained in v5 cycle
+- `recommended_commands` for direct remediation actions
 
 Run Setup is v5-native:
 

@@ -158,7 +158,7 @@ class GitWorktreeManager:
 
         if not state.get("enabled"):
             info["committed"] = True
-            return True, {"mode": "simulated", "branch": info["branch"], "worktree": info["worktree_path"]}
+            return True, {"mode": "simulated", "branch": info["branch"], "worktree": str(self.workspace_root)}
 
         worktree = Path(info["worktree_path"])
         add = self._git(["add", "-A"], cwd=worktree, check=False)

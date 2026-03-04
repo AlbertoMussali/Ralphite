@@ -61,6 +61,25 @@ class _StaticSink:
         self.text = text
 
 
+class _InputStub:
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+
+class _TableSink:
+    def __init__(self) -> None:
+        self.rows: list[tuple[str, ...]] = []
+
+    def clear(self) -> None:
+        self.rows.clear()
+
+    def add_row(self, *values: str) -> None:
+        self.rows.append(tuple(values))
+
+    def move_cursor(self, row: int = 0, column: int = 0) -> None:  # noqa: ARG002
+        return
+
+
 def _build_screen() -> RunSetupScreen:
     model = parse_plan_yaml(PLAN)
     tasks, _issues = parse_plan_tasks(model)
@@ -120,3 +139,89 @@ def test_accept_and_reject_pending_fixes_updates_state() -> None:
     assert screen._pending_fix_diff == ""  # noqa: SLF001
     assert sink.text == "No safe-fix preview yet."
     assert "preview rejected" in status.text
+
+
+def test_render_resolved_preview_uses_structured_row_format() -> None:
+    screen = _build_screen()
+    sink = _StaticSink()
+    screen._structure = MethodType(lambda self: sink, screen)  # type: ignore[method-assign]
+    screen._latest_validation_issues = [  # noqa: SLF001
+        {"code": "tasks.unassigned", "message": "routing missing", "path": "tasks[0].routing"}
+    ]
+    summary = {
+        "template": "general_sps",
+        "resolved_execution": {
+            "template": "general_sps",
+            "resolved_cells": [{"id": "seq_pre", "kind": "sequential"}],
+            "resolved_nodes": [
+                {"cell_id": "seq_pre", "lane": "sequential", "role": "worker", "source_task_id": "t1"},
+                {"cell_id": "orch_merge_1", "lane": "orchestrator", "role": "orchestrator", "source_task_id": None},
+            ],
+            "compile_warnings": [],
+        },
+    }
+    screen._render_resolved_preview(summary)  # noqa: SLF001
+    assert "order | cell | lane | role | task_id" in sink.text
+    assert "  1 | seq_pre | sequential | worker | t1" in sink.text
+    assert "Unmapped-task warnings:" in sink.text
+
+
+def test_apply_orchestration_edit_updates_template_and_config() -> None:
+    screen = _build_screen()
+    status = _StaticSink()
+    screen._status = MethodType(lambda self: status, screen)  # type: ignore[method-assign]
+    screen._clear_fix_preview = MethodType(lambda self: None, screen)  # type: ignore[method-assign]
+    screen._render_editor_tables = MethodType(lambda self: None, screen)  # type: ignore[method-assign]
+    screen._refresh_validation = MethodType(lambda self: None, screen)  # type: ignore[method-assign]
+    screen._loaded_plan_data = {
+        "orchestration": {
+            "template": "general_sps",
+            "inference_mode": "mixed",
+            "branched": {"lanes": ["lane_a", "lane_b"]},
+            "blue_red": {"loop_unit": "per_task"},
+            "custom": {"cells": []},
+        }
+    }  # noqa: SLF001
+
+    lookup = {
+        "#edit-template": _InputStub("branched"),
+        "#edit-branched-lanes": _InputStub("alpha,beta"),
+        "#edit-loop-unit": _InputStub("per_task"),
+    }
+
+    def query_one_stub(self, selector, _type=None):  # noqa: ANN001
+        if selector in lookup:
+            return lookup[selector]
+        raise AssertionError(f"unexpected selector {selector}")
+
+    screen.query_one = MethodType(query_one_stub, screen)  # type: ignore[method-assign]
+    screen._apply_orchestration_edit()  # noqa: SLF001
+    orchestration = screen._loaded_plan_data["orchestration"]  # noqa: SLF001
+    assert orchestration["template"] == "branched"
+    assert orchestration["branched"]["lanes"] == ["alpha", "beta"]
+    assert "Template/config set to branched" in status.text
+
+
+def test_render_editor_tables_populates_title_column() -> None:
+    screen = _build_screen()
+    run_sink = _TableSink()
+    task_sink = _TableSink()
+    screen._run_table = MethodType(lambda self: run_sink, screen)  # type: ignore[method-assign]
+    screen._tasks_table = MethodType(lambda self: task_sink, screen)  # type: ignore[method-assign]
+    screen._populate_task_editor = MethodType(lambda self: None, screen)  # type: ignore[method-assign]
+    screen._populate_orchestration_editor = MethodType(lambda self: None, screen)  # type: ignore[method-assign]
+    screen._loaded_plan_data = {
+        "constraints": {"max_parallel": 2},
+        "orchestration": {
+            "template": "general_sps",
+            "inference_mode": "mixed",
+            "behaviors": [],
+            "branched": {"lanes": ["lane_a"]},
+        },
+        "version": 5,
+    }  # noqa: SLF001
+    screen._rebuild_task_badges()  # noqa: SLF001
+    screen._render_editor_tables()  # noqa: SLF001
+    assert task_sink.rows
+    first_row = task_sink.rows[0]
+    assert first_row[1] == "Task 1"

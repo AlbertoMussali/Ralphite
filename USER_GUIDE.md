@@ -24,8 +24,10 @@ This creates `.ralphite/` folders and seeds a starter v5 YAML plan.
 Quick onboarding path:
 
 ```bash
-uv run ralphite quickstart --workspace . --no-tui --yes --output stream
+uv run ralphite quickstart --workspace . --no-tui --yes --output stream --bootstrap
 ```
+
+For strict environment gating, add `--strict-doctor`.
 
 ## 3) Author a v5 Plan
 
@@ -102,12 +104,13 @@ Flow:
 1. Open `Run Setup`.
 2. Load a plan.
 3. Review template/config summary.
-4. Edit task routing fields (`lane`, `cell`, `team_mode`) and task deps/agent/completion.
-5. Use validation badges (`Title`, `Deps`, `Agent`, `Routing`) for row-level issues.
-6. Optionally apply safe fixes and inspect diff preview (`Accept` / `Reject`).
-7. Review **Resolved Run Preview** (cells + expanded node order).
-8. Validate and save revision.
-9. Start run.
+4. Set template/config directly (`template`, `branched.lanes`, `blue_red.loop_unit`).
+5. Edit task routing fields (`lane`, `cell`, `team_mode`) and task deps/agent/completion.
+6. Use validation badges (`Title`, `Deps`, `Agent`, `Routing`, `Acceptance`) for row-level issues.
+7. Optionally apply safe fixes and inspect diff preview (`Accept` / `Reject`).
+8. Review **Resolved Run Preview** (`order | cell | lane | role | task_id`) with compact/verbose toggle.
+9. Validate and save revision.
+10. Start run.
 
 ## 6) CLI
 
@@ -160,6 +163,8 @@ Recover exit codes:
 - behavior resolution issues (unknown behavior/agent)
 - routing issues (unmapped tasks for template requirements)
 - `summary.resolved_execution` with resolved cells/nodes/assignment/warnings
+- `data.recommended_commands` with direct fix commands (for example migrate v4 -> v5)
+- `summary.cell_counts` and compatibility alias `summary.block_counts`
 
 ## 8) Completion Write-Back
 

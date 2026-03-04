@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 from typing import Annotated, Any
 
 from rich.console import Console
@@ -41,8 +42,8 @@ RECOVER_EXIT_INTERNAL_ERROR = 16
 CLI_OUTPUT_SCHEMA_VERSION = "cli-output.v1"
 
 
-def _orchestrator(workspace: Path) -> LocalOrchestrator:
-    return LocalOrchestrator(workspace.expanduser().resolve())
+def _orchestrator(workspace: Path, *, bootstrap: bool = True) -> LocalOrchestrator:
+    return LocalOrchestrator(workspace.expanduser().resolve(), bootstrap=bootstrap)
 
 
 def _resolve_plan_ref(orch: LocalOrchestrator, plan: str | None) -> Path:
@@ -65,7 +66,11 @@ def _validate_all_plans(orch: LocalOrchestrator) -> tuple[bool, list[tuple[Path,
     failures: list[tuple[Path, list[dict], dict]] = []
     for plan_path in orch.list_plans():
         content = plan_path.read_text(encoding="utf-8")
-        valid, issues, summary = validate_plan_content(content, workspace_root=orch.workspace_root)
+        valid, issues, summary = validate_plan_content(
+            content,
+            workspace_root=orch.workspace_root,
+            plan_path=str(plan_path),
+        )
         if valid:
             continue
         failures.append((plan_path, issues, summary))
@@ -144,7 +149,11 @@ def _doctor_snapshot(orch: LocalOrchestrator, include_fix_suggestions: bool = Fa
     resolver_ok = True
     git_ready_ok = True
     for plan in plans:
-        valid, _issues, summary = validate_plan_content(plan.read_text(encoding="utf-8"), workspace_root=orch.workspace_root)
+        valid, _issues, summary = validate_plan_content(
+            plan.read_text(encoding="utf-8"),
+            workspace_root=orch.workspace_root,
+            plan_path=str(plan),
+        )
         if not valid:
             continue
         task_status = str(summary.get("tasks_status", {}).get("status", "unknown"))
@@ -223,6 +232,47 @@ def _doctor_snapshot(orch: LocalOrchestrator, include_fix_suggestions: bool = Fa
     }
 
 
+def _doctor_evaluation(snapshot: dict[str, Any], *, strict: bool) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    blocking: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    non_critical = {"stale-artifacts", "recovery-readiness"}
+    for row in snapshot.get("checks", []):
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status", "")).upper()
+        check_name = str(row.get("check", ""))
+        if status in {"OK", "PASS"}:
+            continue
+        if status == "WARN":
+            warnings.append(row)
+            if strict:
+                blocking.append(row)
+            continue
+        if not strict and check_name in non_critical:
+            warnings.append(row)
+            continue
+        blocking.append(row)
+    return blocking, warnings
+
+
+def _collect_recommended_commands(snapshot: dict[str, Any]) -> list[str]:
+    commands: list[str] = []
+    for failure in snapshot.get("plan_failures", []):
+        if not isinstance(failure, dict):
+            continue
+        summary = failure.get("summary")
+        if not isinstance(summary, dict):
+            continue
+        rec = summary.get("recommended_commands")
+        if not isinstance(rec, list):
+            continue
+        for item in rec:
+            if isinstance(item, str) and item.strip():
+                commands.append(item.strip())
+    # Keep insertion order while removing duplicates.
+    return list(dict.fromkeys(commands))
+
+
 def _render_doctor_table(snapshot: dict[str, Any]) -> None:
     table = Table(title="Ralphite Doctor")
     table.add_column("Check")
@@ -241,13 +291,24 @@ def _render_doctor_table(snapshot: dict[str, Any]) -> None:
         issues = failure.get("issues", [])
         summary = failure.get("summary", {})
         console.print(f"\n[bold red]Invalid plan:[/bold red] {plan_path}")
+        has_unsupported = False
         if isinstance(issues, list):
             for issue in issues:
                 if not isinstance(issue, dict):
                     continue
+                if str(issue.get("code")) == "version.unsupported":
+                    has_unsupported = True
                 console.print(f"  - {issue.get('code')}: {issue.get('message')} ({issue.get('path')})")
         if summary:
             console.print(f"  Summary: {summary}")
+        recommended = summary.get("recommended_commands", []) if isinstance(summary, dict) else []
+        if isinstance(recommended, list) and recommended:
+            console.print("  Recommended commands:")
+            for cmd in recommended:
+                if isinstance(cmd, str):
+                    console.print(f"  - {cmd}")
+        elif has_unsupported:
+            console.print(f"  - uv run ralphite migrate --plan {plan_path}")
 
     stale = snapshot.get("stale_artifacts", {})
     if not isinstance(stale, dict):
@@ -298,6 +359,31 @@ def _emit_payload(output: str, payload: dict[str, Any], *, title: str | None = N
         console.print(f"[bold]{title}[/bold]")
     status = present_run_status(str(payload.get("status", "")))
     console.print(f"Status: {status.label}")
+    run_id = payload.get("run_id")
+    if isinstance(run_id, str) and run_id.strip():
+        console.print(f"Run ID: {run_id}")
+
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    if isinstance(data, dict):
+        plan_path = data.get("plan_path")
+        if isinstance(plan_path, str) and plan_path.strip():
+            console.print(f"Plan: {plan_path}")
+        artifacts = data.get("artifacts") if isinstance(data.get("artifacts"), list) else []
+        if artifacts:
+            console.print(f"Artifacts: {len(artifacts)}")
+            shown = 0
+            for item in artifacts:
+                if not isinstance(item, dict):
+                    continue
+                path = item.get("path")
+                if not isinstance(path, str) or not path:
+                    continue
+                shown += 1
+                console.print(f"- {path}")
+                if shown >= 3:
+                    break
+            if len(artifacts) > shown:
+                console.print(f"- ... ({len(artifacts) - shown} more)")
     issues = payload.get("issues", [])
     if isinstance(issues, list) and issues:
         console.print("Issues:")
@@ -353,12 +439,16 @@ def quickstart(
     goal: Annotated[str | None, typer.Option(help="Optional goal to generate a plan")] = None,
     no_tui: Annotated[bool, typer.Option("--no-tui", help="Stream in terminal instead of opening TUI")] = False,
     yes: Annotated[bool, typer.Option("--yes", help="Auto-approve capabilities")] = False,
+    strict_doctor: Annotated[bool, typer.Option("--strict-doctor", help="Fail on any doctor warning")] = False,
+    bootstrap: Annotated[
+        bool,
+        typer.Option("--bootstrap/--no-bootstrap", help="Auto-init missing config and starter plan"),
+    ] = True,
     output: Annotated[str, typer.Option("--output", help="Output mode: table | stream | json")] = "table",
     quiet: Annotated[bool, typer.Option("--quiet", help="Suppress non-critical output")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", help="Show extra event guidance")] = False,
 ) -> None:
     """Run guided first-run flow: doctor -> plan -> run."""
-    orch = _orchestrator(workspace)
     mode = _normalize_output(output)
     if mode == "json" and not no_tui:
         payload = _result_payload(
@@ -373,8 +463,36 @@ def quickstart(
         _emit_payload(mode, payload, title="Quickstart")
         raise typer.Exit(code=RECOVER_EXIT_INVALID_INPUT)
 
+    workspace_root = workspace.expanduser().resolve()
+    config_before = (workspace_root / ".ralphite" / "config.toml").exists()
+    plans_dir = workspace_root / ".ralphite" / "plans"
+    plans_before = plans_dir.exists() and any(path.suffix.lower() in {".yaml", ".yml"} for path in plans_dir.glob("*"))
+    orch = _orchestrator(workspace, bootstrap=bootstrap)
+
+    step_index = 0
+    steps: list[dict[str, Any]] = []
+
+    def record_step(name: str, started: float, detail: str = "") -> None:
+        nonlocal step_index
+        step_index += 1
+        elapsed = round(max(0.0, time.perf_counter() - started), 3)
+        row = {"order": step_index, "step": name, "elapsed_seconds": elapsed, "detail": detail}
+        steps.append(row)
+        if mode != "json" and not quiet:
+            suffix = f" - {detail}" if detail else ""
+            console.print(f"{step_index}. {name}{suffix} ({elapsed:.2f}s)")
+
+    if mode != "json" and not quiet:
+        console.print("Quickstart Flow")
+
+    doctor_started = time.perf_counter()
     snapshot = _doctor_snapshot(orch, include_fix_suggestions=False)
-    if not bool(snapshot.get("ok")):
+    blocking_checks, warning_checks = _doctor_evaluation(snapshot, strict=strict_doctor)
+    doctor_detail = f"blocking={len(blocking_checks)} warnings={len(warning_checks)} strict={strict_doctor}"
+    record_step("Doctor", doctor_started, doctor_detail)
+    if blocking_checks:
+        recommended = _collect_recommended_commands(snapshot)
+        next_actions = recommended or ["Run `ralphite doctor --output table` to inspect failures."]
         if mode == "json":
             _emit_payload(
                 mode,
@@ -385,26 +503,46 @@ def quickstart(
                     run_id=None,
                     exit_code=1,
                     issues=[{"code": "doctor.failed", "message": "workspace checks failed"}],
-                    next_actions=["Run `ralphite doctor --output table` to inspect failures."],
-                    data={"doctor": snapshot},
+                    next_actions=next_actions,
+                    data={
+                        "doctor": snapshot,
+                        "strict_doctor": strict_doctor,
+                        "warnings": warning_checks,
+                        "step_timing": steps,
+                    },
                 ),
                 title="Quickstart",
             )
         else:
             _render_doctor_table(snapshot)
+            if recommended:
+                console.print("Recommended commands:")
+                for cmd in recommended:
+                    console.print(f"- {cmd}")
         raise typer.Exit(code=1)
 
+    if bootstrap and mode != "json" and not quiet:
+        config_after = orch.paths["config"].exists()
+        plans_after = bool(orch.list_plans())
+        created: list[str] = []
+        if not config_before and config_after:
+            created.append(str(orch.paths["config"]))
+        if not plans_before and plans_after:
+            created.append(str(orch.paths["plans"]))
+        if created:
+            console.print(f"Bootstrap: initialized {', '.join(created)}")
+
+    plan_started = time.perf_counter()
     plan_ref: str | None = None
     if goal:
         plan_ref = str(orch.goal_to_plan(goal))
-        if not quiet and mode != "json":
-            console.print(f"Generated plan from goal: {plan_ref}")
     else:
         plan_ref = str(_resolve_plan_ref(orch, None))
-        if not quiet and mode != "json":
-            console.print(f"Using plan: {plan_ref}")
+    record_step("Plan Selection", plan_started, Path(plan_ref).name if isinstance(plan_ref, str) else "none")
 
+    approval_started = time.perf_counter()
     requirements = orch.collect_requirements(plan_ref=plan_ref)
+    approved = True
     if not quiet and mode != "json":
         console.print(f"Required tools: {requirements['tools'] or ['none']}")
         console.print(f"Required mcps: {requirements['mcps'] or ['none']}")
@@ -412,6 +550,7 @@ def quickstart(
     if not yes:
         approved = typer.confirm("Approve these capabilities for this run?", default=True)
         if not approved:
+            record_step("Capability Approval", approval_started, "cancelled")
             payload = _result_payload(
                 command="quickstart",
                 ok=False,
@@ -419,18 +558,26 @@ def quickstart(
                 run_id=None,
                 exit_code=1,
                 issues=[{"code": "quickstart.cancelled", "message": "run aborted by user"}],
+                data={"step_timing": steps},
             )
             _emit_payload(mode, payload, title="Quickstart")
             raise typer.Exit(code=1)
+    record_step("Capability Approval", approval_started, "approved" if approved else "cancelled")
 
+    run_started = time.perf_counter()
     run_id = orch.start_run(plan_ref=plan_ref, metadata={"source": "cli.quickstart", "goal": goal})
+    run_status = "running"
     if no_tui:
         if mode == "stream":
             _print_run_stream(orch, run_id, verbose=verbose)
+            run_state = orch.get_run(run_id)
+            run_status = run_state.status if run_state else "unknown"
         else:
             orch.wait_for_run(run_id, timeout=60.0)
             run = orch.get_run(run_id)
             status = run.status if run else "unknown"
+            run_status = status
+            record_step("Run", run_started, status)
             payload = _result_payload(
                 command="quickstart",
                 ok=status == "succeeded",
@@ -440,15 +587,21 @@ def quickstart(
                 next_actions=[present_run_status(status).next_action],
                 data={
                     "artifacts": run.artifacts if run else [],
+                    "plan_path": str(plan_ref) if plan_ref else "",
                     "required_tools": requirements["tools"],
                     "required_mcps": requirements["mcps"],
+                    "step_timing": steps,
+                    "doctor_warnings": warning_checks,
                 },
             )
             _emit_payload(mode, payload, title="Quickstart")
             if status != "succeeded":
                 raise typer.Exit(code=1)
+        if mode == "stream":
+            record_step("Run", run_started, run_status)
         return
 
+    record_step("Run", run_started, f"started {run_id}")
     AppShell(orchestrator=orch, run_id=run_id, initial_screen="run_setup").run()
 
 
@@ -467,10 +620,24 @@ def validate(
     mode = _normalize_output(output, json_mode=json_mode)
     path = _resolve_plan_ref(orch, plan)
     content = path.read_text(encoding="utf-8")
-    valid, issues, summary = validate_plan_content(content, workspace_root=orch.workspace_root)
+    valid, issues, summary = validate_plan_content(
+        content,
+        workspace_root=orch.workspace_root,
+        plan_path=str(path),
+    )
 
     raw = yaml.safe_load(content)
     fixes = suggest_fixes(raw if isinstance(raw, dict) else {}, issues)
+    recommended_commands = summary.get("recommended_commands", []) if isinstance(summary, dict) else []
+    if not isinstance(recommended_commands, list):
+        recommended_commands = []
+    if any(str(issue.get("code")) == "version.unsupported" for issue in issues):
+        recommended_commands = [
+            f"uv run ralphite migrate --workspace {orch.workspace_root} --plan {path}",
+            *[item for item in recommended_commands if isinstance(item, str)],
+        ]
+    recommended_commands = [item for item in recommended_commands if isinstance(item, str) and item.strip()]
+    recommended_commands = list(dict.fromkeys(recommended_commands))
     payload: dict[str, Any] = {
         "ok": valid,
         "status": "succeeded" if valid else "failed",
@@ -478,6 +645,7 @@ def validate(
         "summary": summary,
         "issues": issues,
         "fixes": [fix.model_dump(mode="json") for fix in fixes],
+        "recommended_commands": recommended_commands,
     }
 
     if apply_safe_fixes and isinstance(raw, dict) and fixes:
@@ -487,6 +655,7 @@ def validate(
         fixed_valid, fixed_issues, _fixed_summary = validate_plan_content(
             yaml.safe_dump(fixed, sort_keys=False, allow_unicode=False),
             workspace_root=orch.workspace_root,
+            plan_path=str(path),
         )
         target = orch.paths["plans"] / f"{path.stem}.fixed.yaml"
         target.write_text(yaml.safe_dump(fixed, sort_keys=False, allow_unicode=False), encoding="utf-8")
@@ -501,7 +670,11 @@ def validate(
         run_id=None,
         exit_code=0 if valid else 1,
         issues=issues,
-        next_actions=["Review suggested safe fixes and rerun validate."] if not valid else ["Validation passed."],
+        next_actions=(
+            recommended_commands
+            if recommended_commands
+            else (["Review suggested safe fixes and rerun validate."] if not valid else ["Validation passed."])
+        ),
         data=payload,
     )
     if mode == "json":
@@ -518,6 +691,10 @@ def validate(
             console.print("Suggested safe fixes:")
             for fix in fixes:
                 console.print(f"- {fix.title}: {fix.description} ({fix.path})")
+        if recommended_commands and (verbose or not quiet):
+            console.print("Recommended commands:")
+            for cmd in recommended_commands:
+                console.print(f"- {cmd}")
         if apply_safe_fixes and payload.get("fixed_revision"):
             console.print(f"Wrote fixed revision: {payload['fixed_revision']}")
 
@@ -578,7 +755,11 @@ def migrate(
 
     migrated = migrate_v4_to_v5(raw)
     content = yaml.safe_dump(migrated, sort_keys=False, allow_unicode=False)
-    valid, issues, summary = validate_plan_content(content, workspace_root=orch.workspace_root)
+    valid, issues, summary = validate_plan_content(
+        content,
+        workspace_root=orch.workspace_root,
+        plan_path=str(path),
+    )
     if strict and not valid:
         envelope = _result_payload(
             command="migrate",
@@ -728,6 +909,7 @@ def run(
                 next_actions=[present_run_status(status).next_action],
                 data={
                     "artifacts": run_state.artifacts if run_state else [],
+                    "plan_path": str(plan_ref or ""),
                     "required_tools": requirements["tools"],
                     "required_mcps": requirements["mcps"],
                 },

@@ -76,7 +76,11 @@ class HomeScreen(Vertical):
                 self._status().update("No plans available for validation.")
                 return
             content = plans[0].read_text(encoding="utf-8")
-            valid, issues, _summary = validate_plan_content(content, workspace_root=self.shell.orchestrator.workspace_root)
+            valid, issues, _summary = validate_plan_content(
+                content,
+                workspace_root=self.shell.orchestrator.workspace_root,
+                plan_path=str(plans[0]),
+            )
             if valid:
                 self._status().update(f"Validation passed for {plans[0].name}.")
             else:

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import MethodType
 
+import pytest
 from ralphite_engine import LocalOrchestrator
+import yaml
 
 
 def _plan_content() -> str:
@@ -119,6 +122,62 @@ outputs:
 """
 
 
+def _single_task_plan(
+    *,
+    acceptance_commands: list[str] | None = None,
+    acceptance_artifacts: list[dict[str, str]] | None = None,
+    max_retries_per_node: int = 0,
+    acceptance_timeout_seconds: int = 120,
+) -> str:
+    plan = {
+        "version": 5,
+        "plan_id": "acceptance",
+        "name": "acceptance",
+        "materials": {
+            "autodiscover": {"enabled": False, "path": ".", "include_globs": []},
+            "includes": [],
+            "uploads": [],
+        },
+        "constraints": {
+            "max_retries_per_node": max_retries_per_node,
+            "acceptance_timeout_seconds": acceptance_timeout_seconds,
+        },
+        "agents": [
+            {"id": "worker_default", "role": "worker", "provider": "openai", "model": "gpt-4.1-mini"},
+            {"id": "orchestrator_default", "role": "orchestrator", "provider": "openai", "model": "gpt-4.1-mini"},
+        ],
+        "orchestration": {
+            "template": "general_sps",
+            "inference_mode": "mixed",
+            "behaviors": [
+                {
+                    "id": "merge_default",
+                    "kind": "merge_and_conflict_resolution",
+                    "agent": "orchestrator_default",
+                    "enabled": True,
+                }
+            ],
+            "branched": {"lanes": ["lane_a", "lane_b"]},
+            "blue_red": {"loop_unit": "per_task"},
+            "custom": {"cells": []},
+        },
+        "tasks": [
+            {
+                "id": "t1",
+                "title": "acceptance task",
+                "completed": False,
+                "acceptance": {
+                    "commands": list(acceptance_commands or []),
+                    "required_artifacts": list(acceptance_artifacts or []),
+                    "rubric": [],
+                },
+            }
+        ],
+        "outputs": {"required_artifacts": []},
+    }
+    return yaml.safe_dump(plan, sort_keys=False, allow_unicode=False)
+
+
 def test_goal_plan_run_succeeds(tmp_path: Path) -> None:
     orch = LocalOrchestrator(tmp_path)
     plan_path = orch.goal_to_plan("Create a simple test artifact")
@@ -178,3 +237,89 @@ def test_conflict_triggers_recovery_and_abort_mode(tmp_path: Path) -> None:
     final = orch.get_run(run_id)
     assert final is not None
     assert final.status == "failed"
+
+
+def test_acceptance_timeout_produces_typed_failure(tmp_path: Path) -> None:
+    orch = LocalOrchestrator(tmp_path)
+    plan = _single_task_plan(
+        acceptance_commands=["python3 -c 'import time; time.sleep(2)'"],
+        acceptance_timeout_seconds=1,
+    )
+    run_id = orch.start_run(plan_content=plan)
+    assert orch.wait_for_run(run_id, timeout=8.0)
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "failed"
+    node = next(iter(run.nodes.values()))
+    assert isinstance(node.result, dict)
+    assert node.result.get("reason") == "acceptance_command_timeout"
+
+
+def test_non_git_workspace_acceptance_uses_workspace_root(tmp_path: Path) -> None:
+    orch = LocalOrchestrator(tmp_path)
+    plan = _single_task_plan(acceptance_commands=["echo ok"])
+    run_id = orch.start_run(plan_content=plan)
+    assert orch.wait_for_run(run_id, timeout=8.0)
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "succeeded"
+
+
+def test_acceptance_artifact_out_of_bounds_symlink_is_rejected(tmp_path: Path) -> None:
+    leak_target = tmp_path.parent
+    outside = leak_target / "outside_artifact.txt"
+    outside.write_text("x", encoding="utf-8")
+    try:
+        (tmp_path / "leak").symlink_to(leak_target)
+    except OSError as exc:  # pragma: no cover - platform dependent
+        pytest.skip(f"symlink unavailable: {exc}")
+    orch = LocalOrchestrator(tmp_path)
+    plan = _single_task_plan(
+        acceptance_artifacts=[{"id": "leak", "path_glob": "leak/outside_artifact.txt", "format": "file"}],
+    )
+    run_id = orch.start_run(plan_content=plan)
+    assert orch.wait_for_run(run_id, timeout=8.0)
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "failed"
+    node = next(iter(run.nodes.values()))
+    assert isinstance(node.result, dict)
+    assert node.result.get("reason") == "acceptance_artifact_out_of_bounds"
+
+
+def test_retry_policy_retries_transient_node_failures(tmp_path: Path) -> None:
+    orch = LocalOrchestrator(tmp_path)
+    original_run_node = orch._run_node
+    failed_once = {"value": False}
+
+    def flaky_run_node(self: LocalOrchestrator, handle, node, git_manager):  # type: ignore[no-untyped-def]
+        if node.role == "worker" and not failed_once["value"]:
+            failed_once["value"] = True
+            return "failure", {"reason": "runtime_error", "error": "transient"}
+        return original_run_node(handle, node, git_manager)
+
+    orch._run_node = MethodType(flaky_run_node, orch)  # type: ignore[method-assign]
+    plan = _single_task_plan(max_retries_per_node=1)
+    run_id = orch.start_run(plan_content=plan)
+    assert orch.wait_for_run(run_id, timeout=8.0)
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "succeeded"
+    assert run.retry_count >= 1
+    assert any(evt.get("event") == "NODE_RETRY_SCHEDULED" for evt in run.events)
+
+
+def test_retry_policy_does_not_retry_deterministic_artifact_missing(tmp_path: Path) -> None:
+    orch = LocalOrchestrator(tmp_path)
+    plan = _single_task_plan(
+        acceptance_artifacts=[{"id": "missing", "path_glob": "missing/*.txt", "format": "file"}],
+        max_retries_per_node=3,
+    )
+    run_id = orch.start_run(plan_content=plan)
+    assert orch.wait_for_run(run_id, timeout=8.0)
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "failed"
+    assert not any(evt.get("event") == "NODE_RETRY_SCHEDULED" for evt in run.events)
+    node = next(iter(run.nodes.values()))
+    assert node.attempt_count == 1

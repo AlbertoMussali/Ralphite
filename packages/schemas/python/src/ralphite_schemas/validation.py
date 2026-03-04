@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from dataclasses import dataclass
+import re
 
 from .plan_v5 import CustomCellKind, OrchestrationTemplate, PlanSpecV5
 
@@ -37,6 +38,20 @@ def _task_is_branched_mapped(task_lane: str | None, task_group: str | None, task
     if task_cell:
         return True
     return False
+
+
+def _is_worktree_relative_glob(path_glob: str) -> bool:
+    value = (path_glob or "").strip()
+    if not value:
+        return False
+    if value.startswith("/") or value.startswith("\\"):
+        return False
+    if re.match(r"^[A-Za-z]:[\\/]", value):
+        return False
+    normalized_parts = value.replace("\\", "/").split("/")
+    if any(part == ".." for part in normalized_parts):
+        return False
+    return True
 
 
 def validate_plan(plan: PlanSpecV5) -> list[ValidationIssue]:
@@ -112,6 +127,15 @@ def validate_plan(plan: PlanSpecV5) -> list[ValidationIssue]:
         for dep in task.deps:
             if dep == task.id:
                 issues.append(ValidationIssue("task.self_dep", f"task '{task.id}' has self dependency", f"{path_prefix}.deps"))
+        for artifact_idx, artifact in enumerate(task.acceptance.required_artifacts):
+            if not _is_worktree_relative_glob(artifact.path_glob):
+                issues.append(
+                    ValidationIssue(
+                        "tasks.acceptance.path_glob_out_of_bounds",
+                        f"task '{task.id}' artifact glob must be worktree-relative: '{artifact.path_glob}'",
+                        f"{path_prefix}.acceptance.required_artifacts[{artifact_idx}].path_glob",
+                    )
+                )
 
     for idx, task in enumerate(plan.tasks):
         for dep in task.deps:

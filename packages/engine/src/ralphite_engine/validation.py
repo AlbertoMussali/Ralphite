@@ -112,10 +112,42 @@ def _append_task_diagnostics(
     return parse_issues, compiled_runtime, tasks
 
 
+def _dedupe_and_sort_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for issue in issues:
+        code = str(issue.get("code") or "")
+        path = str(issue.get("path") or "")
+        message = str(issue.get("message") or "")
+        level = str(issue.get("level") or "error")
+        deduped.setdefault((code, path, message, level), issue)
+    return sorted(
+        deduped.values(),
+        key=lambda item: (
+            str(item.get("path") or ""),
+            str(item.get("code") or ""),
+            str(item.get("message") or ""),
+            str(item.get("level") or ""),
+        ),
+    )
+
+
+def _recommended_commands(
+    issues: list[dict[str, Any]],
+    *,
+    plan_path: str | Path | None = None,
+) -> list[str]:
+    commands: list[str] = []
+    if any(str(issue.get("code") or "") == "version.unsupported" for issue in issues):
+        suffix = f" --plan {Path(plan_path).as_posix()}" if plan_path else " --plan <PLAN_PATH>"
+        commands.append(f"uv run ralphite migrate{suffix}")
+    return commands
+
+
 def validate_plan_content(
     content: str,
     *,
     workspace_root: str | Path | None = None,
+    plan_path: str | Path | None = None,
 ) -> tuple[bool, list[dict[str, Any]], dict[str, Any]]:
     try:
         raw = yaml.safe_load(content)
@@ -139,7 +171,12 @@ def validate_plan_content(
                 "level": "error",
             }
         ]
-        return False, issues, {"version": version, "supported_versions": [5]}
+        issues = _dedupe_and_sort_issues(issues)
+        return False, issues, {
+            "version": version,
+            "supported_versions": [5],
+            "recommended_commands": _recommended_commands(issues, plan_path=plan_path),
+        }
 
     try:
         plan = PlanSpecV5.model_validate(raw)
@@ -153,14 +190,16 @@ def validate_plan_content(
             }
             for err in exc.errors()
         ]
-        return False, issues, {}
+        issues = _dedupe_and_sort_issues(issues)
+        return False, issues, {"recommended_commands": _recommended_commands(issues, plan_path=plan_path)}
 
     issues = [asdict(issue) for issue in validate_plan(plan)]
     try:
         compiled = compile_plan(plan)
     except ValidationError as exc:
         issues.extend(asdict(issue) for issue in exc.issues)
-        return False, issues, {}
+        issues = _dedupe_and_sort_issues(issues)
+        return False, issues, {"recommended_commands": _recommended_commands(issues, plan_path=plan_path)}
 
     parse_issues, runtime, tasks = _append_task_diagnostics(
         plan=plan,
@@ -248,13 +287,16 @@ def validate_plan_content(
             "pending": len(pending_tasks),
             "completed": len([task for task in tasks if task.completed]),
         },
-        "block_counts": block_counts,
+        "cell_counts": block_counts,
+        "block_counts": dict(block_counts),
         "tasks_status": {"status": "ok" if not parse_issues else "issues"},
         "task_parse_issues": parse_issues,
         "recovery_readiness": _git_recovery_readiness(workspace_root),
         "resolved_execution": resolved_execution,
+        "recommended_commands": _recommended_commands(issues, plan_path=plan_path),
     }
 
+    issues = _dedupe_and_sort_issues(issues)
     valid = len([issue for issue in issues if issue.get("level", "error") == "error"]) == 0
     return valid, issues, summary
 

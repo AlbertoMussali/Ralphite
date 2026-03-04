@@ -42,6 +42,18 @@ FAILURE_MAP: dict[str, FailureAdvice] = {
         message="Unexpected execution error occurred.",
         next_action="Inspect event timeline and rerun failed nodes.",
     ),
+    "acceptance_command_timeout": FailureAdvice(
+        code="acceptance_command_timeout",
+        title="Acceptance Timeout",
+        message="A task acceptance command exceeded the configured timeout.",
+        next_action="Increase constraints.acceptance_timeout_seconds or fix the hanging command.",
+    ),
+    "acceptance_artifact_out_of_bounds": FailureAdvice(
+        code="acceptance_artifact_out_of_bounds",
+        title="Artifact Path Rejected",
+        message="Acceptance artifact glob resolved outside the task worktree.",
+        next_action="Use a relative path_glob that stays within the worktree.",
+    ),
     "git_add_failed": FailureAdvice(
         code="git_add_failed",
         title="Plan Write-Back Blocked",

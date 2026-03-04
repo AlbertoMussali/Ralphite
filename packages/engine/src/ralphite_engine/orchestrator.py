@@ -47,14 +47,15 @@ class RuntimeHandle:
 
 
 class LocalOrchestrator:
-    def __init__(self, workspace_root: str | Path) -> None:
+    def __init__(self, workspace_root: str | Path, *, bootstrap: bool = True) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.paths = ensure_workspace_layout(self.workspace_root)
-        self.config: LocalConfig = load_config(self.workspace_root)
+        self.config: LocalConfig = load_config(self.workspace_root, create_if_missing=bootstrap)
         self.history = HistoryStore(self.paths["history"])
         self.run_store = RunStore(self.paths["runs"])
         self.active: dict[str, RuntimeHandle] = {}
-        seed_starter_if_missing(self.paths["plans"])
+        if bootstrap:
+            seed_starter_if_missing(self.paths["plans"])
         self._bootstrap_recovery_candidates()
 
     def _bootstrap_recovery_candidates(self) -> None:
@@ -300,7 +301,11 @@ class LocalOrchestrator:
             source_path.write_text(plan_content, encoding="utf-8")
             content = plan_content
 
-        valid, issues, summary = validate_plan_content(content, workspace_root=self.workspace_root)
+        valid, issues, summary = validate_plan_content(
+            content,
+            workspace_root=self.workspace_root,
+            plan_path=str(source_path),
+        )
         if not valid:
             raise ValueError(f"validation_error: {json.dumps(issues)}")
 
@@ -986,19 +991,48 @@ class LocalOrchestrator:
             self._emit_node_completed(handle, node, True)
             return
 
+        reason = str(result.get("reason", "runtime_error") or "runtime_error")
+        max_retries = max(0, int(handle.plan.constraints.max_retries_per_node or 0))
+        non_retryable = {
+            "acceptance_artifact_missing",
+            "acceptance_artifact_out_of_bounds",
+            "worker_merge_conflict",
+            "base_merge_conflict",
+            "simulated_conflict",
+        }
+        if reason not in non_retryable and rec.attempt_count <= max_retries:
+            rec.status = "queued"
+            rec.result = result
+            handle.run.retry_count += 1
+            self._emit(
+                handle,
+                stage="task",
+                event="NODE_RETRY_SCHEDULED",
+                level="warn",
+                message="retry scheduled for node",
+                group=node.group,
+                task_id=node.id,
+                meta={
+                    "reason": reason,
+                    "attempt": rec.attempt_count,
+                    "max_retries_per_node": max_retries,
+                },
+            )
+            return
+
         rec.status = "failed"
         rec.result = result
-        advice = classify_failure(str(result.get("reason", "runtime_error")))
+        advice = classify_failure(reason)
         self._emit(
             handle,
             stage="task",
             event="NODE_RESULT",
             level="error",
-            message=f"{advice.title}: {advice.message}",
-            group=node.group,
-            task_id=node.id,
-            meta={"status": rec.status, "reason": result.get("reason"), "next_action": advice.next_action},
-        )
+                message=f"{advice.title}: {advice.message}",
+                group=node.group,
+                task_id=node.id,
+                meta={"status": rec.status, "reason": reason, "next_action": advice.next_action},
+            )
         self._emit_node_completed(handle, node, False)
 
         if fail_fast:
@@ -1182,10 +1216,31 @@ class LocalOrchestrator:
     def _resolve_worker_worktree(self, commit_meta: dict[str, Any]) -> Path:
         raw = commit_meta.get("worktree") if isinstance(commit_meta, dict) else None
         if isinstance(raw, str) and raw.strip():
-            return Path(raw).expanduser().resolve()
+            candidate = Path(raw).expanduser().resolve()
+            if candidate.exists() and candidate.is_dir():
+                return candidate
         return self.workspace_root
 
-    def _evaluate_acceptance(self, node: RuntimeNodeSpec, commit_meta: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    def _is_worktree_relative_glob(self, path_glob: str) -> bool:
+        value = (path_glob or "").strip()
+        if not value:
+            return False
+        if value.startswith("/") or value.startswith("\\"):
+            return False
+        if len(value) > 2 and value[1] == ":" and value[0].isalpha() and value[2] in {"\\", "/"}:
+            return False
+        normalized_parts = value.replace("\\", "/").split("/")
+        if any(part == ".." for part in normalized_parts):
+            return False
+        return True
+
+    def _evaluate_acceptance(
+        self,
+        node: RuntimeNodeSpec,
+        commit_meta: dict[str, Any],
+        *,
+        timeout_seconds: int,
+    ) -> tuple[bool, dict[str, Any]]:
         acceptance = node.acceptance if isinstance(node.acceptance, dict) else {}
         commands = acceptance.get("commands") if isinstance(acceptance.get("commands"), list) else []
         required_artifacts = (
@@ -1202,14 +1257,34 @@ class LocalOrchestrator:
         for command in commands:
             if not isinstance(command, str) or not command.strip():
                 continue
-            run = subprocess.run(
-                command,
-                cwd=worktree,
-                shell=True,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            started = time.monotonic()
+            try:
+                run = subprocess.run(
+                    command,
+                    cwd=worktree,
+                    shell=True,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=max(1, int(timeout_seconds)),
+                )
+            except subprocess.TimeoutExpired as exc:
+                elapsed = max(0.0, time.monotonic() - started)
+                return (
+                    False,
+                    {
+                        "reason": "acceptance_command_timeout",
+                        "worktree": str(worktree),
+                        "failed_command": command,
+                        "timeout_seconds": int(timeout_seconds),
+                        "elapsed_seconds": round(elapsed, 3),
+                        "stdout": exc.stdout or "",
+                        "stderr": exc.stderr or "",
+                        "commands": command_results,
+                        "required_artifacts": [],
+                        "rubric": rubric,
+                    },
+                )
             result = {
                 "command": command,
                 "exit_code": run.returncode,
@@ -1237,7 +1312,41 @@ class LocalOrchestrator:
             artifact_id = str(item.get("id") or "artifact")
             path_glob = str(item.get("path_glob") or "").strip()
             fmt = str(item.get("format") or "unknown")
-            matches = [str(Path(path).resolve()) for path in glob.glob(str(worktree / path_glob), recursive=True)] if path_glob else []
+            if path_glob and not self._is_worktree_relative_glob(path_glob):
+                return (
+                    False,
+                    {
+                        "reason": "acceptance_artifact_out_of_bounds",
+                        "worktree": str(worktree),
+                        "artifact": artifact_id,
+                        "path_glob": path_glob,
+                        "commands": command_results,
+                        "required_artifacts": artifact_results,
+                        "rubric": rubric,
+                    },
+                )
+
+            raw_matches = glob.glob(str(worktree / path_glob), recursive=True) if path_glob else []
+            matches: list[str] = []
+            for path in raw_matches:
+                resolved = Path(path).resolve()
+                try:
+                    resolved.relative_to(worktree)
+                except ValueError:
+                    return (
+                        False,
+                        {
+                            "reason": "acceptance_artifact_out_of_bounds",
+                            "worktree": str(worktree),
+                            "artifact": artifact_id,
+                            "path_glob": path_glob,
+                            "out_of_bounds_path": str(resolved),
+                            "commands": command_results,
+                            "required_artifacts": artifact_results,
+                            "rubric": rubric,
+                        },
+                    )
+                matches.append(str(resolved))
             artifact_results.append(
                 {
                     "id": artifact_id,
@@ -1340,7 +1449,11 @@ class LocalOrchestrator:
             )
             if not commit_ok:
                 return "failure", commit_meta
-            acceptance_ok, acceptance_result = self._evaluate_acceptance(node, commit_meta)
+            acceptance_ok, acceptance_result = self._evaluate_acceptance(
+                node,
+                commit_meta,
+                timeout_seconds=int(handle.plan.constraints.acceptance_timeout_seconds),
+            )
             if not acceptance_ok:
                 return "failure", acceptance_result
             return "success", {**result, "worktree": commit_meta, "acceptance": acceptance_result}

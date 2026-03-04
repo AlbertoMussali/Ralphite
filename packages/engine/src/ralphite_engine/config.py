@@ -74,12 +74,13 @@ def ensure_workspace_layout(workspace_root: Path) -> dict[str, Path]:
     return paths
 
 
-def load_config(workspace_root: Path) -> LocalConfig:
+def load_config(workspace_root: Path, *, create_if_missing: bool = True) -> LocalConfig:
     paths = ensure_workspace_layout(workspace_root)
     cfg_path = paths["config"]
     if not cfg_path.exists():
         cfg = LocalConfig(workspace_root=str(paths["root"]))
-        save_config(paths["root"], cfg)
+        if create_if_missing:
+            save_config(paths["root"], cfg)
         return cfg
 
     raw = tomllib.loads(cfg_path.read_text(encoding="utf-8"))

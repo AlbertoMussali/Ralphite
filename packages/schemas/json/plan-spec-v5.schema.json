@@ -52,7 +52,9 @@
         "max_total_steps": { "type": "integer", "minimum": 1 },
         "max_cost_usd": { "type": "number", "minimum": 0 },
         "fail_fast": { "type": "boolean" },
-        "max_parallel": { "type": "integer", "minimum": 1 }
+        "max_parallel": { "type": "integer", "minimum": 1 },
+        "acceptance_timeout_seconds": { "type": "integer", "minimum": 1, "default": 120 },
+        "max_retries_per_node": { "type": "integer", "minimum": 0, "default": 0 }
       },
       "additionalProperties": false
     },
@@ -110,7 +112,10 @@
                   "required": ["id", "path_glob", "format"],
                   "properties": {
                     "id": { "type": "string" },
-                    "path_glob": { "type": "string" },
+                    "path_glob": {
+                      "type": "string",
+                      "pattern": "^(?![A-Za-z]:)(?![\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$)).+"
+                    },
                     "format": { "type": "string" }
                   },
                   "additionalProperties": false
