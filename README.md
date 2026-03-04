@@ -32,6 +32,7 @@ uv run ralphite init --workspace .
 ```bash
 uv run ralphite doctor --workspace .
 uv run ralphite check --workspace . --full
+uv run ralphite check --workspace . --release-gate
 ```
 
 ### Start run
@@ -50,6 +51,8 @@ uv run ralphite tui --workspace .
 
 ```bash
 uv run ralphite recover --workspace .
+uv run ralphite recover --workspace . --run-id <RUN_ID> --mode manual --preflight-only --no-tui --json
+uv run ralphite recover --workspace . --run-id <RUN_ID> --mode agent_best_effort --prompt "resolve merge conflicts safely" --resume --no-tui --json
 uv run ralphite history --workspace .
 uv run ralphite replay <RUN_ID> --workspace .
 ```
@@ -61,6 +64,46 @@ uv run ralphite migrate --workspace . --strict
 ```
 
 `version: 1` plans are deprecated and rejected at validation/runtime boundaries.
+
+## Recovery Automation Contract
+
+`ralphite recover` supports machine-oriented workflows:
+
+- `--preflight-only`: run recovery readiness checks and exit.
+- `--resume/--no-resume`: explicitly control resume behavior after selecting a mode.
+- `--json`: emit structured JSON payloads for scripts/CI.
+
+Stable exit codes:
+
+- `0`: success
+- `10`: no recoverable run
+- `11`: run not found or unrecoverable
+- `12`: invalid recovery mode/input
+- `13`: recovery preflight failed
+- `14`: recovery still pending (for example `--no-resume` or resume rejected)
+- `15`: run reached terminal failed/cancelled state
+- `16`: internal error/unexpected state
+
+Preflight output includes `checks`, `blocking_reasons`, `conflict_files`, and suggested `next_commands`.
+
+## Release Gate
+
+`ralphite check --release-gate` runs the v2 stabilization suites and fails closed:
+
+- parser/compiler unit tests
+- orchestrator + git/worktree integration tests
+- TUI command/screen tests
+- e2e recovery scenario
+
+CI enforces this gate using the same command.
+
+## Doctor Stale Artifact Policy
+
+`ralphite doctor` reports managed stale artifacts under `.ralphite/worktrees` and managed `ralphite/*` branches by run id.
+
+- default stale threshold: `24` hours
+- stale entries are warnings, with actionable cleanup hints
+- cleanup paths/branches are idempotent and safe to re-run
 
 ## Workspace Layout
 

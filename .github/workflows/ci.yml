@@ -27,4 +27,4 @@ jobs:
       - name: Run tests
         run: pytest packages/engine/tests apps/tui/tests -q
       - name: Ralphite check
-        run: ralphite check --workspace .
+        run: ralphite check --workspace . --release-gate
