@@ -209,7 +209,9 @@ async def stream_run_events(
     request: Request,
     after_id: int = Query(default=0),
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
+    _assert_project_owner(db, project_id, user.id)
     run = db.scalar(select(Run).where(and_(Run.id == run_id, Run.project_id == project_id)))
     if not run:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found")

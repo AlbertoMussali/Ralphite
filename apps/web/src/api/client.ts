@@ -13,6 +13,7 @@ import type {
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "/api/v1";
 const TOKEN_KEY = "ralphite.access_token";
+let refreshInFlight: Promise<boolean> | null = null;
 
 function extractApiError(status: number, body: unknown): string {
   if (typeof body === "string" && body.trim()) return body;
@@ -49,20 +50,54 @@ export function setToken(token: string | null): void {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getToken();
-  const headers = new Headers(init?.headers);
-  headers.set("Content-Type", "application/json");
-  if (token) headers.set("Authorization", `Bearer ${token}`);
+  async function performRequest(): Promise<Response> {
+    const token = getToken();
+    const headers = new Headers(init?.headers);
+    headers.set("Content-Type", "application/json");
+    if (token) headers.set("Authorization", `Bearer ${token}`);
 
-  let response: Response;
-  try {
-    response = await fetch(`${API_BASE}${path}`, {
+    return fetch(`${API_BASE}${path}`, {
       ...init,
       headers,
       credentials: "include",
     });
+  }
+
+  async function refreshAccessToken(): Promise<boolean> {
+    if (refreshInFlight) return refreshInFlight;
+    refreshInFlight = (async () => {
+      try {
+        const response = await fetch(`${API_BASE}/auth/refresh`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+        });
+        if (!response.ok) return false;
+        const body = (await response.json()) as AuthTokens;
+        if (!body.access_token) return false;
+        setToken(body.access_token);
+        return true;
+      } catch (_error) {
+        return false;
+      } finally {
+        refreshInFlight = null;
+      }
+    })();
+    return refreshInFlight;
+  }
+
+  let response: Response;
+  try {
+    response = await performRequest();
   } catch (_error) {
     throw new Error("Network error: unable to reach API service.");
+  }
+
+  if (response.status === 401 && !path.startsWith("/auth/")) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      response = await performRequest();
+    }
   }
 
   if (!response.ok) {

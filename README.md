@@ -1,95 +1,90 @@
 # Ralphite
 
-Ralphite is a configurable multi-agent orchestration platform with:
+Ralphite is now a **terminal-first** local orchestration platform for solo builders.
 
-- `apps/web`: React + Vite control plane
-- `apps/api`: FastAPI orchestration API
-- `apps/runner`: local runner daemon
-- `packages/schemas`: shared plan/event schemas for Python/TypeScript
+## Current Product Shape (Hard Pivot)
 
-## Quick start
+- `apps/tui`: `ralphite` CLI + Textual dashboard (primary UX)
+- `packages/engine`: in-process local orchestrator runtime
+- `packages/schemas`: shared plan/event schemas
+- `apps/api`, `apps/runner`, `apps/web`: legacy compatibility surfaces (deprecated)
+
+## Quick Start (TUI-First)
 
 ### Requirements
 
 - Python 3.12+
 - Node 20+
 - pnpm 9+
+- `uv`
 
-### Install frontend
-
-```bash
-pnpm install
-```
-
-### Install backend/runner (uv workspace)
+### Install everything
 
 ```bash
 uv sync --all-packages
+pnpm install
 ```
 
-### Run backend tests (uv)
+### Initialize workspace
 
 ```bash
-PYTHONPATH="apps/api/src:packages/schemas/python/src" uv run pytest apps/api/tests -q
+uv run ralphite init --workspace .
 ```
 
-### Install backend/runner (pip alternative)
+### Run doctor checks
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e packages/schemas/python
-pip install -e apps/api
-pip install -e apps/runner
+uv run ralphite doctor --workspace .
 ```
 
-### Run API
+### Start from latest plan
 
 ```bash
-PYTHONPATH="apps/api/src:packages/schemas/python/src" uv run python -m uvicorn ralphite_api.main:app --reload --port 8000
+uv run ralphite run --workspace .
 ```
 
-or
+### Goal-to-plan quickstart
 
 ```bash
-uvicorn ralphite_api.main:app --reload --port 8000
+uv run ralphite run --workspace . --goal "Refactor build pipeline and ship changelog"
 ```
 
-### Run web
+### Dashboard
 
 ```bash
-pnpm --filter @ralphite/web dev
+uv run ralphite tui --workspace .
 ```
 
-### Run runner
+### History, replay, migration
 
 ```bash
-PYTHONPATH="apps/runner/src:packages/schemas/python/src" uv run python -m ralphite_runner.main --api-base http://localhost:8000 --workspace-root /absolute/path/to/project
+uv run ralphite history --workspace .
+uv run ralphite replay <RUN_ID> --workspace .
+uv run ralphite migrate --workspace .
 ```
 
-or
+### Quality gate
 
 ```bash
-ralphite-runner --api-base http://localhost:8000 --workspace-root /absolute/path/to/project
+uv run ralphite check --workspace . --full
 ```
 
-## Default local URLs
+## Workspace Files
 
-- Web: http://localhost:5173
-- API docs: http://localhost:8000/docs
+Ralphite uses local workspace state under `.ralphite/`:
 
-## Launch All Local Services
+- `.ralphite/config.toml` local profile/policy
+- `.ralphite/plans/` plan files
+- `.ralphite/runs/history.json` run history
+- `.ralphite/artifacts/<run_id>/` final artifacts
+- `.ralphite/drafts/` autosaved drafts
 
-Use the convenience launcher:
+## Legacy Services (Deprecated)
 
-```bash
-./launch-dev.sh
-```
+The legacy web/API/runner stack is still present for transition purposes:
 
-Options:
+- Web: `pnpm --filter @ralphite/web dev`
+- API: `PYTHONPATH="apps/api/src:packages/schemas/python/src" uv run python -m uvicorn ralphite_api.main:app --reload --port 8000`
+- Runner: `PYTHONPATH="apps/runner/src:packages/schemas/python/src" uv run python -m ralphite_runner.main --api-base http://localhost:8000 --workspace-root /absolute/path/to/project`
 
-```bash
-./launch-dev.sh --workspace-root /absolute/path/to/project
-./launch-dev.sh --skip-sync --skip-pnpm-install
-./launch-dev.sh --api-port 8001 --web-port 5174
-```
+These surfaces will be sunset after TUI parity and migration period.

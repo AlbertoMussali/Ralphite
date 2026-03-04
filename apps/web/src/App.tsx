@@ -719,13 +719,11 @@ function StructurePage({
             tabIndex={0}
             onClick={() => {
               setSelectedPlanId(plan.id);
-              navigate(`/onboarding/structure/builder/${plan.id}`);
             }}
             onKeyDown={(event) => {
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
                 setSelectedPlanId(plan.id);
-                navigate(`/onboarding/structure/builder/${plan.id}`);
               }
             }}
           >
@@ -957,15 +955,6 @@ function BuilderPage({
         </button>
         <button className="btn-outline" onClick={() => addBuilderNode("gate")}>
           Gate
-        </button>
-        <button className="btn-ghost" onClick={() => addBuilderNode("loop")}>
-          Loop Block
-        </button>
-        <button className="btn-ghost" onClick={() => addBuilderNode("split")}>
-          Parallel Split
-        </button>
-        <button className="btn-ghost" onClick={() => addBuilderNode("join")}>
-          Parallel Join
         </button>
         <button className="btn-primary" onClick={validateCompiled}>
           Validate
@@ -1203,6 +1192,11 @@ function RunDetailPage({ projectId }: { projectId: string }) {
       runId,
       (event) => {
         setEvents((current) => [event, ...current].slice(0, 300));
+        if (event.event === "RUN_DONE") {
+          getRun(projectId, runId)
+            .then(setRun)
+            .catch((err) => setError(String(err)));
+        }
       },
       () => {
         // Keep previous events if stream drops.
@@ -1488,6 +1482,7 @@ export default function App() {
         <div>
           <p className="kicker">SIGNED IN AS {bootstrap.user.email}</p>
           <h1>Ralphite V1</h1>
+          <p className="muted">Legacy web surface: terminal-first `ralphite` CLI/TUI is now the primary experience.</p>
         </div>
         <div className="stack-inline">
           <Link className="btn-ghost" to="/onboarding/workspace">

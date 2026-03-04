@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "lint": "echo 'no lint configured yet'"
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@ralphite/schemas": "workspace:*",

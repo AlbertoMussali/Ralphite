@@ -1,32 +1,46 @@
 # Ralphite Architecture
 
-## Services
+## Primary Architecture (TUI-First)
 
-- `apps/web`: React + Vite control plane UI
-- `apps/api`: FastAPI API + orchestration state machine
-- `apps/runner`: local daemon that executes claimed nodes using local tools/MCPs
-- `packages/schemas`: shared contracts for plan/event payloads
+- `apps/tui`: terminal UX (`ralphite` CLI + Textual dashboard)
+- `packages/engine`: local in-process orchestrator
+- `packages/schemas`: shared plan/event contracts
 
-## Runtime flow
+## Local Runtime Flow
 
-1. Runner registers and heartbeats with capability payload.
-2. User authenticates in web and creates project.
-3. User connects workspace root. API binds project to matching runner.
-4. Runner heartbeats discovered plans from `<root>/.ralphite/plans`.
-5. User selects or uploads plan, validates, configures permissions, starts run.
-6. API creates run + node records + permission snapshot.
-7. Runner claims next ready node, executes, and posts completion/events.
-8. API evaluates gates/loops, schedules more nodes, and emits SSE run events.
-9. API finalizes run and stores structured artifacts.
+1. `ralphite init` creates `.ralphite` layout and seeds starter plan if needed.
+2. `ralphite doctor` validates environment, config, and plan health.
+3. `ralphite run` resolves a plan (or generates from `--goal`) and starts a local run.
+4. Engine validates plan, builds node runtime state, and executes locally.
+5. Dashboard streams ordered run events and exposes pause/resume/cancel controls.
+6. Engine writes artifacts and run history under `.ralphite/`.
+7. `ralphite history` and `ralphite replay` support iteration and reruns.
 
-## Event shape
+## Engine Interface
+
+- `start_run(plan_ref|plan_content)`
+- `stream_events(run_id)`
+- `pause_run(run_id)`
+- `resume_run(run_id)`
+- `cancel_run(run_id)`
+- `rerun_failed(run_id)`
+
+## Event Shape
 
 Every event follows:
 
-- `ts`, `run_id`, `group`, `task_id`, `stage`, `event`, `level`, `message`, `meta`
+- `id`, `ts`, `run_id`, `group`, `task_id`, `stage`, `event`, `level`, `message`, `meta`
 
 Primary events:
 
-- `RUN_PLAN_READY`, `RUN_STARTED`, `NODE_STARTED`, `NODE_HEARTBEAT`, `NODE_RESULT`
+- `RUN_STARTED`, `NODE_STARTED`, `NODE_RESULT`
 - `GATE_PASS`, `GATE_RETRY`, `GATE_FAIL`
 - `RUN_SUMMARY`, `RUN_DONE`
+
+## Legacy Surfaces (Deprecated)
+
+- `apps/web` (React control plane)
+- `apps/api` (FastAPI orchestration API)
+- `apps/runner` (daemon)
+
+These remain for migration compatibility only.
