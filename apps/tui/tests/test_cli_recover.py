@@ -15,13 +15,13 @@ from ralphite_tui.cli import (
 
 def _plan_content() -> str:
     return """
-version: 2
+version: 3
 plan_id: cli_recovery
 name: cli_recovery
 task_source:
   kind: markdown_checklist
   path: RALPHEX_TASK.md
-  parser_version: 2
+  parser_version: 3
 agent_profiles:
   - id: worker_default
     role: worker
@@ -42,10 +42,6 @@ execution_structure:
       pre_orchestrator:
         enabled: false
         agent_profile_id: orchestrator_pre_default
-      workers:
-        sequential_before: []
-        parallel: []
-        sequential_after: []
       post_orchestrator:
         enabled: true
         agent_profile_id: orchestrator_post_default

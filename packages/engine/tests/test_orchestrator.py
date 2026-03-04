@@ -33,7 +33,7 @@ def test_cancel_run(tmp_path: Path) -> None:
     assert any(evt["event"] in {"RUN_CANCEL_REQUESTED", "RUN_DONE"} for evt in events)
 
 
-def test_v2_plan_executes_with_phase_events(tmp_path: Path) -> None:
+def test_v3_plan_executes_with_phase_events(tmp_path: Path) -> None:
     (tmp_path / "RALPHEX_TASK.md").write_text(
         "\n".join(
             [
@@ -47,13 +47,13 @@ def test_v2_plan_executes_with_phase_events(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     plan_content = """
-version: 2
-plan_id: v2_orch
-name: v2_orch
+version: 3
+plan_id: v3_orch
+name: v3_orch
 task_source:
   kind: markdown_checklist
   path: RALPHEX_TASK.md
-  parser_version: 2
+  parser_version: 3
 agent_profiles:
   - id: worker_default
     role: worker
@@ -74,10 +74,6 @@ execution_structure:
       pre_orchestrator:
         enabled: false
         agent_profile_id: orchestrator_pre_default
-      workers:
-        sequential_before: []
-        parallel: []
-        sequential_after: []
       post_orchestrator:
         enabled: true
         agent_profile_id: orchestrator_post_default
@@ -109,13 +105,13 @@ def test_conflict_triggers_recovery_and_abort_mode(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     plan_content = """
-version: 2
-plan_id: v2_recovery
-name: v2_recovery
+version: 3
+plan_id: v3_recovery
+name: v3_recovery
 task_source:
   kind: markdown_checklist
   path: RALPHEX_TASK.md
-  parser_version: 2
+  parser_version: 3
 agent_profiles:
   - id: worker_default
     role: worker
@@ -136,10 +132,6 @@ execution_structure:
       pre_orchestrator:
         enabled: false
         agent_profile_id: orchestrator_pre_default
-      workers:
-        sequential_before: []
-        parallel: []
-        sequential_after: []
       post_orchestrator:
         enabled: true
         agent_profile_id: orchestrator_post_default

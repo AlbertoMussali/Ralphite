@@ -86,3 +86,23 @@ def test_detect_stale_artifacts_reports_orphans(tmp_path: Path) -> None:
     report = manager.detect_stale_artifacts(active_run_ids=["active-run"], max_age_hours=0)
     assert "stale_worktrees" in report
     assert any(item.get("run_id") == "orphanrun" for item in report["stale_worktrees"])
+
+
+def test_commit_workspace_changes_can_scope_to_specific_paths(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    manager = GitWorktreeManager(tmp_path, "runscope1")
+
+    (tmp_path / "scoped.txt").write_text("scoped\n", encoding="utf-8")
+    (tmp_path / "other.txt").write_text("other\n", encoding="utf-8")
+
+    ok, meta = manager.commit_workspace_changes("scoped commit", paths=["scoped.txt"])
+    assert ok is True, meta
+    assert meta.get("mode") == "committed"
+
+    show = _git(tmp_path, "show", "--name-only", "--pretty=format:")
+    changed_files = [line.strip() for line in show.stdout.splitlines() if line.strip()]
+    assert "scoped.txt" in changed_files
+    assert "other.txt" not in changed_files
+
+    status = _git(tmp_path, "status", "--porcelain")
+    assert "other.txt" in status.stdout

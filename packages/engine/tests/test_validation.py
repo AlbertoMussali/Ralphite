@@ -14,16 +14,16 @@ name: empty
 """
     valid, issues, summary = validate_plan_content(content)
     assert not valid
-    assert summary.get("supported_versions") == [2]
-    assert any(issue.get("code") == "version.deprecated_v1" for issue in issues)
+    assert summary.get("supported_versions") == [3]
+    assert any(issue.get("code") == "version.unsupported" for issue in issues)
 
     fixes = suggest_fixes({}, issues)
     assert fixes == []
     noop = ValidationFix(code="noop", title="noop", description="noop", path="root")
-    assert apply_fix({"version": 2}, fix=noop) == {"version": 2}
+    assert apply_fix({"version": 3}, fix=noop) == {"version": 3}
 
 
-def test_validate_plan_v2_with_task_source(tmp_path: Path) -> None:
+def test_validate_plan_v3_with_task_source(tmp_path: Path) -> None:
     task_file = tmp_path / "RALPHEX_TASK.md"
     task_file.write_text(
         "\n".join(
@@ -40,13 +40,13 @@ def test_validate_plan_v2_with_task_source(tmp_path: Path) -> None:
     )
 
     content = """
-version: 2
-plan_id: v2_sample
-name: v2_sample
+version: 3
+plan_id: v3_sample
+name: v3_sample
 task_source:
   kind: markdown_checklist
   path: RALPHEX_TASK.md
-  parser_version: 2
+  parser_version: 3
 agent_profiles:
   - id: worker_default
     role: worker
@@ -67,10 +67,6 @@ execution_structure:
       pre_orchestrator:
         enabled: false
         agent_profile_id: orchestrator_pre_default
-      workers:
-        sequential_before: []
-        parallel: []
-        sequential_after: []
       post_orchestrator:
         enabled: true
         agent_profile_id: orchestrator_post_default
@@ -79,6 +75,7 @@ constraints:
 """
     valid, issues, summary = validate_plan_content(content, workspace_root=tmp_path)
     assert valid is True, issues
-    assert summary.get("version") == 2
+    assert summary.get("version") == 3
     assert summary.get("phases") == 1
     assert summary.get("task_source_status", {}).get("status") == "ok"
+    assert summary.get("parallel_limit") == 2

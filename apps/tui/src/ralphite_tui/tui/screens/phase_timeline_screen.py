@@ -70,7 +70,18 @@ class PhaseTimelineScreen(Vertical):
         return self.query_one("#phase-events", DataTable)
 
     def _build_phase_progress(self, run) -> str:
-        phase_nodes = run.metadata.get("v2_phase_nodes", {}) if isinstance(run.metadata.get("v2_phase_nodes"), dict) else {}
+        phase_nodes = (
+            run.metadata.get("phase_nodes", {})
+            if isinstance(run.metadata.get("phase_nodes"), dict)
+            else run.metadata.get("v2_phase_nodes", {})
+            if isinstance(run.metadata.get("v2_phase_nodes"), dict)
+            else {}
+        )
+        phase_groups = (
+            run.metadata.get("phase_parallel_groups", {})
+            if isinstance(run.metadata.get("phase_parallel_groups"), dict)
+            else {}
+        )
         if not phase_nodes:
             return "No phase metadata available."
 
@@ -91,6 +102,20 @@ class PhaseTimelineScreen(Vertical):
                 f"q={counts.get('queued', 0)} r={counts.get('running', 0)} "
                 f"ok={counts.get('succeeded', 0)} fail={counts.get('failed', 0)} blocked={counts.get('blocked', 0)}"
             )
+            group_rows = phase_groups.get(phase, [])
+            if isinstance(group_rows, list) and group_rows:
+                for group in group_rows:
+                    if not isinstance(group, dict):
+                        continue
+                    group_id = group.get("group_id", "?")
+                    group_nodes = group.get("node_ids", []) if isinstance(group.get("node_ids"), list) else []
+                    group_total = len(group_nodes)
+                    group_done = 0
+                    for node_id in group_nodes:
+                        state = run.nodes.get(str(node_id))
+                        if state and state.status in {"succeeded", "failed", "blocked"}:
+                            group_done += 1
+                    lines.append(f"  group {group_id}: {group_done}/{group_total} done")
         return "\n".join(lines)
 
     def _build_failure_summary(self, run) -> str:
@@ -117,7 +142,7 @@ class PhaseTimelineScreen(Vertical):
             self._summary().update(f"Run {run_id} not found")
             return
 
-        done_phases = run.metadata.get("v2_phase_done", [])
+        done_phases = run.metadata.get("phase_done", run.metadata.get("v2_phase_done", []))
         recovery = run.metadata.get("recovery", {})
         self._summary().update(
             f"Run {run.id} | status={run.status} | active={run.active_node_id or '-'} | "

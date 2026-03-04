@@ -386,3 +386,45 @@ class GitWorktreeManager:
                 else:
                     messages.append(f"branch delete skipped {branch}: {deleted.stderr.strip() or deleted.stdout.strip()}")
         return messages
+
+    def commit_workspace_changes(self, message: str, paths: list[str] | None = None) -> tuple[bool, dict[str, Any]]:
+        if not self.git_available:
+            return True, {"mode": "simulated", "message": message, "paths": list(paths or [])}
+
+        if paths:
+            staged_paths: list[str] = []
+            for raw_path in paths:
+                path_obj = Path(raw_path).expanduser()
+                if path_obj.is_absolute():
+                    try:
+                        path_obj = path_obj.resolve().relative_to(self.workspace_root)
+                    except Exception:  # noqa: BLE001
+                        continue
+                add_one = self._git(["add", "--", str(path_obj)], check=False)
+                if add_one.returncode != 0:
+                    return False, {
+                        "reason": "git_add_failed",
+                        "path": str(path_obj),
+                        "error": add_one.stderr.strip() or add_one.stdout.strip(),
+                    }
+                staged_paths.append(str(path_obj))
+
+            has_staged = self._git(["diff", "--cached", "--quiet"], check=False)
+            if has_staged.returncode == 0:
+                return True, {"mode": "noop", "message": "no staged changes to commit", "paths": staged_paths}
+        else:
+            status = self._git(["status", "--porcelain"], check=False)
+            if status.returncode != 0:
+                return False, {"reason": "git_status_failed", "error": status.stderr.strip() or status.stdout.strip()}
+            if not status.stdout.strip():
+                return True, {"mode": "noop", "message": "no workspace changes to commit"}
+
+            add = self._git(["add", "-A"], check=False)
+            if add.returncode != 0:
+                return False, {"reason": "git_add_failed", "error": add.stderr.strip() or add.stdout.strip()}
+
+        commit = self._git(["commit", "-m", message], check=False)
+        if commit.returncode != 0:
+            return False, {"reason": "git_commit_failed", "error": commit.stderr.strip() or commit.stdout.strip()}
+
+        return True, {"mode": "committed", "message": message, "paths": list(paths or [])}

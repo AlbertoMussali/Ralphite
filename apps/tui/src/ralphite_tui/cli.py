@@ -14,8 +14,6 @@ import typer
 from ralphite_engine import (
     LocalConfig,
     LocalOrchestrator,
-    migrate_plan_file,
-    migrate_plan_in_place,
     save_config,
     seed_starter_if_missing,
     validate_plan_content,
@@ -48,21 +46,6 @@ def _validate_all_plans(orch: LocalOrchestrator) -> tuple[bool, list[tuple[Path,
             continue
         failures.append((plan_path, issues, summary))
     return len(failures) == 0, failures
-
-
-def _strict_migration_preflight(orch: LocalOrchestrator) -> tuple[bool, list[str]]:
-    messages: list[str] = []
-    blocked = False
-    for plan_path in orch.list_plans():
-        result = migrate_plan_in_place(plan_path)
-        messages.append(f"checked {plan_path.name}")
-        for warning in result.warnings:
-            messages.append(f"  - {warning}")
-        if not result.valid:
-            blocked = True
-            for issue in result.issues:
-                messages.append(f"  - BLOCK {issue.get('code')}: {issue.get('message')} ({issue.get('path')})")
-    return (not blocked), messages
 
 
 def _doctor_report(orch: LocalOrchestrator) -> bool:
@@ -98,6 +81,7 @@ def _doctor_report(orch: LocalOrchestrator) -> bool:
         ok = False
 
     task_source_ok = True
+    task_group_ok = True
     git_ready_ok = True
     for plan in plans:
         valid, _issues, summary = validate_plan_content(plan.read_text(encoding="utf-8"), workspace_root=orch.workspace_root)
@@ -106,12 +90,18 @@ def _doctor_report(orch: LocalOrchestrator) -> bool:
         task_status = str(summary.get("task_source_status", {}).get("status", "unknown"))
         if task_status not in {"ok", "issues"}:
             task_source_ok = False
+        if summary.get("task_group_issues"):
+            task_group_ok = False
         readiness = summary.get("recovery_readiness", {})
         if str(readiness.get("status")) not in {"ready", "dirty", "degraded"}:
             git_ready_ok = False
 
     table.add_row("task-source", "OK" if task_source_ok else "FAIL", "task_source paths parseable")
     if not task_source_ok:
+        ok = False
+
+    table.add_row("task-groups", "OK" if task_group_ok else "FAIL", "parallel_group definitions are consistent")
+    if not task_group_ok:
         ok = False
 
     table.add_row("recovery-readiness", "OK" if git_ready_ok else "FAIL", "git/worktree readiness computed")
@@ -207,13 +197,6 @@ def init(
     else:
         console.print("Starter plan already present.")
 
-    strict_ok, strict_messages = _strict_migration_preflight(orch)
-    for line in strict_messages:
-        console.print(line)
-    if not strict_ok:
-        raise typer.Exit(code=1)
-
-
 @app.command()
 def doctor(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
@@ -236,13 +219,6 @@ def run(
 ) -> None:
     """Run a plan immediately with optional TUI monitoring."""
     orch = _orchestrator(workspace)
-
-    strict_ok, strict_messages = _strict_migration_preflight(orch)
-    for line in strict_messages:
-        console.print(line)
-    if not strict_ok:
-        console.print("[red]Strict migration preflight failed; run blocked.[/red]")
-        raise typer.Exit(code=1)
 
     plan_ref = plan
     if goal:
@@ -458,33 +434,13 @@ def replay(
 def migrate(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
     strict: Annotated[bool, typer.Option("--strict", help="Validate in place and block deprecated/invalid plans")] = False,
-    to_v2: Annotated[bool, typer.Option("--to-v2", help="Deprecated (conversion removed)")] = False,
 ) -> None:
-    """Validate plan compatibility. Automatic v1 conversion is deprecated and removed."""
-    orch = _orchestrator(workspace)
-
-    if to_v2:
-        console.print("[yellow]--to-v2 is deprecated. Automatic migration has been removed.[/yellow]")
-
-    if strict or to_v2:
-        strict_ok, strict_messages = _strict_migration_preflight(orch)
-        for line in strict_messages:
-            console.print(line)
-        if not strict_ok:
-            raise typer.Exit(code=1)
-        console.print("[green]Migration compatibility check completed[/green]")
-        return
-
-    out_dir = orch.paths["plans"] / "migrated"
-    total = 0
-    for plan_path in orch.list_plans():
-        total += 1
-        result = migrate_plan_file(plan_path, out_dir)
-        console.print(f"[dim]checked[/dim] {result.source}")
-        for warning in result.warnings:
-            console.print(f"  - {warning}")
-
-    console.print(f"Migration compatibility check completed: {total} plan(s)")
+    """Migration command is deprecated in v3-only mode."""
+    del workspace
+    del strict
+    console.print("[red]migrate is no longer supported in v3-only mode.[/red]")
+    console.print("Action: create/update plans with version: 3 and parser_version: 3.")
+    raise typer.Exit(code=1)
 
 
 def _run_release_gate(orch: LocalOrchestrator) -> bool:
@@ -541,7 +497,7 @@ def _run_release_gate(orch: LocalOrchestrator) -> bool:
 def check(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
     full: Annotated[bool, typer.Option("--full", help="Run full repo test suite")] = False,
-    release_gate: Annotated[bool, typer.Option("--release-gate", help="Run v2 stabilization release gate suites")] = False,
+    release_gate: Annotated[bool, typer.Option("--release-gate", help="Run v3 stabilization release gate suites")] = False,
 ) -> None:
     """Run baseline quality gates for local UX reliability."""
     orch = _orchestrator(workspace)

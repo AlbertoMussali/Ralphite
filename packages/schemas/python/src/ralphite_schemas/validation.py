@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from dataclasses import dataclass
 
-from .plan_v2 import PlanSpecV2
+from .plan_v3 import PlanSpecV3
 
 
 @dataclass(slots=True)
@@ -16,7 +16,7 @@ class ValidationIssue:
 
 @dataclass(slots=True)
 class CompiledPlan:
-    plan: PlanSpecV2
+    plan: PlanSpecV3
     node_levels: dict[str, int]
     outgoing: dict[str, list[str]]
     incoming: dict[str, list[str]]
@@ -29,17 +29,17 @@ class ValidationError(Exception):
         super().__init__("plan validation failed")
 
 
-def validate_plan(plan: PlanSpecV2) -> list[ValidationIssue]:
+def validate_plan(plan: PlanSpecV3) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
 
-    if plan.version != 2:
-        issues.append(ValidationIssue("version.invalid", "version must be 2", "version"))
+    if plan.version != 3:
+        issues.append(ValidationIssue("version.invalid", "version must be 3", "version"))
 
-    if plan.task_source.parser_version != 2:
+    if plan.task_source.parser_version != 3:
         issues.append(
             ValidationIssue(
                 "task_source.parser_version_invalid",
-                "task_source.parser_version must be 2",
+                "task_source.parser_version must be 3",
                 "task_source.parser_version",
             )
         )
@@ -77,7 +77,6 @@ def validate_plan(plan: PlanSpecV2) -> list[ValidationIssue]:
         )
 
     seen_phases: set[str] = set()
-    selected_tasks: set[str] = set()
     for idx, phase in enumerate(plan.execution_structure.phases):
         path_prefix = f"execution_structure.phases[{idx}]"
         if phase.id in seen_phases:
@@ -102,37 +101,10 @@ def validate_plan(plan: PlanSpecV2) -> list[ValidationIssue]:
                 )
             )
 
-        lane_pairs = [
-            ("sequential_before", phase.workers.sequential_before),
-            ("parallel", phase.workers.parallel),
-            ("sequential_after", phase.workers.sequential_after),
-        ]
-        local_selected: set[str] = set()
-        for lane_name, task_ids in lane_pairs:
-            for task_id in task_ids:
-                if task_id in local_selected:
-                    issues.append(
-                        ValidationIssue(
-                            "phase.task_duplicate",
-                            f"task '{task_id}' appears multiple times in phase '{phase.id}'",
-                            f"{path_prefix}.workers.{lane_name}",
-                        )
-                    )
-                local_selected.add(task_id)
-                if task_id in selected_tasks:
-                    issues.append(
-                        ValidationIssue(
-                            "phase.task_reused",
-                            f"task '{task_id}' is assigned in multiple phases",
-                            f"{path_prefix}.workers.{lane_name}",
-                        )
-                    )
-                selected_tasks.add(task_id)
-
     return issues
 
 
-def _compile_plan(plan: PlanSpecV2) -> CompiledPlan:
+def _compile_plan(plan: PlanSpecV3) -> CompiledPlan:
     incoming: dict[str, list[str]] = defaultdict(list)
     outgoing: dict[str, list[str]] = defaultdict(list)
     groups: dict[str, list[str]] = defaultdict(list)
@@ -153,23 +125,6 @@ def _compile_plan(plan: PlanSpecV2) -> CompiledPlan:
             pre_id = f"{phase.id}::orchestrator_pre"
             add_node(pre_id, phase.id, current_anchor)
             current_anchor = [pre_id]
-
-        seq_before_ids = [f"{phase.id}::seq_pre::{task_id}" for task_id in phase.workers.sequential_before]
-        for node_id in seq_before_ids:
-            add_node(node_id, phase.id, list(current_anchor))
-            current_anchor = [node_id]
-
-        parallel_ids = [f"{phase.id}::parallel::{task_id}" for task_id in phase.workers.parallel]
-        if parallel_ids:
-            parallel_anchor = list(current_anchor)
-            for node_id in parallel_ids:
-                add_node(node_id, phase.id, parallel_anchor)
-            current_anchor = list(parallel_ids)
-
-        seq_after_ids = [f"{phase.id}::seq_post::{task_id}" for task_id in phase.workers.sequential_after]
-        for node_id in seq_after_ids:
-            add_node(node_id, phase.id, list(current_anchor))
-            current_anchor = [node_id]
 
         if phase.post_orchestrator.enabled:
             post_id = f"{phase.id}::orchestrator_post"
@@ -218,7 +173,7 @@ def _compile_plan(plan: PlanSpecV2) -> CompiledPlan:
     )
 
 
-def compile_plan(plan: PlanSpecV2) -> CompiledPlan:
+def compile_plan(plan: PlanSpecV3) -> CompiledPlan:
     issues = validate_plan(plan)
     errors = [issue for issue in issues if issue.level == "error"]
     if errors:

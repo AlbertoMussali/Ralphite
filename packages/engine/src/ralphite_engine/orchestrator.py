@@ -21,17 +21,18 @@ from ralphite_engine.run_store import RunStore
 from ralphite_engine.store import HistoryStore
 from ralphite_engine.structure_compiler import RuntimeExecutionPlan, RuntimeNodeSpec, compile_execution_structure
 from ralphite_engine.task_parser import parse_task_file
+from ralphite_engine.task_writer import mark_tasks_completed
 from ralphite_engine.taxonomy import classify_failure
 from ralphite_engine.templates import make_goal_plan, seed_starter_if_missing
 from ralphite_engine.validation import parse_plan_yaml, resolve_task_source_path, validate_plan_content
-from ralphite_schemas.plan_v2 import AgentProfileSpec, PlanSpecV2
+from ralphite_schemas.plan_v3 import AgentProfileSpec, PlanSpecV3
 from ralphite_schemas.validation import compile_plan
 
 
 @dataclass
 class RuntimeHandle:
     run: RunViewState
-    plan: PlanSpecV2
+    plan: PlanSpecV3
     runtime: RuntimeExecutionPlan
     profile_map: dict[str, AgentProfileSpec]
     permission_snapshot: dict[str, list[str]]
@@ -115,7 +116,7 @@ class LocalOrchestrator:
         if not plans:
             raise FileNotFoundError("no plans found in .ralphite/plans")
 
-        # Prefer a parseable v2 plan, so legacy v1 files don't break default runs.
+        # Prefer a parseable v3 plan, so legacy files don't break default runs.
         for candidate in plans:
             try:
                 parse_plan_yaml(candidate.read_text(encoding="utf-8"))
@@ -142,20 +143,31 @@ class LocalOrchestrator:
         phase_map: dict[str, str] = {}
         role_map: dict[str, str] = {}
         phase_nodes: dict[str, list[str]] = defaultdict(list)
+        parallel_group_map: dict[str, int] = {}
 
         for node in runtime.nodes:
             lane_map[node.id] = node.lane
             phase_map[node.id] = node.phase
             role_map[node.id] = node.role
             phase_nodes[node.phase].append(node.id)
+            if node.parallel_group is not None:
+                parallel_group_map[node.id] = int(node.parallel_group)
 
         return {
-            "plan_version": 2,
-            "v2_lane_map": lane_map,
-            "v2_phase_map": phase_map,
-            "v2_role_map": role_map,
-            "v2_phase_nodes": dict(phase_nodes),
-            "v2_parallel_limit": int(runtime.parallel_limit),
+            "plan_version": 3,
+            "lane_map": lane_map,
+            "phase_map": phase_map,
+            "role_map": role_map,
+            "phase_nodes": dict(phase_nodes),
+            "parallel_limit": int(runtime.parallel_limit),
+            "parallel_group_map": parallel_group_map,
+            "phase_parallel_groups": {
+                phase.phase_id: [
+                    {"group_id": group.group_id, "node_ids": list(group.node_ids), "task_ids": list(group.task_ids)}
+                    for group in phase.parallel_groups
+                ]
+                for phase in runtime.phase_plans
+            },
             "task_parse_issues": list(runtime.task_parse_issues),
             "recovery": {
                 "status": "none",
@@ -166,7 +178,7 @@ class LocalOrchestrator:
             },
         }
 
-    def _materialize_runtime_plan(self, plan: PlanSpecV2) -> tuple[RuntimeExecutionPlan, dict[str, Any]]:
+    def _materialize_runtime_plan(self, plan: PlanSpecV3) -> tuple[RuntimeExecutionPlan, dict[str, Any]]:
         task_file = resolve_task_source_path(plan.task_source.path, self.workspace_root)
         tasks, parse_issues = parse_task_file(task_file)
         runtime, compile_issues = compile_execution_structure(plan, tasks, task_parse_issues=parse_issues)
@@ -384,12 +396,27 @@ class LocalOrchestrator:
         compile_plan(plan_document)
         runtime, runtime_meta = self._materialize_runtime_plan(plan_document)
 
-        run.metadata.setdefault("plan_version", runtime_meta.get("plan_version", 2))
-        run.metadata.setdefault("v2_parallel_limit", runtime_meta.get("v2_parallel_limit", 1))
-        run.metadata.setdefault("v2_lane_map", runtime_meta.get("v2_lane_map", {}))
-        run.metadata.setdefault("v2_phase_map", runtime_meta.get("v2_phase_map", {}))
-        run.metadata.setdefault("v2_role_map", runtime_meta.get("v2_role_map", {}))
-        run.metadata.setdefault("v2_phase_nodes", runtime_meta.get("v2_phase_nodes", {}))
+        run.metadata.setdefault("plan_version", runtime_meta.get("plan_version", 3))
+        if "parallel_limit" not in run.metadata and "v2_parallel_limit" in run.metadata:
+            run.metadata["parallel_limit"] = run.metadata.get("v2_parallel_limit")
+        if "lane_map" not in run.metadata and "v2_lane_map" in run.metadata:
+            run.metadata["lane_map"] = run.metadata.get("v2_lane_map")
+        if "phase_map" not in run.metadata and "v2_phase_map" in run.metadata:
+            run.metadata["phase_map"] = run.metadata.get("v2_phase_map")
+        if "role_map" not in run.metadata and "v2_role_map" in run.metadata:
+            run.metadata["role_map"] = run.metadata.get("v2_role_map")
+        if "phase_nodes" not in run.metadata and "v2_phase_nodes" in run.metadata:
+            run.metadata["phase_nodes"] = run.metadata.get("v2_phase_nodes")
+        if "phase_done" not in run.metadata and "v2_phase_done" in run.metadata:
+            run.metadata["phase_done"] = run.metadata.get("v2_phase_done")
+
+        run.metadata.setdefault("parallel_limit", runtime_meta.get("parallel_limit", 1))
+        run.metadata.setdefault("lane_map", runtime_meta.get("lane_map", {}))
+        run.metadata.setdefault("phase_map", runtime_meta.get("phase_map", {}))
+        run.metadata.setdefault("role_map", runtime_meta.get("role_map", {}))
+        run.metadata.setdefault("phase_nodes", runtime_meta.get("phase_nodes", {}))
+        run.metadata.setdefault("parallel_group_map", runtime_meta.get("parallel_group_map", {}))
+        run.metadata.setdefault("phase_parallel_groups", runtime_meta.get("phase_parallel_groups", {}))
         run.metadata.setdefault("task_parse_issues", runtime_meta.get("task_parse_issues", []))
         run.metadata.setdefault(
             "recovery",
@@ -734,19 +761,19 @@ class LocalOrchestrator:
             "lane": node.lane,
         }
 
-    def _emit_v2_node_started(self, handle: RuntimeHandle, node: RuntimeNodeSpec) -> None:
+    def _emit_node_started(self, handle: RuntimeHandle, node: RuntimeNodeSpec) -> None:
         metadata = handle.run.metadata
         phase = node.phase
         lane = node.lane
 
-        phase_started = set(metadata.get("v2_phase_started", []))
+        phase_started = set(metadata.get("phase_started", []))
         if phase and phase not in phase_started:
             self._emit(handle, stage="plan", event="PHASE_STARTED", level="info", message=f"phase started: {phase}", group=phase)
             phase_started.add(phase)
-            metadata["v2_phase_started"] = sorted(phase_started)
+            metadata["phase_started"] = sorted(phase_started)
 
         if node.role == "worker":
-            lane_started = set(metadata.get("v2_lane_started", []))
+            lane_started = set(metadata.get("lane_started", []))
             lane_key = f"{phase}:{lane}"
             if lane_key not in lane_started:
                 self._emit(
@@ -759,7 +786,7 @@ class LocalOrchestrator:
                     meta={"lane": lane},
                 )
                 lane_started.add(lane_key)
-                metadata["v2_lane_started"] = sorted(lane_started)
+                metadata["lane_started"] = sorted(lane_started)
             self._emit(
                 handle,
                 stage="task",
@@ -768,7 +795,7 @@ class LocalOrchestrator:
                 message="worker task started",
                 group=phase,
                 task_id=node.id,
-                meta={"lane": lane},
+                meta={"lane": lane, "parallel_group": node.parallel_group},
             )
         elif node.role == "orchestrator_pre":
             self._emit(
@@ -791,7 +818,7 @@ class LocalOrchestrator:
                 task_id=node.id,
             )
 
-    def _emit_v2_node_completed(self, handle: RuntimeHandle, node: RuntimeNodeSpec, success: bool) -> None:
+    def _emit_node_completed(self, handle: RuntimeHandle, node: RuntimeNodeSpec, success: bool) -> None:
         metadata = handle.run.metadata
         phase = node.phase
 
@@ -804,7 +831,7 @@ class LocalOrchestrator:
                 message="worker output integrated to phase branch",
                 group=phase,
                 task_id=node.id,
-                meta={"lane": node.lane},
+                meta={"lane": node.lane, "parallel_group": node.parallel_group},
             )
         elif node.role == "orchestrator_pre":
             self._emit(
@@ -828,8 +855,8 @@ class LocalOrchestrator:
                 meta={"commit_strategy": "preserve_worker_commits", "cleanup_done": bool(success)},
             )
 
-        phase_done = set(metadata.get("v2_phase_done", []))
-        phase_node_ids = list(metadata.get("v2_phase_nodes", {}).get(phase, []))
+        phase_done = set(metadata.get("phase_done", []))
+        phase_node_ids = list(metadata.get("phase_nodes", {}).get(phase, []))
         if phase and phase not in phase_done and phase_node_ids:
             statuses = [handle.run.nodes[node_id].status for node_id in phase_node_ids if node_id in handle.run.nodes]
             terminal = {"succeeded", "failed", "blocked"}
@@ -843,7 +870,7 @@ class LocalOrchestrator:
                     group=phase,
                 )
                 phase_done.add(phase)
-                metadata["v2_phase_done"] = sorted(phase_done)
+                metadata["phase_done"] = sorted(phase_done)
 
     def _start_node_execution(self, handle: RuntimeHandle, node: RuntimeNodeSpec) -> None:
         rec = handle.run.nodes[node.id]
@@ -860,7 +887,7 @@ class LocalOrchestrator:
             task_id=node.id,
             meta={"attempt": rec.attempt_count},
         )
-        self._emit_v2_node_started(handle, node)
+        self._emit_node_started(handle, node)
 
     def _handle_recovery_required(
         self,
@@ -920,7 +947,7 @@ class LocalOrchestrator:
                 task_id=node.id,
                 meta={"status": rec.status, "result": result},
             )
-            self._emit_v2_node_completed(handle, node, True)
+            self._emit_node_completed(handle, node, True)
             return
 
         rec.status = "failed"
@@ -936,7 +963,7 @@ class LocalOrchestrator:
             task_id=node.id,
             meta={"status": rec.status, "reason": result.get("reason"), "next_action": advice.next_action},
         )
-        self._emit_v2_node_completed(handle, node, False)
+        self._emit_node_completed(handle, node, False)
 
         if fail_fast:
             for queued in handle.run.nodes.values():
@@ -951,7 +978,7 @@ class LocalOrchestrator:
         failed = len([n for n in run.nodes.values() if n.status == "failed"])
         blocked = len([n for n in run.nodes.values() if n.status == "blocked"])
 
-        phase_done = run.metadata.get("v2_phase_done", [])
+        phase_done = run.metadata.get("phase_done", run.metadata.get("v2_phase_done", []))
         recovery = run.metadata.get("recovery", {})
         git_state = run.metadata.get("git_state", {})
         phase_states = git_state.get("phases", {}) if isinstance(git_state, dict) else {}
@@ -1035,7 +1062,7 @@ class LocalOrchestrator:
         if not ready_nodes:
             return []
 
-        phase_order = {phase.id: idx for idx, phase in enumerate(handle.plan.execution_structure.phases)}
+        phase_order = {phase.phase_id: idx for idx, phase in enumerate(handle.runtime.phase_plans)}
         ready_nodes = sorted(ready_nodes, key=lambda node: (phase_order.get(node.phase, 10_000), node.id))
         first_phase = ready_nodes[0].phase
         same_phase = [node for node in ready_nodes if node.phase == first_phase]
@@ -1046,6 +1073,16 @@ class LocalOrchestrator:
             return parallel_ready[:parallel_limit]
 
         return [same_phase[0]]
+
+    def _successful_phase_task_ids(self, handle: RuntimeHandle, phase_id: str) -> list[str]:
+        task_ids: list[str] = []
+        for node in handle.runtime.nodes:
+            if node.phase != phase_id or node.role != "worker" or not node.source_task_id:
+                continue
+            node_state = handle.run.nodes.get(node.id)
+            if node_state and node_state.status == "succeeded":
+                task_ids.append(node.source_task_id)
+        return sorted(dict.fromkeys(task_ids))
 
     def _run_node(
         self,
@@ -1101,8 +1138,30 @@ class LocalOrchestrator:
             if status == "failed":
                 return "failure", {"reason": "runtime_error", **merge_meta}
 
+            task_file = resolve_task_source_path(handle.plan.task_source.path, self.workspace_root)
+            task_ids = self._successful_phase_task_ids(handle, node.phase)
+            task_writeback = mark_tasks_completed(task_file, task_ids)
+            if not bool(task_writeback.get("ok")):
+                return "failure", {"reason": "task_writeback_failed", "details": task_writeback}
+
+            task_writeback_commit: dict[str, Any] = {"mode": "noop", "message": "no task updates"}
+            if int(task_writeback.get("updated") or 0) > 0:
+                committed, commit_meta = git_manager.commit_workspace_changes(
+                    f"chore(tasks): mark completed for {node.phase}",
+                    paths=[str(task_file)],
+                )
+                if not committed:
+                    return "failure", {"reason": "task_writeback_commit_failed", **commit_meta}
+                task_writeback_commit = commit_meta
+
             cleanup = git_manager.cleanup_phase(handle.run.metadata.setdefault("git_state", {}), node.phase)
-            return "success", {**agent_result, "integration": merge_meta, "cleanup": cleanup}
+            return "success", {
+                **agent_result,
+                "integration": merge_meta,
+                "task_writeback": task_writeback,
+                "task_writeback_commit": task_writeback_commit,
+                "cleanup": cleanup,
+            }
 
         if node.role == "worker":
             git_manager.prepare_phase(handle.run.metadata.setdefault("git_state", {}), node.phase)

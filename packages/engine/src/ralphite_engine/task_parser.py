@@ -18,6 +18,7 @@ class ParsedTask:
     line_no: int
     phase: str
     lane: str
+    parallel_group: int | None
     depends_on: list[str]
     tools: list[str]
     test: str | None
@@ -67,7 +68,10 @@ def parse_task_lines(lines: Iterable[str]) -> tuple[list[ParsedTask], list[str]]
             meta = _parse_meta(comment_match.group(1))
             payload = COMMENT_PATTERN.sub("", payload).strip()
 
-        task_id = str(meta.get("id") or f"line_{line_no}").strip()
+        task_id = str(meta.get("id") or "").strip()
+        if not task_id:
+            issues.append(f"missing required id for task at line {line_no}")
+            task_id = f"line_{line_no}"
         if task_id in seen_ids:
             issues.append(f"duplicate task id '{task_id}' at line {line_no}")
             continue
@@ -82,12 +86,36 @@ def parse_task_lines(lines: Iterable[str]) -> tuple[list[ParsedTask], list[str]]
             issues.append(f"invalid lane '{lane}' on task '{task_id}' (line {line_no}); defaulted to parallel")
             lane = "parallel"
 
+        parallel_group: int | None = None
+        if "parallel_group" in meta and str(meta.get("parallel_group") or "").strip():
+            raw_parallel_group = str(meta.get("parallel_group") or "").strip()
+            try:
+                parsed_parallel_group = int(raw_parallel_group)
+            except ValueError:
+                issues.append(
+                    f"invalid parallel_group '{raw_parallel_group}' on task '{task_id}' (line {line_no}); ignored"
+                )
+            else:
+                if parsed_parallel_group < 1:
+                    issues.append(
+                        f"invalid parallel_group '{raw_parallel_group}' on task '{task_id}' (line {line_no}); ignored"
+                    )
+                else:
+                    parallel_group = parsed_parallel_group
+
+        if lane != "parallel" and parallel_group is not None:
+            issues.append(
+                f"parallel_group is only valid for lane 'parallel' on task '{task_id}' (line {line_no}); ignored"
+            )
+            parallel_group = None
+
         task = ParsedTask(
             id=task_id,
             description=payload,
             line_no=line_no,
             phase=phase,
             lane=lane,
+            parallel_group=parallel_group,
             depends_on=_split_csv(meta.get("deps")),
             tools=_split_csv(meta.get("tools")),
             test=(meta.get("test") or "").strip() or None,

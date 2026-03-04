@@ -63,7 +63,9 @@ uv run ralphite replay <RUN_ID> --workspace .
 uv run ralphite migrate --workspace . --strict
 ```
 
-`version: 1` plans are deprecated and rejected at validation/runtime boundaries.
+`migrate` is deprecated in v3-only mode and exits with guidance.
+
+Ralphite accepts only `version: 3` plans and rejects older plan versions at validation/runtime boundaries.
 
 ## Recovery Automation Contract
 
@@ -88,7 +90,7 @@ Preflight output includes `checks`, `blocking_reasons`, `conflict_files`, and su
 
 ## Release Gate
 
-`ralphite check --release-gate` runs the v2 stabilization suites and fails closed:
+`ralphite check --release-gate` runs the v3 stabilization suites and fails closed:
 
 - parser/compiler unit tests
 - orchestrator + git/worktree integration tests
@@ -111,7 +113,7 @@ Ralphite stores local state in `.ralphite/`:
 
 - `.ralphite/config.toml` local policy/profile
 - `.ralphite/plans/` canonical plan files
-- `RALPHEX_TASK.md` canonical task source for `version: 2` plans (or custom `task_source.path`)
+- `RALPHEX_TASK.md` canonical task source for `version: 3` plans (or custom `task_source.path`)
 - `.ralphite/worktrees/` temporary worker/integration worktrees for phase execution
 - `.ralphite/runs/<run_id>/run_state.json` persisted run state
 - `.ralphite/runs/<run_id>/checkpoint.json` node-level resume checkpoint

@@ -1,9 +1,8 @@
 export type AgentRole = "worker" | "orchestrator_pre" | "orchestrator_post";
 export type TaskSourceKind = "markdown_checklist";
-export type TaskLane = "seq_pre" | "parallel" | "seq_post";
 
-export interface PlanSpecV2 {
-  version: 2;
+export interface PlanSpecV3 {
+  version: 3;
   plan_id: string;
   name: string;
   workspace?: { root?: string | null };
@@ -15,7 +14,7 @@ export interface PlanSpecV2 {
   task_source?: TaskSourceSpec;
   agent_profiles: AgentProfileSpec[];
   execution_structure: ExecutionStructureSpec;
-  constraints?: ConstraintsSpecV2;
+  constraints?: ConstraintsSpecV3;
   outputs?: OutputsSpec;
 }
 
@@ -43,17 +42,10 @@ export interface OrchestratorStepSpec {
   agent_profile_id?: string;
 }
 
-export interface WorkerSegmentsSpec {
-  sequential_before?: string[];
-  parallel?: string[];
-  sequential_after?: string[];
-}
-
 export interface PhaseExecutionSpec {
   id: string;
   label?: string;
   pre_orchestrator?: OrchestratorStepSpec;
-  workers?: WorkerSegmentsSpec;
   post_orchestrator?: OrchestratorStepSpec;
 }
 
@@ -61,7 +53,7 @@ export interface ExecutionStructureSpec {
   phases: PhaseExecutionSpec[];
 }
 
-export interface ConstraintsSpecV2 {
+export interface ConstraintsSpecV3 {
   max_runtime_seconds?: number;
   max_total_steps?: number;
   max_cost_usd?: number;
@@ -69,7 +61,7 @@ export interface ConstraintsSpecV2 {
   max_parallel?: number;
 }
 
-export type PlanSpec = PlanSpecV2;
+export type PlanSpec = PlanSpecV3;
 
 export interface EventEnvelope {
   ts: string;

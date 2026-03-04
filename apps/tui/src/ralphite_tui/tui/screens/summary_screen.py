@@ -110,7 +110,7 @@ class SummaryScreen(Vertical):
             status.update(f"Run {run_id} not found")
             return
 
-        done_phases = run.metadata.get("v2_phase_done", [])
+        done_phases = run.metadata.get("phase_done", run.metadata.get("v2_phase_done", []))
         cleanup = [evt for evt in run.events if evt.get("event") == "CLEANUP_DONE"]
         status.update(
             f"Run {run.id} | status={run.status} | phases_done={len(done_phases)} | cleanup_events={len(cleanup)}"

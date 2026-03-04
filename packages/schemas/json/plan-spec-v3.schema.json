@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ralphite.dev/schemas/plan-spec-v2.json",
-  "title": "PlanSpecV2",
+  "$id": "https://ralphite.dev/schemas/plan-spec-v3.json",
+  "title": "PlanSpecV3",
   "type": "object",
   "required": ["version", "plan_id", "name", "task_source", "agent_profiles", "execution_structure"],
   "properties": {
-    "version": {"type": "integer", "const": 2},
+    "version": {"type": "integer", "const": 3},
     "plan_id": {"type": "string", "minLength": 1},
     "name": {"type": "string", "minLength": 1},
     "workspace": {
@@ -36,7 +36,7 @@
       "properties": {
         "kind": {"type": "string", "enum": ["markdown_checklist"]},
         "path": {"type": "string", "minLength": 1},
-        "parser_version": {"type": "integer", "const": 2}
+        "parser_version": {"type": "integer", "const": 3}
       },
       "additionalProperties": false
     },
@@ -64,7 +64,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["id", "workers"],
+            "required": ["id"],
             "properties": {
               "id": {"type": "string", "minLength": 1},
               "label": {"type": "string"},
@@ -74,15 +74,6 @@
                 "properties": {
                   "enabled": {"type": "boolean"},
                   "agent_profile_id": {"type": "string"}
-                },
-                "additionalProperties": false
-              },
-              "workers": {
-                "type": "object",
-                "properties": {
-                  "sequential_before": {"type": "array", "items": {"type": "string"}},
-                  "parallel": {"type": "array", "items": {"type": "string"}},
-                  "sequential_after": {"type": "array", "items": {"type": "string"}}
                 },
                 "additionalProperties": false
               },

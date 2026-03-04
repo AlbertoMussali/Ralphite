@@ -32,15 +32,15 @@ class RunSetupScreen(Vertical):
       margin-bottom: 1;
     }
     #setup-plans {
-      height: 10;
+      height: 8;
       margin-bottom: 1;
     }
     #setup-phases {
-      height: 10;
+      height: 8;
       margin-bottom: 1;
     }
     #setup-tasks {
-      height: 10;
+      height: 12;
       margin-bottom: 1;
     }
     #setup-validation {
@@ -56,37 +56,41 @@ class RunSetupScreen(Vertical):
         self._loaded_plan_path: Path | None = None
         self._loaded_plan_data: dict[str, Any] | None = None
         self._tasks: list[ParsedTask] = []
+        self._task_parse_issues: list[str] = []
+        self._task_source_path: Path | None = None
 
     @property
     def shell(self) -> "AppShell":
         return self.app  # type: ignore[return-value]
 
     def compose(self) -> ComposeResult:
-        yield Static("Run Setup + Phase Editor", id="setup-status")
+        yield Static("Run Setup (Task-Driven)", id="setup-status")
         with Horizontal(id="setup-controls"):
             yield Button("Refresh", id="refresh")
             yield Button("Load Selected", id="load-selected", variant="primary")
             yield Button("Add Phase", id="add-phase")
             yield Button("Toggle Pre", id="toggle-pre")
             yield Button("Toggle Post", id="toggle-post")
-            yield Button("Cycle Lane", id="cycle-lane")
+            yield Button("MaxParallel -", id="max-parallel-dec")
+            yield Button("MaxParallel +", id="max-parallel-inc")
+            yield Button("Task File Hint", id="task-file-hint")
             yield Button("Validate", id="validate")
             yield Button("Save Revision", id="save-revision", variant="success")
             yield Button("Start", id="start-selected", variant="success")
 
         plans = DataTable(id="setup-plans")
-        plans.add_columns("Plan", "Valid", "Phases", "Task Source")
+        plans.add_columns("Plan", "Valid", "Phases", "Task Source", "MaxParallel")
         yield plans
 
         phases = DataTable(id="setup-phases")
-        phases.add_columns("Phase", "Pre", "Seq Pre", "Parallel", "Seq Post", "Post")
+        phases.add_columns("Phase", "Pre", "Post")
         yield phases
 
         tasks = DataTable(id="setup-tasks")
-        tasks.add_columns("Task", "Meta Phase", "Meta Lane", "Done", "Selected Phase Lane")
+        tasks.add_columns("Task", "Phase", "Lane", "Group", "Deps", "Profile", "Done", "Line")
         yield tasks
 
-        yield Static("Load a plan to edit execution structure.", id="setup-validation")
+        yield Static("Load a plan to preview task-driven execution and controls.", id="setup-validation")
 
     def on_mount(self) -> None:
         self._refresh_plans()
@@ -120,12 +124,53 @@ class RunSetupScreen(Vertical):
             return None
         return row
 
-    def _selected_task(self) -> ParsedTask | None:
-        table = self._tasks_table()
-        row = table.cursor_row
-        if row is None or row < 0 or row >= len(self._tasks):
-            return None
-        return self._tasks[row]
+    def _current_phase_rows(self) -> list[dict[str, Any]]:
+        if not self._loaded_plan_data:
+            return []
+        structure = self._loaded_plan_data.get("execution_structure", {})
+        if not isinstance(structure, dict):
+            return []
+        phases = structure.get("phases", [])
+        if not isinstance(phases, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for phase in phases:
+            if isinstance(phase, dict):
+                out.append(phase)
+        return out
+
+    def _render_editor_tables(self) -> None:
+        phases_table = self._phases_table()
+        tasks_table = self._tasks_table()
+        phases_table.clear()
+        tasks_table.clear()
+
+        phase_rows = self._current_phase_rows()
+        for phase in phase_rows:
+            pre = phase.get("pre_orchestrator", {}) if isinstance(phase.get("pre_orchestrator"), dict) else {}
+            post = phase.get("post_orchestrator", {}) if isinstance(phase.get("post_orchestrator"), dict) else {}
+            phases_table.add_row(
+                str(phase.get("id", "")),
+                "on" if bool(pre.get("enabled", False)) else "off",
+                "on" if bool(post.get("enabled", False)) else "off",
+            )
+
+        for task in sorted(self._tasks, key=lambda row: row.line_no):
+            tasks_table.add_row(
+                task.id,
+                task.phase,
+                task.lane,
+                str(task.parallel_group or "-"),
+                ",".join(task.depends_on) or "-",
+                task.agent_profile,
+                "yes" if task.completed else "no",
+                str(task.line_no),
+            )
+
+        if phase_rows:
+            phases_table.move_cursor(row=min(self._selected_phase_index() or 0, len(phase_rows) - 1), column=0)
+        if self._tasks:
+            tasks_table.move_cursor(row=0, column=0)
 
     def _refresh_plans(self) -> None:
         self._plans = self.shell.orchestrator.list_plans()
@@ -142,88 +187,44 @@ class RunSetupScreen(Vertical):
                 workspace_root=self.shell.orchestrator.workspace_root,
             )
             task_source = str(summary.get("task_source_status", {}).get("path", "-"))
-            table.add_row(plan_path.name, "yes" if valid else "no", str(summary.get("phases", "-")), task_source)
+            table.add_row(
+                plan_path.name,
+                "yes" if valid else "no",
+                str(summary.get("phases", "-")),
+                task_source,
+                str(summary.get("parallel_limit", "-")),
+            )
 
         table.move_cursor(row=0, column=0)
-        self._status().update(f"{len(self._plans)} plan(s) discovered. Load one to edit phases.")
-
-    def _current_phase_rows(self) -> list[dict[str, Any]]:
-        if not self._loaded_plan_data:
-            return []
-        structure = self._loaded_plan_data.get("execution_structure", {})
-        if not isinstance(structure, dict):
-            return []
-        phases = structure.get("phases", [])
-        if not isinstance(phases, list):
-            return []
-        out: list[dict[str, Any]] = []
-        for phase in phases:
-            if isinstance(phase, dict):
-                out.append(phase)
-        return out
-
-    def _task_lane_for_phase(self, phase: dict[str, Any], task_id: str) -> str:
-        workers = phase.get("workers", {}) if isinstance(phase.get("workers"), dict) else {}
-        for lane in ("sequential_before", "parallel", "sequential_after"):
-            lane_values = workers.get(lane, [])
-            if isinstance(lane_values, list) and task_id in lane_values:
-                return {"sequential_before": "seq_pre", "parallel": "parallel", "sequential_after": "seq_post"}[lane]
-        return "none"
-
-    def _render_editor_tables(self) -> None:
-        phases_table = self._phases_table()
-        tasks_table = self._tasks_table()
-        phases_table.clear()
-        tasks_table.clear()
-
-        phase_rows = self._current_phase_rows()
-        for phase in phase_rows:
-            workers = phase.get("workers", {}) if isinstance(phase.get("workers"), dict) else {}
-            seq_pre = ",".join(workers.get("sequential_before", [])) if isinstance(workers.get("sequential_before"), list) else ""
-            parallel = ",".join(workers.get("parallel", [])) if isinstance(workers.get("parallel"), list) else ""
-            seq_post = ",".join(workers.get("sequential_after", [])) if isinstance(workers.get("sequential_after"), list) else ""
-            pre = phase.get("pre_orchestrator", {}) if isinstance(phase.get("pre_orchestrator"), dict) else {}
-            post = phase.get("post_orchestrator", {}) if isinstance(phase.get("post_orchestrator"), dict) else {}
-            phases_table.add_row(
-                str(phase.get("id", "")),
-                "on" if bool(pre.get("enabled", False)) else "off",
-                seq_pre,
-                parallel,
-                seq_post,
-                "on" if bool(post.get("enabled", False)) else "off",
-            )
-
-        selected_phase = phase_rows[self._selected_phase_index() or 0] if phase_rows else None
-        for task in self._tasks:
-            selected_lane = self._task_lane_for_phase(selected_phase, task.id) if selected_phase else "none"
-            tasks_table.add_row(
-                task.id,
-                task.phase,
-                task.lane,
-                "yes" if task.completed else "no",
-                selected_lane,
-            )
-
-        if phase_rows:
-            phases_table.move_cursor(row=min(self._selected_phase_index() or 0, len(phase_rows) - 1), column=0)
-        if self._tasks:
-            tasks_table.move_cursor(row=min(tasks_table.cursor_row or 0, len(self._tasks) - 1), column=0)
+        self._status().update(f"{len(self._plans)} plan(s) discovered. Load one to configure phase controls.")
 
     def _refresh_validation(self) -> None:
         if not self._loaded_plan_data:
-            self._validation().update("Load a plan to validate edited execution structure.")
+            self._validation().update("Load a plan to validate task source and execution structure.")
             return
+
         content = yaml.safe_dump(self._loaded_plan_data, sort_keys=False, allow_unicode=False)
         valid, issues, summary = validate_plan_content(content, workspace_root=self.shell.orchestrator.workspace_root)
+        max_parallel = (
+            self._loaded_plan_data.get("constraints", {}).get("max_parallel", "-")
+            if isinstance(self._loaded_plan_data.get("constraints"), dict)
+            else "-"
+        )
         lines = [
             f"Plan: {summary.get('plan_id', '-')}",
             f"Valid: {'yes' if valid else 'no'}",
             f"Phases: {summary.get('phases', '-')}",
-            f"Lane counts: {summary.get('lane_counts', {})}",
+            f"MaxParallel: {max_parallel}",
             f"Task source: {summary.get('task_source_status', {})}",
+            f"Lane counts: {summary.get('lane_counts', {})}",
         ]
+        if self._task_source_path:
+            lines.append(f"Task file: {self._task_source_path}")
+        if self._task_parse_issues:
+            lines.append("Task parse issues:")
+            lines.extend([f"- {item}" for item in self._task_parse_issues])
         if issues:
-            lines.append("Issues:")
+            lines.append("Validation issues:")
             lines.extend([f"- {issue.get('code')}: {issue.get('message')} ({issue.get('path')})" for issue in issues])
         self._validation().update("\n".join(lines))
 
@@ -234,20 +235,21 @@ class RunSetupScreen(Vertical):
         self._loaded_plan_path = path
 
         task_path = resolve_task_source_path(plan_model.task_source.path, self.shell.orchestrator.workspace_root)
-        tasks, _parse_issues = parse_task_file(task_path)
-        self._tasks = [task for task in tasks if not task.completed]
+        tasks, parse_issues = parse_task_file(task_path)
+        self._task_source_path = task_path
+        self._tasks = tasks
+        self._task_parse_issues = parse_issues
 
         self._render_editor_tables()
         self._refresh_validation()
-        self._status().update(f"Loaded plan {path.name}. Edit phases/lane assignment and save revision.")
+        self._status().update(f"Loaded plan {path.name}. Edit phase controls only; tasks are file-defined.")
 
     def _toggle_orchestrator(self, key: str) -> None:
         phases = self._current_phase_rows()
         idx = self._selected_phase_index()
         if idx is None or idx >= len(phases):
             return
-        phase = phases[idx]
-        block = phase.get(key)
+        block = phases[idx].get(key)
         if not isinstance(block, dict):
             return
         block["enabled"] = not bool(block.get("enabled", False))
@@ -267,51 +269,21 @@ class RunSetupScreen(Vertical):
                 "id": f"phase-{candidate}",
                 "label": f"Phase {candidate}",
                 "pre_orchestrator": {"enabled": False, "agent_profile_id": "orchestrator_pre_default"},
-                "workers": {"sequential_before": [], "parallel": [], "sequential_after": []},
                 "post_orchestrator": {"enabled": True, "agent_profile_id": "orchestrator_post_default"},
             }
         )
         self._render_editor_tables()
         self._refresh_validation()
 
-    def _cycle_selected_task_lane(self) -> None:
-        phases = self._current_phase_rows()
-        idx = self._selected_phase_index()
-        task = self._selected_task()
-        if idx is None or idx >= len(phases) or task is None:
+    def _change_max_parallel(self, delta: int) -> None:
+        if not self._loaded_plan_data:
             return
-
-        phase = phases[idx]
-        workers = phase.get("workers") if isinstance(phase.get("workers"), dict) else None
-        if workers is None:
-            return
-
-        lane_map = {
-            "seq_pre": "sequential_before",
-            "parallel": "parallel",
-            "seq_post": "sequential_after",
-            "none": "none",
-        }
-        current = self._task_lane_for_phase(phase, task.id)
-        order = ["none", "seq_pre", "parallel", "seq_post"]
-        next_lane = order[(order.index(current) + 1) % len(order)]
-
-        for lane_key in ("sequential_before", "parallel", "sequential_after"):
-            lane_values = workers.get(lane_key, [])
-            if not isinstance(lane_values, list):
-                lane_values = []
-            workers[lane_key] = [item for item in lane_values if item != task.id]
-
-        if next_lane != "none":
-            target_key = lane_map[next_lane]
-            lane_values = workers.get(target_key, [])
-            if not isinstance(lane_values, list):
-                lane_values = []
-            if task.id not in lane_values:
-                lane_values.append(task.id)
-            workers[target_key] = lane_values
-
-        self._render_editor_tables()
+        constraints = self._loaded_plan_data.get("constraints")
+        if not isinstance(constraints, dict):
+            constraints = {}
+            self._loaded_plan_data["constraints"] = constraints
+        current = int(constraints.get("max_parallel", 3) or 3)
+        constraints["max_parallel"] = max(1, current + delta)
         self._refresh_validation()
 
     def _save_revision(self) -> Path | None:
@@ -339,7 +311,6 @@ class RunSetupScreen(Vertical):
         if button == "refresh":
             self._refresh_plans()
             return
-
         if button == "load-selected":
             selected = self._selected_plan_path()
             if not selected:
@@ -347,31 +318,33 @@ class RunSetupScreen(Vertical):
                 return
             self._load_plan(selected)
             return
-
         if button == "add-phase":
             self._add_phase()
             return
-
         if button == "toggle-pre":
             self._toggle_orchestrator("pre_orchestrator")
             return
-
         if button == "toggle-post":
             self._toggle_orchestrator("post_orchestrator")
             return
-
-        if button == "cycle-lane":
-            self._cycle_selected_task_lane()
+        if button == "max-parallel-dec":
+            self._change_max_parallel(-1)
             return
-
+        if button == "max-parallel-inc":
+            self._change_max_parallel(1)
+            return
+        if button == "task-file-hint":
+            if self._task_source_path:
+                self._status().update(f"Edit task file directly: {self._task_source_path}")
+            else:
+                self._status().update("Load a plan first to view task file path.")
+            return
         if button == "validate":
             self._refresh_validation()
             return
-
         if button == "save-revision":
             self._save_revision()
             return
-
         if button == "start-selected":
             plan_ref: str | None = None
             if self._loaded_plan_data is not None:

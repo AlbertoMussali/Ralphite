@@ -40,7 +40,7 @@ def make_starter_task_markdown(goal: str | None = None) -> str:
 
 def make_starter_plan() -> dict:
     return {
-        "version": 2,
+        "version": 3,
         "plan_id": "starter_block",
         "name": "Starter Block",
         "materials": {
@@ -55,7 +55,7 @@ def make_starter_plan() -> dict:
         "task_source": {
             "kind": "markdown_checklist",
             "path": "RALPHEX_TASK.md",
-            "parser_version": 2,
+            "parser_version": 3,
         },
         "agent_profiles": [
             {
@@ -73,7 +73,7 @@ def make_starter_plan() -> dict:
                 "model": "gpt-4.1-mini",
                 "system_prompt": (
                     "You are the pre-orchestrator. Validate order/dependencies, workspace readiness, "
-                    "and how workers should execute in sequential_before -> parallel -> sequential_after order."
+                    "and how workers should execute in seq_pre -> parallel -> seq_post order."
                 ),
                 "tools_allow": ["tool:*", "mcp:*"],
             },
@@ -97,11 +97,6 @@ def make_starter_plan() -> dict:
                     "pre_orchestrator": {
                         "enabled": False,
                         "agent_profile_id": "orchestrator_pre_default",
-                    },
-                    "workers": {
-                        "sequential_before": [],
-                        "parallel": [],
-                        "sequential_after": [],
                     },
                     "post_orchestrator": {
                         "enabled": True,
@@ -137,7 +132,7 @@ def dump_yaml(plan: dict) -> str:
     return yaml.safe_dump(plan, sort_keys=False, allow_unicode=False)
 
 
-def _is_v2_plan_file(path: Path) -> bool:
+def _is_v3_plan_file(path: Path) -> bool:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     except Exception:
@@ -145,7 +140,7 @@ def _is_v2_plan_file(path: Path) -> bool:
     if not isinstance(raw, dict):
         return False
     try:
-        return int(raw.get("version", 1)) == 2
+        return int(raw.get("version", 1)) == 3
     except (TypeError, ValueError):
         return False
 
@@ -154,7 +149,7 @@ def _starter_target_path(plans_dir: Path) -> Path:
     default = plans_dir / "starter_block.yaml"
     if not default.exists():
         return default
-    return plans_dir / "starter_block.v2.yaml"
+    return plans_dir / "starter_block.v3.yaml"
 
 
 def seed_starter_if_missing(plans_dir: Path) -> Path | None:
@@ -165,8 +160,8 @@ def seed_starter_if_missing(plans_dir: Path) -> Path | None:
     if not task_file.exists():
         task_file.write_text(make_starter_task_markdown(), encoding="utf-8")
 
-    # Keep user-provided plans, but ensure at least one v2 starter exists.
-    if existing and any(_is_v2_plan_file(path) for path in existing):
+    # Keep user-provided plans, but ensure at least one v3 starter exists.
+    if existing and any(_is_v3_plan_file(path) for path in existing):
         return None
 
     path = _starter_target_path(plans_dir)

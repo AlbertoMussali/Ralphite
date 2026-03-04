@@ -6,7 +6,7 @@ from typing import Any
 
 import yaml
 
-from ralphite_engine.validation import DEPRECATED_V1_MESSAGE, validate_plan_content
+from ralphite_engine.validation import UNSUPPORTED_VERSION_MESSAGE, validate_plan_content
 
 
 @dataclass
@@ -44,12 +44,12 @@ def migrate_plan_file(path: Path, out_dir: Path) -> MigrationResult:
         return MigrationResult(source=source, destination=None, changed=False, warnings=["plan root is not a mapping"])
 
     version = int(raw.get("version", 1))
-    if version != 2:
+    if version != 3:
         return MigrationResult(
             source=source,
             destination=None,
             changed=False,
-            warnings=[DEPRECATED_V1_MESSAGE, "automatic v1->v2 migration has been removed"],
+            warnings=[UNSUPPORTED_VERSION_MESSAGE, "automatic migration has been removed"],
         )
 
     valid, issues, _summary = validate_plan_content(source.read_text(encoding="utf-8"), workspace_root=_workspace_root_for_plan(source))
@@ -70,16 +70,16 @@ def migrate_plan_in_place(path: Path) -> StrictMigrationResult:
         )
 
     version = int(raw.get("version", 1))
-    if version != 2:
+    if version != 3:
         return StrictMigrationResult(
             source=source,
             changed=False,
             valid=False,
-            warnings=[DEPRECATED_V1_MESSAGE, "automatic v1->v2 migration has been removed"],
+            warnings=[UNSUPPORTED_VERSION_MESSAGE, "automatic migration has been removed"],
             issues=[
                 {
-                    "code": "version.deprecated_v1",
-                    "message": DEPRECATED_V1_MESSAGE,
+                    "code": "version.unsupported",
+                    "message": UNSUPPORTED_VERSION_MESSAGE,
                     "path": "version",
                     "level": "error",
                 }

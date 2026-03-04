@@ -10,17 +10,17 @@ from pydantic import ValidationError as PydanticValidationError
 
 from ralphite_engine.models import ValidationFix
 from ralphite_engine.structure_compiler import RuntimeExecutionPlan, compile_execution_structure
-from ralphite_engine.task_parser import parse_task_file
-from ralphite_schemas.plan_v2 import PlanSpecV2
+from ralphite_engine.task_parser import ParsedTask, parse_task_file
+from ralphite_schemas.plan_v3 import PlanSpecV3
 from ralphite_schemas.validation import ValidationError, compile_plan, validate_plan
 
 
-DEPRECATED_V1_MESSAGE = (
-    "PlanSpec version 1 is no longer supported. Convert to version 2 with task_source + execution_structure."
+UNSUPPORTED_VERSION_MESSAGE = (
+    "PlanSpec versions 1 and 2 are no longer supported. Use version 3 with task-driven ordering in task_source."
 )
 
 
-PlanDocument = PlanSpecV2
+PlanDocument = PlanSpecV3
 
 
 def parse_plan_yaml(content: str) -> PlanDocument:
@@ -28,9 +28,9 @@ def parse_plan_yaml(content: str) -> PlanDocument:
     if not isinstance(data, dict):
         raise ValueError("plan content must be a YAML object")
     version = int(data.get("version", 1))
-    if version != 2:
-        raise ValueError(DEPRECATED_V1_MESSAGE)
-    return PlanSpecV2.model_validate(data)
+    if version != 3:
+        raise ValueError(UNSUPPORTED_VERSION_MESSAGE)
+    return PlanSpecV3.model_validate(data)
 
 
 def resolve_task_source_path(task_source_path: str, workspace_root: str | Path | None) -> Path:
@@ -42,7 +42,7 @@ def resolve_task_source_path(task_source_path: str, workspace_root: str | Path |
     return candidate.resolve()
 
 
-def _collect_profile_tools(plan: PlanSpecV2) -> tuple[list[str], list[str]]:
+def _collect_profile_tools(plan: PlanSpecV3) -> tuple[list[str], list[str]]:
     tools = sorted(
         {
             entry
@@ -92,13 +92,13 @@ def _git_recovery_readiness(workspace_root: str | Path | None) -> dict[str, Any]
 
 def _append_task_diagnostics(
     *,
-    plan: PlanSpecV2,
+    plan: PlanSpecV3,
     workspace_root: str | Path | None,
     issues: list[dict[str, Any]],
-) -> tuple[dict[str, Any], list[str], RuntimeExecutionPlan | None]:
+) -> tuple[dict[str, Any], list[str], RuntimeExecutionPlan | None, list[ParsedTask]]:
     task_file_path = resolve_task_source_path(plan.task_source.path, workspace_root)
     if workspace_root is None:
-        return {"path": str(task_file_path), "status": "unresolved"}, [], None
+        return {"path": str(task_file_path), "status": "unresolved"}, [], None, []
 
     tasks, parse_issues = parse_task_file(task_file_path)
     status = "ok"
@@ -107,10 +107,10 @@ def _append_task_diagnostics(
         for issue in parse_issues:
             issues.append(
                 {
-                    "code": "task_source.parse_warning",
+                    "code": "task_source.parse_error",
                     "message": issue,
                     "path": "task_source.path",
-                    "level": "warn",
+                    "level": "error",
                 }
             )
 
@@ -135,7 +135,7 @@ def _append_task_diagnostics(
                 "level": "error",
             }
         )
-    return {"path": str(task_file_path), "status": status}, parse_issues, compiled_runtime
+    return {"path": str(task_file_path), "status": status}, parse_issues, compiled_runtime, tasks
 
 
 def validate_plan_content(
@@ -156,19 +156,19 @@ def validate_plan_content(
         )
 
     version = int(raw.get("version", 1))
-    if version != 2:
+    if version != 3:
         issues = [
             {
-                "code": "version.deprecated_v1",
-                "message": DEPRECATED_V1_MESSAGE,
+                "code": "version.unsupported",
+                "message": UNSUPPORTED_VERSION_MESSAGE,
                 "path": "version",
                 "level": "error",
             }
         ]
-        return False, issues, {"version": version, "supported_versions": [2]}
+        return False, issues, {"version": version, "supported_versions": [3]}
 
     try:
-        plan = PlanSpecV2.model_validate(raw)
+        plan = PlanSpecV3.model_validate(raw)
     except PydanticValidationError as exc:
         issues = [
             {
@@ -188,16 +188,36 @@ def validate_plan_content(
         issues.extend(asdict(issue) for issue in exc.issues)
         return False, issues, {}
 
-    task_source_status, parse_issues, runtime = _append_task_diagnostics(
+    task_source_status, parse_issues, runtime, tasks = _append_task_diagnostics(
         plan=plan,
         workspace_root=workspace_root,
         issues=issues,
     )
+    pending_tasks = [task for task in tasks if not task.completed]
     lane_counts = {
-        "seq_pre": sum(len(phase.workers.sequential_before) for phase in plan.execution_structure.phases),
-        "parallel": sum(len(phase.workers.parallel) for phase in plan.execution_structure.phases),
-        "seq_post": sum(len(phase.workers.sequential_after) for phase in plan.execution_structure.phases),
+        "seq_pre": len([task for task in pending_tasks if task.lane == "seq_pre"]),
+        "parallel": len([task for task in pending_tasks if task.lane == "parallel"]),
+        "seq_post": len([task for task in pending_tasks if task.lane == "seq_post"]),
     }
+    phase_ids = sorted({task.phase for task in pending_tasks})
+    group_issues: list[str] = []
+    for phase in phase_ids:
+        phase_parallel = [task for task in pending_tasks if task.phase == phase and task.lane == "parallel"]
+        with_group = [task for task in phase_parallel if task.parallel_group is not None]
+        if with_group and len(with_group) != len(phase_parallel):
+            group_issues.append(
+                f"phase '{phase}' has mixed parallel_group usage; all parallel tasks must set parallel_group"
+            )
+
+    for issue in group_issues:
+        issues.append(
+            {
+                "code": "task_source.parallel_group_mixed",
+                "message": issue,
+                "path": "task_source.path",
+                "level": "error",
+            }
+        )
     tools, mcps = _collect_profile_tools(plan)
     runtime_nodes = len(runtime.nodes) if runtime is not None else 0
     runtime_edges = (
@@ -207,7 +227,7 @@ def validate_plan_content(
     )
 
     summary = {
-        "version": 2,
+        "version": 3,
         "plan_id": plan.plan_id,
         "name": plan.name,
         "nodes": runtime_nodes,
@@ -216,7 +236,8 @@ def validate_plan_content(
         "groups": runtime.groups if runtime is not None else compiled.groups,
         "required_tools": tools,
         "required_mcps": mcps,
-        "phases": len(plan.execution_structure.phases),
+        "phases": len(phase_ids or [phase.id for phase in plan.execution_structure.phases]),
+        "parallel_limit": int(plan.constraints.max_parallel),
         "lane_counts": lane_counts,
         "orchestrator_defaults": {
             "pre_default_enabled": False,
@@ -224,6 +245,7 @@ def validate_plan_content(
         },
         "task_source_status": task_source_status,
         "task_parse_issues": parse_issues,
+        "task_group_issues": group_issues,
         "recovery_readiness": _git_recovery_readiness(workspace_root),
     }
 

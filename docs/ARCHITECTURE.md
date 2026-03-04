@@ -3,14 +3,14 @@
 ## Canonical Architecture
 
 - `apps/tui`: terminal app shell with global command palette and multi-screen navigation
-- `packages/engine`: local orchestrator, v2 validation, worktree lifecycle, durable run persistence
+- `packages/engine`: local orchestrator, v3 validation, worktree lifecycle, durable run persistence
 - `packages/schemas`: plan contracts and validation rules
 
 ## Local Runtime Flow
 
-1. `ralphite init` creates `.ralphite` layout and runs strict migration gate.
-2. `ralphite run` runs strict migration preflight, resolves/creates plan, and starts a local run.
-3. `version: 2` plans read canonical tasks from `task_source.path` (`RALPHEX_TASK.md` by default) and compile them into a runtime DAG from phase structure (`seq_pre -> parallel -> seq_post` + optional pre/post orchestrators).
+1. `ralphite init` creates `.ralphite` layout and ensures a starter v3 plan exists.
+2. `ralphite run` resolves/creates a v3 plan and starts a local run.
+3. `version: 3` plans read canonical tasks from `task_source.path` (`RALPHEX_TASK.md` by default). Task metadata defines phase/lane/group ordering; plan config defines phase orchestrator toggles and constraints.
 4. Worker tasks run in per-task worktrees; post-orchestrator integrates phase output back to base branch preserving worker commits.
 5. On merge conflicts, run enters `paused_recovery_required` and exposes manual / best-effort-agent / abort recovery modes.
 6. Orchestrator writes event journal, run state, checkpoints, and summary artifacts under `.ralphite/`.
@@ -45,7 +45,7 @@ Per run directory `.ralphite/runs/<run_id>/`:
 - App shell uses a screen stack with top navigation.
 - Global command palette (`ctrl+p` / `:`) is authoritative for discoverability.
 - TUI is execution-first: `Run Setup` -> `Phase Timeline` -> `Recovery` (if needed) -> `Summary`.
-- Task definition remains file-sourced; TUI edits execution structure (phase toggles/lane selectors) and recovery behavior, not task content.
+- Task definition remains file-sourced; TUI edits phase controls (orchestrator toggles + constraints) and recovery behavior, not task content.
 - Run Setup persists edits as timestamped plan revisions; source plan files are not overwritten in place by default.
 
 ## Recovery Preflight Lifecycle
