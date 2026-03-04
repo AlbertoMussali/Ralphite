@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -9,7 +10,6 @@ from typing import Annotated
 from rich.console import Console
 from rich.table import Table
 import typer
-import yaml
 
 from ralphite_engine import (
     LocalConfig,
@@ -24,6 +24,15 @@ from ralphite_tui.tui.app_shell import AppShell
 
 app = typer.Typer(help="Ralphite terminal-first orchestrator", no_args_is_help=True, add_completion=False)
 console = Console()
+
+RECOVER_EXIT_SUCCESS = 0
+RECOVER_EXIT_NO_RECOVERABLE = 10
+RECOVER_EXIT_UNRECOVERABLE = 11
+RECOVER_EXIT_INVALID_INPUT = 12
+RECOVER_EXIT_PREFLIGHT_FAILED = 13
+RECOVER_EXIT_PENDING = 14
+RECOVER_EXIT_TERMINAL_FAILURE = 15
+RECOVER_EXIT_INTERNAL_ERROR = 16
 
 
 def _orchestrator(workspace: Path) -> LocalOrchestrator:
@@ -91,7 +100,7 @@ def _doctor_report(orch: LocalOrchestrator) -> bool:
     task_source_ok = True
     git_ready_ok = True
     for plan in plans:
-        valid, issues, summary = validate_plan_content(plan.read_text(encoding="utf-8"), workspace_root=orch.workspace_root)
+        valid, _issues, summary = validate_plan_content(plan.read_text(encoding="utf-8"), workspace_root=orch.workspace_root)
         if not valid:
             continue
         task_status = str(summary.get("task_source_status", {}).get("status", "unknown"))
@@ -112,9 +121,15 @@ def _doctor_report(orch: LocalOrchestrator) -> bool:
     recoverable = orch.list_recoverable_runs()
     table.add_row("recoverable-runs", "OK", str(len(recoverable)))
 
-    stale_worktrees = orch.workspace_root / ".ralphite" / "worktrees"
-    stale_count = len(list(stale_worktrees.rglob("*"))) if stale_worktrees.exists() else 0
-    table.add_row("worktree-cache", "OK" if stale_count < 200 else "WARN", f"{stale_count} entries under .ralphite/worktrees")
+    stale = orch.stale_artifact_report(max_age_hours=24)
+    stale_worktrees = stale.get("stale_worktrees", [])
+    stale_branches = stale.get("stale_branches", [])
+    stale_ok = len(stale_worktrees) == 0 and len(stale_branches) == 0
+    table.add_row(
+        "stale-artifacts",
+        "OK" if stale_ok else "WARN",
+        f"worktrees={len(stale_worktrees)} branches={len(stale_branches)}",
+    )
 
     console.print(table)
 
@@ -125,6 +140,14 @@ def _doctor_report(orch: LocalOrchestrator) -> bool:
                 console.print(f"  - {issue.get('code')}: {issue.get('message')} ({issue.get('path')})")
             if summary:
                 console.print(f"  Summary: {summary}")
+
+    if stale_worktrees or stale_branches:
+        console.print("\n[bold yellow]Stale managed artifacts[/bold yellow]")
+        for item in stale_worktrees[:10]:
+            console.print(f"  - worktree run={item.get('run_id')} age={item.get('age_hours')}h path={item.get('path')}")
+        for item in stale_branches[:10]:
+            console.print(f"  - branch run={item.get('run_id')} branch={item.get('branch')}")
+        console.print("  Action: run cleanup by resolving or resuming stale runs, then re-check doctor.")
 
     return ok
 
@@ -144,6 +167,11 @@ def _print_run_stream(orch: LocalOrchestrator, run_id: str) -> None:
         console.print("\nArtifacts:")
         for artifact in run.artifacts:
             console.print(f"- {artifact['id']}: {artifact['path']}")
+
+
+def _emit_recover_result(json_mode: bool, payload: dict[str, object]) -> None:
+    if json_mode:
+        console.print(json.dumps(payload, indent=2, sort_keys=True))
 
 
 @app.command()
@@ -248,36 +276,145 @@ def recover(
     run_id: Annotated[str | None, typer.Option(help="Run id to recover")] = None,
     mode: Annotated[str, typer.Option(help="Recovery mode: manual | agent_best_effort | abort_phase")] = "manual",
     prompt: Annotated[str | None, typer.Option(help="Prompt used by agent_best_effort mode")] = None,
+    preflight_only: Annotated[bool, typer.Option("--preflight-only", help="Validate recovery readiness only")] = False,
+    resume: Annotated[bool, typer.Option("--resume/--no-resume", help="Resume immediately after setting mode")] = True,
+    json_mode: Annotated[bool, typer.Option("--json", help="Emit machine-readable output")]=False,
     no_tui: Annotated[bool, typer.Option("--no-tui", help="Print stream after recover")] = False,
 ) -> None:
-    """Recover and resume a checkpointed run with explicit recovery mode selection."""
+    """Recover and resume a checkpointed run with explicit recovery mode and automation semantics."""
     orch = _orchestrator(workspace)
+
+    allowed_modes = {"manual", "agent_best_effort", "abort_phase"}
+    if mode not in allowed_modes:
+        payload = {
+            "ok": False,
+            "run_id": run_id,
+            "exit_code": RECOVER_EXIT_INVALID_INPUT,
+            "reason": f"invalid mode '{mode}'",
+        }
+        _emit_recover_result(json_mode, payload)
+        raise typer.Exit(code=RECOVER_EXIT_INVALID_INPUT)
+
     target = run_id
     if target is None:
         recoverable = orch.list_recoverable_runs()
         if not recoverable:
+            payload = {
+                "ok": False,
+                "run_id": None,
+                "exit_code": RECOVER_EXIT_NO_RECOVERABLE,
+                "reason": "no recoverable runs found",
+            }
+            _emit_recover_result(json_mode, payload)
             console.print("No recoverable runs found.")
-            raise typer.Exit(code=1)
+            raise typer.Exit(code=RECOVER_EXIT_NO_RECOVERABLE)
         target = recoverable[-1]
 
     if not orch.recover_run(target):
+        payload = {
+            "ok": False,
+            "run_id": target,
+            "exit_code": RECOVER_EXIT_UNRECOVERABLE,
+            "reason": "run not found or unrecoverable",
+        }
+        _emit_recover_result(json_mode, payload)
         console.print(f"Unable to recover run {target}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=RECOVER_EXIT_UNRECOVERABLE)
 
     if not orch.set_recovery_mode(target, mode, prompt=prompt):
+        payload = {
+            "ok": False,
+            "run_id": target,
+            "exit_code": RECOVER_EXIT_INVALID_INPUT,
+            "reason": "unable to set recovery mode",
+        }
+        _emit_recover_result(json_mode, payload)
         console.print(f"Unable to set recovery mode '{mode}' for {target}")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=RECOVER_EXIT_INVALID_INPUT)
 
-    if mode != "abort_phase" and not orch.resume_from_checkpoint(target):
-        console.print(f"Recovered {target}, but resume failed.")
-        if no_tui:
-            raise typer.Exit(code=1)
+    preflight = orch.recovery_preflight(target)
+    if preflight_only:
+        exit_code = RECOVER_EXIT_SUCCESS if preflight.get("ok") else RECOVER_EXIT_PREFLIGHT_FAILED
+        payload = {
+            "ok": bool(preflight.get("ok")),
+            "run_id": target,
+            "exit_code": exit_code,
+            "preflight": preflight,
+        }
+        _emit_recover_result(json_mode, payload)
+        if not json_mode:
+            console.print(f"Preflight {'passed' if preflight.get('ok') else 'failed'} for run {target}")
+        raise typer.Exit(code=exit_code)
 
-    console.print(f"Recovery mode set for run: [bold]{target}[/bold]")
+    if not preflight.get("ok"):
+        payload = {
+            "ok": False,
+            "run_id": target,
+            "exit_code": RECOVER_EXIT_PREFLIGHT_FAILED,
+            "preflight": preflight,
+        }
+        _emit_recover_result(json_mode, payload)
+        if not json_mode:
+            console.print(f"Recovery preflight failed for {target}")
+        raise typer.Exit(code=RECOVER_EXIT_PREFLIGHT_FAILED)
+
+    if not resume:
+        payload = {
+            "ok": True,
+            "run_id": target,
+            "exit_code": RECOVER_EXIT_PENDING,
+            "reason": "recovery mode set; resume deferred by --no-resume",
+            "preflight": preflight,
+        }
+        _emit_recover_result(json_mode, payload)
+        if not json_mode:
+            console.print(f"Recovery mode set for run: [bold]{target}[/bold] (pending resume)")
+        raise typer.Exit(code=RECOVER_EXIT_PENDING)
+
+    resumed = orch.resume_from_checkpoint(target)
+    if not resumed:
+        latest_preflight = orch.recovery_preflight(target)
+        payload = {
+            "ok": False,
+            "run_id": target,
+            "exit_code": RECOVER_EXIT_PENDING,
+            "reason": "resume rejected",
+            "preflight": latest_preflight,
+        }
+        _emit_recover_result(json_mode, payload)
+        if not json_mode:
+            console.print(f"Recovered {target}, but resume failed.")
+        raise typer.Exit(code=RECOVER_EXIT_PENDING)
+
     if no_tui:
-        _print_run_stream(orch, target)
-    else:
-        AppShell(orchestrator=orch, run_id=target, initial_screen="recovery").run()
+        if json_mode:
+            for event in orch.stream_events(target):
+                if event.get("event") == "RUN_DONE":
+                    break
+            orch.wait_for_run(target, timeout=2.0)
+        else:
+            _print_run_stream(orch, target)
+        run = orch.get_run(target)
+        status = run.status if run else "unknown"
+        if status == "succeeded":
+            exit_code = RECOVER_EXIT_SUCCESS
+        elif status in {"paused", "paused_recovery_required"}:
+            exit_code = RECOVER_EXIT_PENDING
+        elif status in {"failed", "cancelled"}:
+            exit_code = RECOVER_EXIT_TERMINAL_FAILURE
+        else:
+            exit_code = RECOVER_EXIT_INTERNAL_ERROR
+        payload = {
+            "ok": exit_code == RECOVER_EXIT_SUCCESS,
+            "run_id": target,
+            "exit_code": exit_code,
+            "status": status,
+        }
+        _emit_recover_result(json_mode, payload)
+        raise typer.Exit(code=exit_code)
+
+    console.print(f"Recovery mode set and resumed for run: [bold]{target}[/bold]")
+    AppShell(orchestrator=orch, run_id=target, initial_screen="recovery").run()
 
 
 @app.command()
@@ -350,10 +487,61 @@ def migrate(
     console.print(f"Migration compatibility check completed: {total} plan(s)")
 
 
+def _run_release_gate(orch: LocalOrchestrator) -> bool:
+    suites = [
+        [
+            "uv",
+            "run",
+            "--with",
+            "pytest",
+            "pytest",
+            "packages/engine/tests/test_task_parser.py",
+            "packages/engine/tests/test_structure_compiler.py",
+            "-q",
+        ],
+        [
+            "uv",
+            "run",
+            "--with",
+            "pytest",
+            "pytest",
+            "packages/engine/tests/test_git_worktree_integration.py",
+            "packages/engine/tests/test_orchestrator.py",
+            "packages/engine/tests/test_recovery.py",
+            "-q",
+        ],
+        [
+            "uv",
+            "run",
+            "--with",
+            "pytest",
+            "pytest",
+            "apps/tui/tests",
+            "-q",
+        ],
+        [
+            "uv",
+            "run",
+            "--with",
+            "pytest",
+            "pytest",
+            "packages/engine/tests/test_e2e_recovery.py",
+            "-q",
+        ],
+    ]
+    for command in suites:
+        console.print(f"Running release gate suite: {' '.join(command)}")
+        result = subprocess.run(command, cwd=orch.workspace_root, check=False)
+        if result.returncode != 0:
+            return False
+    return True
+
+
 @app.command()
 def check(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
     full: Annotated[bool, typer.Option("--full", help="Run full repo test suite")] = False,
+    release_gate: Annotated[bool, typer.Option("--release-gate", help="Run v2 stabilization release gate suites")] = False,
 ) -> None:
     """Run baseline quality gates for local UX reliability."""
     orch = _orchestrator(workspace)
@@ -377,6 +565,10 @@ def check(
         console.print(f"Running: {' '.join(command)}")
         result = subprocess.run(command, cwd=orch.workspace_root, check=False)
         if result.returncode != 0:
+            raise typer.Exit(code=1)
+
+    if release_gate:
+        if not _run_release_gate(orch):
             raise typer.Exit(code=1)
 
     console.print("[green]ralphite check passed[/green]")
