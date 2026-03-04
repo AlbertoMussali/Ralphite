@@ -18,7 +18,7 @@ from ralphite_engine.models import (
 )
 from ralphite_engine.orchestrator import LocalOrchestrator
 from ralphite_engine.presentation import present_event, present_recovery_mode, present_run_status
-from ralphite_engine.templates import make_goal_plan, make_starter_plan, seed_starter_if_missing
+from ralphite_engine.templates import make_goal_plan, make_starter_plan, migrate_v4_to_v5, seed_starter_if_missing
 from ralphite_engine.validation import apply_fix, parse_plan_yaml, suggest_fixes, validate_plan_content
 
 __all__ = [
@@ -39,6 +39,7 @@ __all__ = [
     "load_drafts",
     "make_goal_plan",
     "make_starter_plan",
+    "migrate_v4_to_v5",
     "parse_plan_yaml",
     "present_event",
     "present_recovery_mode",

@@ -1,35 +1,47 @@
 from __future__ import annotations
 
 from ralphite_engine.task_parser import parse_plan_tasks
-from ralphite_schemas.plan_v4 import PlanSpecV4
+from ralphite_schemas.plan_v5 import PlanSpecV5
 
 
-def _plan(tasks: list[dict]) -> PlanSpecV4:
-    return PlanSpecV4.model_validate(
+def _plan(tasks: list[dict]) -> PlanSpecV5:
+    return PlanSpecV5.model_validate(
         {
-            "version": 4,
+            "version": 5,
             "plan_id": "parser",
             "name": "parser",
-            "run": {
-                "pre_orchestrator": {"enabled": False, "agent": "orchestrator_pre_default"},
-                "post_orchestrator": {"enabled": True, "agent": "orchestrator_post_default"},
+            "materials": {
+                "autodiscover": {"enabled": False, "path": ".", "include_globs": []},
+                "includes": [],
+                "uploads": [],
             },
+            "constraints": {"max_parallel": 2},
             "agents": [
                 {"id": "worker_default", "role": "worker", "provider": "openai", "model": "gpt-4.1-mini"},
                 {
-                    "id": "orchestrator_pre_default",
-                    "role": "orchestrator_pre",
-                    "provider": "openai",
-                    "model": "gpt-4.1-mini",
-                },
-                {
-                    "id": "orchestrator_post_default",
-                    "role": "orchestrator_post",
+                    "id": "orchestrator_default",
+                    "role": "orchestrator",
                     "provider": "openai",
                     "model": "gpt-4.1-mini",
                 },
             ],
             "tasks": tasks,
+            "orchestration": {
+                "template": "general_sps",
+                "inference_mode": "mixed",
+                "behaviors": [
+                    {
+                        "id": "merge_default",
+                        "kind": "merge_and_conflict_resolution",
+                        "agent": "orchestrator_default",
+                        "enabled": True,
+                    }
+                ],
+                "branched": {"lanes": ["lane_a", "lane_b"]},
+                "blue_red": {"loop_unit": "per_task"},
+                "custom": {"cells": []},
+            },
+            "outputs": {"required_artifacts": []},
         }
     )
 
@@ -38,7 +50,19 @@ def test_parse_plan_tasks_reads_yaml_tasks() -> None:
     plan = _plan(
         [
             {"id": "t1", "title": "Plan", "completed": False},
-            {"id": "t2", "title": "Build", "completed": False, "parallel_group": 1, "deps": ["t1"]},
+            {
+                "id": "t2",
+                "title": "Build",
+                "completed": False,
+                "parallel_group": 1,
+                "deps": ["t1"],
+                "routing": {"lane": "lane_a", "cell": "par_core", "team_mode": None, "group": None, "tags": ["core"]},
+                "acceptance": {
+                    "commands": ["echo ok"],
+                    "required_artifacts": [{"id": "bundle", "path_glob": "dist/*", "format": "file"}],
+                    "rubric": ["build passes"],
+                },
+            },
             {"id": "t3", "title": "Ship", "completed": True, "deps": ["t2"]},
         ]
     )
@@ -49,6 +73,10 @@ def test_parse_plan_tasks_reads_yaml_tasks() -> None:
     assert tasks[0].id == "t1"
     assert tasks[1].parallel_group == 1
     assert tasks[1].depends_on == ["t1"]
+    assert tasks[1].routing_cell == "par_core"
+    assert tasks[1].routing_lane == "lane_a"
+    assert tasks[1].acceptance_commands == ["echo ok"]
+    assert tasks[1].acceptance_required_artifacts[0]["id"] == "bundle"
     assert tasks[2].completed is True
 
 

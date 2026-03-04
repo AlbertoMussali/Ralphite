@@ -12,14 +12,16 @@ from pydantic import ValidationError as PydanticValidationError
 from ralphite_engine.models import ValidationFix
 from ralphite_engine.structure_compiler import RuntimeExecutionPlan, compile_execution_structure
 from ralphite_engine.task_parser import ParsedTask, parse_plan_tasks
-from ralphite_schemas.plan_v4 import PlanSpecV4
+from ralphite_schemas.plan_v5 import PlanSpecV5
 from ralphite_schemas.validation import ValidationError, compile_plan, validate_plan
 
 
-UNSUPPORTED_VERSION_MESSAGE = "Unsupported plan version. Use version 4 unified YAML (tasks + run + agents)."
+UNSUPPORTED_VERSION_MESSAGE = (
+    "Unsupported plan version. Use version 5 unified YAML (tasks + orchestration + agents)."
+)
 
 
-PlanDocument = PlanSpecV4
+PlanDocument = PlanSpecV5
 
 
 def parse_plan_yaml(content: str) -> PlanDocument:
@@ -27,12 +29,12 @@ def parse_plan_yaml(content: str) -> PlanDocument:
     if not isinstance(data, dict):
         raise ValueError("plan content must be a YAML object")
     version = int(data.get("version", 1))
-    if version != 4:
+    if version != 5:
         raise ValueError(UNSUPPORTED_VERSION_MESSAGE)
-    return PlanSpecV4.model_validate(data)
+    return PlanSpecV5.model_validate(data)
 
 
-def _collect_profile_tools(plan: PlanSpecV4) -> tuple[list[str], list[str]]:
+def _collect_profile_tools(plan: PlanSpecV5) -> tuple[list[str], list[str]]:
     tools = sorted(
         {
             entry
@@ -82,7 +84,7 @@ def _git_recovery_readiness(workspace_root: str | Path | None) -> dict[str, Any]
 
 def _append_task_diagnostics(
     *,
-    plan: PlanSpecV4,
+    plan: PlanSpecV5,
     issues: list[dict[str, Any]],
 ) -> tuple[list[str], RuntimeExecutionPlan | None, list[ParsedTask]]:
     tasks, parse_issues = parse_plan_tasks(plan)
@@ -103,7 +105,7 @@ def _append_task_diagnostics(
             {
                 "code": "run.invalid",
                 "message": issue,
-                "path": "tasks",
+                "path": "orchestration",
                 "level": "error",
             }
         )
@@ -128,7 +130,7 @@ def validate_plan_content(
         )
 
     version = int(raw.get("version", 1))
-    if version != 4:
+    if version != 5:
         issues = [
             {
                 "code": "version.unsupported",
@@ -137,10 +139,10 @@ def validate_plan_content(
                 "level": "error",
             }
         ]
-        return False, issues, {"version": version, "supported_versions": [4]}
+        return False, issues, {"version": version, "supported_versions": [5]}
 
     try:
-        plan = PlanSpecV4.model_validate(raw)
+        plan = PlanSpecV5.model_validate(raw)
     except PydanticValidationError as exc:
         issues = [
             {
@@ -167,37 +169,18 @@ def validate_plan_content(
 
     pending_tasks = [task for task in tasks if not task.completed]
     block_counts = {
-        "sequential": len([task for task in pending_tasks if int(task.parallel_group or 0) <= 0]),
-        "parallel": len([task for task in pending_tasks if int(task.parallel_group or 0) > 0]),
+        "sequential": 0,
+        "parallel": 0,
+        "orchestrator": 0,
+        "other": 0,
     }
-
-    group_issues: list[str] = []
-    seen: set[int] = set()
-    closed: set[int] = set()
-    last_group = 0
-    for task in pending_tasks:
-        grp = int(task.parallel_group or 0)
-        if grp > 0:
-            if grp < last_group:
-                group_issues.append(f"parallel_group {grp} appears after {last_group}; groups must be non-decreasing")
-            if grp in closed:
-                group_issues.append(f"parallel_group {grp} appears in non-contiguous blocks")
-            seen.add(grp)
-            last_group = grp
-        else:
-            if last_group > 0:
-                closed.add(last_group)
-
-    for issue in group_issues:
-        issues.append(
-            {
-                "code": "tasks.parallel_group_invalid",
-                "message": issue,
-                "path": "tasks",
-                "level": "error",
-            }
-        )
-
+    if runtime is not None:
+        for block in runtime.blocks:
+            kind = str(block.kind or "other")
+            if kind in block_counts:
+                block_counts[kind] += 1
+            else:
+                block_counts["other"] += 1
     tools, mcps = _collect_profile_tools(plan)
     runtime_nodes = len(runtime.nodes) if runtime is not None else 0
     runtime_edges = (
@@ -206,10 +189,52 @@ def validate_plan_content(
         else sum(len(parents) for parents in compiled.incoming.values())
     )
 
+    resolved_execution = {
+        "template": plan.orchestration.template.value,
+        "resolved_cells": [],
+        "resolved_nodes": [],
+        "task_assignment": {},
+        "compile_warnings": [],
+    }
+    if runtime is not None:
+        resolved_execution = {
+            "template": plan.orchestration.template.value,
+            "resolved_cells": [
+                {
+                    "id": cell.id,
+                    "kind": cell.kind,
+                    "lane": cell.lane,
+                    "team": cell.team,
+                    "behavior_id": cell.behavior_id,
+                    "task_ids": list(cell.task_ids),
+                    "node_ids": list(cell.node_ids),
+                }
+                for cell in runtime.resolved_cells
+            ],
+            "resolved_nodes": [
+                {
+                    "id": node.id,
+                    "cell_id": node.cell_id,
+                    "role": node.role,
+                    "lane": node.lane,
+                    "team": node.team,
+                    "block_index": node.block_index,
+                    "depends_on": list(node.depends_on),
+                    "source_task_id": node.source_task_id,
+                    "behavior_id": node.behavior_id,
+                    "behavior_kind": node.behavior_kind,
+                }
+                for node in runtime.nodes
+            ],
+            "task_assignment": dict(runtime.task_assignment),
+            "compile_warnings": list(runtime.compile_warnings),
+        }
+
     summary = {
-        "version": 4,
+        "version": 5,
         "plan_id": plan.plan_id,
         "name": plan.name,
+        "template": plan.orchestration.template.value,
         "nodes": runtime_nodes,
         "edges": runtime_edges,
         "node_levels": runtime.node_levels if runtime is not None else compiled.node_levels,
@@ -224,14 +249,10 @@ def validate_plan_content(
             "completed": len([task for task in tasks if task.completed]),
         },
         "block_counts": block_counts,
-        "orchestrator_defaults": {
-            "pre_default_enabled": False,
-            "post_default_enabled": True,
-        },
         "tasks_status": {"status": "ok" if not parse_issues else "issues"},
         "task_parse_issues": parse_issues,
-        "task_group_issues": group_issues,
         "recovery_readiness": _git_recovery_readiness(workspace_root),
+        "resolved_execution": resolved_execution,
     }
 
     valid = len([issue for issue in issues if issue.get("level", "error") == "error"]) == 0
@@ -246,7 +267,8 @@ def suggest_fixes(plan_data: dict[str, Any], issues: list[dict[str, Any]]) -> li
 
     version = int(plan_data.get("version", 0) or 0) if isinstance(plan_data, dict) else 0
     worker_exists = any(isinstance(agent, dict) and str(agent.get("role")) == "worker" for agent in agents)
-    if version == 4 and not worker_exists:
+    orchestrator_exists = any(isinstance(agent, dict) and str(agent.get("role")) == "orchestrator" for agent in agents)
+    if version == 5 and not worker_exists:
         fixes.append(
             ValidationFix(
                 code="fix.add_default_worker",
@@ -256,31 +278,20 @@ def suggest_fixes(plan_data: dict[str, Any], issues: list[dict[str, Any]]) -> li
                 patch={"action": "add_default_worker"},
             )
         )
+    if version == 5 and not orchestrator_exists:
+        fixes.append(
+            ValidationFix(
+                code="fix.add_default_orchestrator",
+                title="Add default orchestrator agent",
+                description="Adds a basic orchestrator profile for orchestration cells.",
+                path="agents",
+                patch={"action": "add_default_orchestrator"},
+            )
+        )
 
     for issue in issues:
         code = str(issue.get("code") or "")
         path = str(issue.get("path") or "")
-
-        if code in {"run.pre_orchestrator.unknown_agent", "run.post_orchestrator.unknown_agent"}:
-            role = "orchestrator_pre" if "pre_orchestrator" in path else "orchestrator_post"
-            replacement = next(
-                (
-                    str(agent.get("id"))
-                    for agent in agents
-                    if isinstance(agent, dict) and str(agent.get("role")) == role and agent.get("id")
-                ),
-                None,
-            )
-            if replacement:
-                fixes.append(
-                    ValidationFix(
-                        code="fix.rewire_orchestrator_agent",
-                        title="Repair orchestrator agent reference",
-                        description=f"Points {path} to an existing {role} agent profile.",
-                        path=path,
-                        patch={"action": "set_value", "path": path, "value": replacement},
-                    )
-                )
 
         if code in {"task.dep_forward", "task.dep_missing"} and path.startswith("tasks[") and ".deps" in path:
             match = re.match(r"tasks\[(\d+)\]\.deps", path)
@@ -313,41 +324,6 @@ def suggest_fixes(plan_data: dict[str, Any], issues: list[dict[str, Any]]) -> li
                         patch={"action": "set_value", "path": path, "value": cleaned},
                     )
                 )
-
-        if code in {
-            "tasks.parallel_group_invalid",
-            "tasks.parallel_group.non_monotonic",
-            "tasks.parallel_group.non_contiguous",
-        }:
-            normalized: list[int] = []
-            current = 0
-            seen: dict[int, int] = {}
-            for row in tasks:
-                if not isinstance(row, dict):
-                    normalized.append(0)
-                    continue
-                raw = int(row.get("parallel_group", 0) or 0)
-                if raw <= 0:
-                    current = 0
-                    normalized.append(0)
-                    continue
-                if raw not in seen:
-                    seen[raw] = max(1, len(seen) + 1)
-                mapped = seen[raw]
-                if current and mapped < current:
-                    mapped = current
-                current = mapped
-                normalized.append(mapped)
-            fixes.append(
-                ValidationFix(
-                    code="fix.normalize_parallel_groups",
-                    title="Normalize parallel group ordering",
-                    description="Reassigns parallel groups to contiguous, non-decreasing values.",
-                    path="tasks",
-                    patch={"action": "normalize_parallel_groups", "values": normalized},
-                )
-            )
-            break
 
         if code == "task.unknown_agent" and path.startswith("tasks[") and ".agent" in path and agent_ids:
             fixes.append(
@@ -430,20 +406,25 @@ def apply_fix(plan_data: dict[str, Any], fix: ValidationFix) -> dict[str, Any]:
         )
         return updated
 
+    if action == "add_default_orchestrator":
+        agents = updated.get("agents")
+        if not isinstance(agents, list):
+            agents = []
+            updated["agents"] = agents
+        agents.append(
+            {
+                "id": "orchestrator_default",
+                "role": "orchestrator",
+                "provider": "openai",
+                "model": "gpt-4.1-mini",
+                "tools_allow": ["tool:*"],
+            }
+        )
+        return updated
+
     if action == "set_value":
         path = str(fix.patch.get("path") or fix.path)
         _set_by_path(updated, path, fix.patch.get("value"))
-        return updated
-
-    if action == "normalize_parallel_groups":
-        values = fix.patch.get("values")
-        tasks = updated.get("tasks")
-        if isinstance(values, list) and isinstance(tasks, list):
-            for index, task in enumerate(tasks):
-                if not isinstance(task, dict):
-                    continue
-                if index < len(values):
-                    task["parallel_group"] = int(values[index] or 0)
         return updated
 
     return updated

@@ -4,10 +4,12 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import glob
 import json
 import os
 from pathlib import Path
 from queue import Empty, Queue
+import subprocess
 import threading
 import time
 from typing import Any, Generator
@@ -25,14 +27,14 @@ from ralphite_engine.task_writer import mark_tasks_completed
 from ralphite_engine.taxonomy import classify_failure
 from ralphite_engine.templates import make_goal_plan, seed_starter_if_missing, versioned_filename
 from ralphite_engine.validation import parse_plan_yaml, validate_plan_content
-from ralphite_schemas.plan_v4 import AgentSpec, PlanSpecV4
+from ralphite_schemas.plan_v5 import AgentSpec, BehaviorKind, PlanSpecV5
 from ralphite_schemas.validation import compile_plan
 
 
 @dataclass
 class RuntimeHandle:
     run: RunViewState
-    plan: PlanSpecV4
+    plan: PlanSpecV5
     runtime: RuntimeExecutionPlan
     profile_map: dict[str, AgentSpec]
     permission_snapshot: dict[str, list[str]]
@@ -116,7 +118,7 @@ class LocalOrchestrator:
         if not plans:
             raise FileNotFoundError("no plans found in .ralphite/plans")
 
-        # Prefer the newest parseable v4 plan.
+        # Prefer the newest parseable v5 plan.
         for candidate in plans:
             try:
                 parse_plan_yaml(candidate.read_text(encoding="utf-8"))
@@ -140,20 +142,31 @@ class LocalOrchestrator:
         role_map: dict[str, str] = {}
         phase_nodes: dict[str, list[str]] = defaultdict(list)
         parallel_group_map: dict[str, int] = {}
+        cell_map: dict[str, str] = {}
+        team_map: dict[str, str] = {}
+        behavior_map: dict[str, str] = {}
 
         for node in runtime.nodes:
             lane_map[node.id] = node.lane
             phase_map[node.id] = node.phase
             role_map[node.id] = node.role
             phase_nodes[node.phase].append(node.id)
+            cell_map[node.id] = node.cell_id
+            if node.team:
+                team_map[node.id] = node.team
+            if node.behavior_kind:
+                behavior_map[node.id] = node.behavior_kind
             if node.parallel_group is not None:
                 parallel_group_map[node.id] = int(node.parallel_group)
 
         return {
-            "plan_version": 4,
+            "plan_version": 5,
             "lane_map": lane_map,
             "phase_map": phase_map,
             "role_map": role_map,
+            "cell_map": cell_map,
+            "team_map": team_map,
+            "behavior_map": behavior_map,
             "phase_nodes": dict(phase_nodes),
             "parallel_limit": int(runtime.parallel_limit),
             "parallel_group_map": parallel_group_map,
@@ -161,12 +174,48 @@ class LocalOrchestrator:
                 {
                     "index": block.index,
                     "kind": block.kind,
+                    "cell_id": block.cell_id,
+                    "lane": block.lane,
+                    "team": block.team,
+                    "behavior_id": block.behavior_id,
                     "parallel_group": block.parallel_group,
                     "node_ids": list(block.node_ids),
                     "task_ids": list(block.task_ids),
                 }
                 for block in runtime.blocks
             ],
+            "resolved_execution": {
+                "template": runtime.resolved_cells[0].template if runtime.resolved_cells else "",
+                "resolved_cells": [
+                    {
+                        "id": cell.id,
+                        "kind": cell.kind,
+                        "lane": cell.lane,
+                        "team": cell.team,
+                        "behavior_id": cell.behavior_id,
+                        "task_ids": list(cell.task_ids),
+                        "node_ids": list(cell.node_ids),
+                    }
+                    for cell in runtime.resolved_cells
+                ],
+                "resolved_nodes": [
+                    {
+                        "id": node.id,
+                        "cell_id": node.cell_id,
+                        "role": node.role,
+                        "lane": node.lane,
+                        "team": node.team,
+                        "block_index": node.block_index,
+                        "depends_on": list(node.depends_on),
+                        "source_task_id": node.source_task_id,
+                        "behavior_id": node.behavior_id,
+                        "behavior_kind": node.behavior_kind,
+                    }
+                    for node in runtime.nodes
+                ],
+                "task_assignment": dict(runtime.task_assignment),
+                "compile_warnings": list(runtime.compile_warnings),
+            },
             "task_order_map": {node.id: node.block_index for node in runtime.nodes},
             "task_parse_issues": list(runtime.task_parse_issues),
             "recovery": {
@@ -178,7 +227,7 @@ class LocalOrchestrator:
             },
         }
 
-    def _materialize_runtime_plan(self, plan: PlanSpecV4) -> tuple[RuntimeExecutionPlan, dict[str, Any]]:
+    def _materialize_runtime_plan(self, plan: PlanSpecV5) -> tuple[RuntimeExecutionPlan, dict[str, Any]]:
         tasks, parse_issues = parse_plan_tasks(plan)
         runtime, compile_issues = compile_execution_structure(plan, tasks, task_parse_issues=parse_issues)
         if runtime is None or compile_issues:
@@ -189,7 +238,7 @@ class LocalOrchestrator:
             raise ValueError(f"validation_error: {json.dumps(details)}")
         return runtime, self._runtime_metadata(runtime)
 
-    def _writeback_target(self, source: Path, plan: PlanSpecV4) -> tuple[str, Path | None]:
+    def _writeback_target(self, source: Path, plan: PlanSpecV5) -> tuple[str, Path | None]:
         mode = str(self.config.task_writeback_mode or "revision_only")
         if mode == "disabled":
             return mode, None
@@ -405,15 +454,19 @@ class LocalOrchestrator:
         compile_plan(plan_document)
         runtime, runtime_meta = self._materialize_runtime_plan(plan_document)
 
-        run.metadata.setdefault("plan_version", runtime_meta.get("plan_version", 4))
+        run.metadata.setdefault("plan_version", runtime_meta.get("plan_version", 5))
 
         run.metadata.setdefault("parallel_limit", runtime_meta.get("parallel_limit", 1))
         run.metadata.setdefault("lane_map", runtime_meta.get("lane_map", {}))
         run.metadata.setdefault("phase_map", runtime_meta.get("phase_map", {}))
         run.metadata.setdefault("role_map", runtime_meta.get("role_map", {}))
+        run.metadata.setdefault("cell_map", runtime_meta.get("cell_map", {}))
+        run.metadata.setdefault("team_map", runtime_meta.get("team_map", {}))
+        run.metadata.setdefault("behavior_map", runtime_meta.get("behavior_map", {}))
         run.metadata.setdefault("phase_nodes", runtime_meta.get("phase_nodes", {}))
         run.metadata.setdefault("parallel_group_map", runtime_meta.get("parallel_group_map", {}))
         run.metadata.setdefault("task_blocks", runtime_meta.get("task_blocks", []))
+        run.metadata.setdefault("resolved_execution", runtime_meta.get("resolved_execution", {}))
         run.metadata.setdefault("task_order_map", runtime_meta.get("task_order_map", {}))
         run.metadata.setdefault("task_parse_issues", runtime_meta.get("task_parse_issues", []))
         run.metadata.setdefault(
@@ -577,7 +630,7 @@ class LocalOrchestrator:
                     level="error",
                     message="recovery aborted by user",
                 )
-                self._finalize_terminal_run(handle)
+                self._finalize_terminal_run(handle, GitWorktreeManager(self.workspace_root, run_id))
                 return True
             if selected not in {"manual", "agent_best_effort"}:
                 return False
@@ -795,25 +848,16 @@ class LocalOrchestrator:
                 task_id=node.id,
                 meta={"lane": lane, "parallel_group": node.parallel_group},
             )
-        elif node.role == "orchestrator_pre":
+        elif node.role == "orchestrator":
             self._emit(
                 handle,
                 stage="orchestrator",
-                event="ORCH_PRE_STARTED",
+                event="ORCH_STARTED",
                 level="info",
-                message="pre-orchestrator started",
+                message="orchestrator cell started",
                 group=phase,
                 task_id=node.id,
-            )
-        elif node.role == "orchestrator_post":
-            self._emit(
-                handle,
-                stage="orchestrator",
-                event="ORCH_POST_STARTED",
-                level="info",
-                message="post-orchestrator started",
-                group=phase,
-                task_id=node.id,
+                meta={"cell_id": node.cell_id, "behavior_kind": node.behavior_kind, "behavior_id": node.behavior_id},
             )
 
     def _emit_node_completed(self, handle: RuntimeHandle, node: RuntimeNodeSpec, success: bool) -> None:
@@ -831,26 +875,20 @@ class LocalOrchestrator:
                 task_id=node.id,
                 meta={"lane": node.lane, "parallel_group": node.parallel_group},
             )
-        elif node.role == "orchestrator_pre":
+        elif node.role == "orchestrator":
             self._emit(
                 handle,
                 stage="orchestrator",
-                event="ORCH_PRE_DONE",
+                event="ORCH_DONE",
                 level="info" if success else "error",
-                message="pre-orchestrator completed" if success else "pre-orchestrator failed",
+                message="orchestrator cell completed" if success else "orchestrator cell failed",
                 group=phase,
                 task_id=node.id,
-            )
-        elif node.role == "orchestrator_post":
-            self._emit(
-                handle,
-                stage="orchestrator",
-                event="ORCH_POST_DONE",
-                level="info" if success else "error",
-                message="post-orchestrator completed" if success else "post-orchestrator failed",
-                group=phase,
-                task_id=node.id,
-                meta={"commit_strategy": "preserve_worker_commits", "cleanup_done": bool(success)},
+                meta={
+                    "cell_id": node.cell_id,
+                    "behavior_kind": node.behavior_kind,
+                    "behavior_id": node.behavior_id,
+                },
             )
 
         phase_done = set(metadata.get("phase_done", []))
@@ -1067,9 +1105,14 @@ class LocalOrchestrator:
             return []
 
         parallel_limit = max(1, int(handle.runtime.parallel_limit or 1))
-        parallel_ready = [node for node in same_block if node.lane == "parallel"]
+        worker_same_block = [node for node in same_block if node.role == "worker"]
+        parallel_ready = [node for node in worker_same_block if node.lane == "parallel"]
         if parallel_ready:
             return parallel_ready[:parallel_limit]
+
+        # Branched lanes can run concurrently even if each lane segment is sequential.
+        if worker_same_block and len({node.lane for node in worker_same_block}) > 1:
+            return worker_same_block[:parallel_limit]
 
         return [same_block[0]]
 
@@ -1083,6 +1126,148 @@ class LocalOrchestrator:
                 task_ids.append(node.source_task_id)
         return sorted(dict.fromkeys(task_ids))
 
+    def _writeback_tasks(
+        self,
+        *,
+        handle: RuntimeHandle,
+        git_manager: GitWorktreeManager,
+    ) -> dict[str, Any]:
+        task_file = Path(handle.run.plan_path)
+        task_ids = self._successful_task_ids(handle)
+        writeback_mode, writeback_target = self._writeback_target(task_file, handle.plan)
+
+        if writeback_mode == "disabled":
+            return {
+                "task_writeback": {
+                    "ok": True,
+                    "mode": "disabled",
+                    "path": str(task_file),
+                    "updated": 0,
+                    "requested": len(task_ids),
+                    "missing": [],
+                },
+                "task_writeback_commit": {"mode": "disabled", "message": "task write-back disabled by configuration"},
+            }
+
+        task_writeback = mark_tasks_completed(
+            task_file,
+            task_ids,
+            output_path=None if writeback_mode == "in_place" else writeback_target,
+        )
+        task_writeback["mode"] = writeback_mode
+        if not bool(task_writeback.get("ok")):
+            return {"error": {"reason": "task_writeback_failed", "details": task_writeback}}
+
+        task_writeback_commit: dict[str, Any] = {"mode": "noop", "message": "no task updates"}
+        if int(task_writeback.get("updated") or 0) > 0 and writeback_mode == "in_place":
+            committed, commit_meta = git_manager.commit_workspace_changes(
+                "chore(tasks): mark completed for run",
+                paths=[str(task_file)],
+            )
+            if not committed:
+                return {"error": {"reason": "task_writeback_commit_failed", **commit_meta}}
+            task_writeback_commit = commit_meta
+        elif int(task_writeback.get("updated") or 0) > 0 and writeback_mode == "revision_only":
+            task_writeback_commit = {
+                "mode": "revision_only",
+                "message": "wrote completed-task revision without committing",
+                "paths": [str(writeback_target)] if writeback_target else [],
+            }
+
+        return {
+            "task_writeback": task_writeback,
+            "task_writeback_commit": task_writeback_commit,
+        }
+
+    def _resolve_worker_worktree(self, commit_meta: dict[str, Any]) -> Path:
+        raw = commit_meta.get("worktree") if isinstance(commit_meta, dict) else None
+        if isinstance(raw, str) and raw.strip():
+            return Path(raw).expanduser().resolve()
+        return self.workspace_root
+
+    def _evaluate_acceptance(self, node: RuntimeNodeSpec, commit_meta: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+        acceptance = node.acceptance if isinstance(node.acceptance, dict) else {}
+        commands = acceptance.get("commands") if isinstance(acceptance.get("commands"), list) else []
+        required_artifacts = (
+            acceptance.get("required_artifacts")
+            if isinstance(acceptance.get("required_artifacts"), list)
+            else []
+        )
+        rubric = acceptance.get("rubric") if isinstance(acceptance.get("rubric"), list) else []
+        if not commands and not required_artifacts:
+            return True, {"commands": [], "required_artifacts": [], "rubric": rubric}
+
+        worktree = self._resolve_worker_worktree(commit_meta)
+        command_results: list[dict[str, Any]] = []
+        for command in commands:
+            if not isinstance(command, str) or not command.strip():
+                continue
+            run = subprocess.run(
+                command,
+                cwd=worktree,
+                shell=True,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            result = {
+                "command": command,
+                "exit_code": run.returncode,
+                "stdout": run.stdout,
+                "stderr": run.stderr,
+            }
+            command_results.append(result)
+            if run.returncode != 0:
+                return (
+                    False,
+                    {
+                        "reason": "acceptance_command_failed",
+                        "worktree": str(worktree),
+                        "failed_command": command,
+                        "commands": command_results,
+                        "required_artifacts": [],
+                        "rubric": rubric,
+                    },
+                )
+
+        artifact_results: list[dict[str, Any]] = []
+        for item in required_artifacts:
+            if not isinstance(item, dict):
+                continue
+            artifact_id = str(item.get("id") or "artifact")
+            path_glob = str(item.get("path_glob") or "").strip()
+            fmt = str(item.get("format") or "unknown")
+            matches = [str(Path(path).resolve()) for path in glob.glob(str(worktree / path_glob), recursive=True)] if path_glob else []
+            artifact_results.append(
+                {
+                    "id": artifact_id,
+                    "format": fmt,
+                    "path_glob": path_glob,
+                    "matches": matches,
+                }
+            )
+            if not matches:
+                return (
+                    False,
+                    {
+                        "reason": "acceptance_artifact_missing",
+                        "worktree": str(worktree),
+                        "missing_artifact": artifact_id,
+                        "commands": command_results,
+                        "required_artifacts": artifact_results,
+                        "rubric": rubric,
+                    },
+                )
+
+        return (
+            True,
+            {
+                "commands": command_results,
+                "required_artifacts": artifact_results,
+                "rubric": rubric,
+            },
+        )
+
     def _run_node(
         self,
         handle: RuntimeHandle,
@@ -1093,101 +1278,53 @@ class LocalOrchestrator:
         if not profile:
             return "failure", {"reason": "runtime_error", "error": f"unknown agent_id {node.agent_profile_id}"}
 
-        if node.role == "orchestrator_post":
+        if node.role == "orchestrator":
             agent_ok, agent_result = self._execute_agent(node, profile, handle.permission_snapshot)
             if not agent_ok:
                 return "failure", agent_result
 
-            recovery = handle.run.metadata.setdefault("recovery", {})
-            selected_mode = str(recovery.get("selected_mode") or "manual")
-            selected_prompt = recovery.get("prompt")
+            if node.behavior_kind == BehaviorKind.MERGE_AND_CONFLICT_RESOLUTION.value:
+                recovery = handle.run.metadata.setdefault("recovery", {})
+                selected_mode = str(recovery.get("selected_mode") or "manual")
+                selected_prompt = recovery.get("prompt")
 
-            if selected_mode == "agent_best_effort":
-                self._emit(
-                    handle,
-                    stage="orchestrator",
-                    event="RECOVERY_AGENT_STARTED",
-                    level="warn",
-                    message="best-effort recovery agent started",
-                    group=node.phase,
-                    task_id=node.id,
-                )
-
-            status, merge_meta = git_manager.integrate_phase(
-                handle.run.metadata.setdefault("git_state", {}),
-                node.phase,
-                recovery_mode=selected_mode,
-                recovery_prompt=str(selected_prompt) if selected_prompt else None,
-            )
-
-            if selected_mode == "agent_best_effort":
-                self._emit(
-                    handle,
-                    stage="orchestrator",
-                    event="RECOVERY_AGENT_DONE",
-                    level="info" if status == "success" else "error",
-                    message="best-effort recovery agent finished",
-                    group=node.phase,
-                    task_id=node.id,
-                    meta={"status": status},
-                )
-
-            if status == "recovery_required":
-                return "recovery_required", merge_meta
-            if status == "failed":
-                return "failure", {"reason": "runtime_error", **merge_meta}
-
-            task_file = Path(handle.run.plan_path)
-            task_ids = self._successful_task_ids(handle)
-            writeback_mode, writeback_target = self._writeback_target(task_file, handle.plan)
-
-            if writeback_mode == "disabled":
-                task_writeback = {
-                    "ok": True,
-                    "mode": "disabled",
-                    "path": str(task_file),
-                    "updated": 0,
-                    "requested": len(task_ids),
-                    "missing": [],
-                }
-                task_writeback_commit: dict[str, Any] = {
-                    "mode": "disabled",
-                    "message": "task write-back disabled by configuration",
-                }
-            else:
-                task_writeback = mark_tasks_completed(
-                    task_file,
-                    task_ids,
-                    output_path=None if writeback_mode == "in_place" else writeback_target,
-                )
-                task_writeback["mode"] = writeback_mode
-                if not bool(task_writeback.get("ok")):
-                    return "failure", {"reason": "task_writeback_failed", "details": task_writeback}
-
-                task_writeback_commit = {"mode": "noop", "message": "no task updates"}
-                if int(task_writeback.get("updated") or 0) > 0 and writeback_mode == "in_place":
-                    committed, commit_meta = git_manager.commit_workspace_changes(
-                        "chore(tasks): mark completed for run",
-                        paths=[str(task_file)],
+                if selected_mode == "agent_best_effort":
+                    self._emit(
+                        handle,
+                        stage="orchestrator",
+                        event="RECOVERY_AGENT_STARTED",
+                        level="warn",
+                        message="best-effort recovery agent started",
+                        group=node.phase,
+                        task_id=node.id,
                     )
-                    if not committed:
-                        return "failure", {"reason": "task_writeback_commit_failed", **commit_meta}
-                    task_writeback_commit = commit_meta
-                elif int(task_writeback.get("updated") or 0) > 0 and writeback_mode == "revision_only":
-                    task_writeback_commit = {
-                        "mode": "revision_only",
-                        "message": "wrote completed-task revision without committing",
-                        "paths": [str(writeback_target)] if writeback_target else [],
-                    }
 
-            cleanup = git_manager.cleanup_phase(handle.run.metadata.setdefault("git_state", {}), node.phase)
-            return "success", {
-                **agent_result,
-                "integration": merge_meta,
-                "task_writeback": task_writeback,
-                "task_writeback_commit": task_writeback_commit,
-                "cleanup": cleanup,
-            }
+                status, merge_meta = git_manager.integrate_phase(
+                    handle.run.metadata.setdefault("git_state", {}),
+                    node.phase,
+                    recovery_mode=selected_mode,
+                    recovery_prompt=str(selected_prompt) if selected_prompt else None,
+                )
+
+                if selected_mode == "agent_best_effort":
+                    self._emit(
+                        handle,
+                        stage="orchestrator",
+                        event="RECOVERY_AGENT_DONE",
+                        level="info" if status == "success" else "error",
+                        message="best-effort recovery agent finished",
+                        group=node.phase,
+                        task_id=node.id,
+                        meta={"status": status},
+                    )
+
+                if status == "recovery_required":
+                    return "recovery_required", merge_meta
+                if status == "failed":
+                    return "failure", {"reason": "runtime_error", **merge_meta}
+                return "success", {**agent_result, "integration": merge_meta}
+
+            return "success", agent_result
 
         if node.role == "worker":
             git_manager.prepare_phase(handle.run.metadata.setdefault("git_state", {}), node.phase)
@@ -1203,13 +1340,31 @@ class LocalOrchestrator:
             )
             if not commit_ok:
                 return "failure", commit_meta
-            return "success", {**result, "worktree": commit_meta}
+            acceptance_ok, acceptance_result = self._evaluate_acceptance(node, commit_meta)
+            if not acceptance_ok:
+                return "failure", acceptance_result
+            return "success", {**result, "worktree": commit_meta, "acceptance": acceptance_result}
 
         ok, result = self._execute_agent(node, profile, handle.permission_snapshot)
         return ("success", result) if ok else ("failure", result)
 
-    def _finalize_terminal_run(self, handle: RuntimeHandle) -> None:
+    def _finalize_terminal_run(self, handle: RuntimeHandle, git_manager: GitWorktreeManager) -> None:
         run = handle.run
+        if run.status == "succeeded":
+            writeback = self._writeback_tasks(handle=handle, git_manager=git_manager)
+            error = writeback.get("error") if isinstance(writeback, dict) else None
+            if isinstance(error, dict):
+                run.status = "failed"
+                self._emit(
+                    handle,
+                    stage="summary",
+                    event="TASK_WRITEBACK_FAILED",
+                    level="error",
+                    message="task write-back failed",
+                    meta=error,
+                )
+            else:
+                run.metadata["task_writeback"] = writeback
         run.completed_at = datetime.now(timezone.utc).isoformat()
         self._write_artifacts(run)
         self._emit(
@@ -1366,7 +1521,7 @@ class LocalOrchestrator:
                 active_run_ids=self.list_active_run_ids(),
                 max_age_hours=24,
             )
-            self._finalize_terminal_run(handle)
+            self._finalize_terminal_run(handle, git_manager)
         except Exception as exc:  # noqa: BLE001
             run.status = "failed"
             self._emit(
@@ -1377,4 +1532,4 @@ class LocalOrchestrator:
                 message=f"run crashed: {exc}",
                 meta={"error": str(exc)},
             )
-            self._finalize_terminal_run(handle)
+            self._finalize_terminal_run(handle, git_manager)

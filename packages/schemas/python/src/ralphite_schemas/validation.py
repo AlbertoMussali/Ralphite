@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from dataclasses import dataclass
 
-from .plan_v4 import PlanSpecV4
+from .plan_v5 import CustomCellKind, OrchestrationTemplate, PlanSpecV5
 
 
 @dataclass(slots=True)
@@ -16,7 +16,7 @@ class ValidationIssue:
 
 @dataclass(slots=True)
 class CompiledPlan:
-    plan: PlanSpecV4
+    plan: PlanSpecV5
     node_levels: dict[str, int]
     outgoing: dict[str, list[str]]
     incoming: dict[str, list[str]]
@@ -29,11 +29,21 @@ class ValidationError(Exception):
         super().__init__("plan validation failed")
 
 
-def validate_plan(plan: PlanSpecV4) -> list[ValidationIssue]:
+def _task_is_branched_mapped(task_lane: str | None, task_group: str | None, task_cell: str | None) -> bool:
+    if task_lane:
+        return True
+    if task_group and task_group.lower() == "trunk":
+        return True
+    if task_cell:
+        return True
+    return False
+
+
+def validate_plan(plan: PlanSpecV5) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
 
-    if plan.version != 4:
-        issues.append(ValidationIssue("version.invalid", "version must be 4", "version"))
+    if plan.version != 5:
+        issues.append(ValidationIssue("version.invalid", "version must be 5", "version"))
 
     if not plan.tasks:
         issues.append(ValidationIssue("tasks.empty", "tasks must contain at least one item", "tasks"))
@@ -54,34 +64,41 @@ def validate_plan(plan: PlanSpecV4) -> list[ValidationIssue]:
 
     if role_counts.get("worker", 0) == 0:
         issues.append(ValidationIssue("agent.missing_worker", "at least one worker agent is required", "agents"))
+    if role_counts.get("orchestrator", 0) == 0:
+        issues.append(ValidationIssue("agent.missing_orchestrator", "at least one orchestrator agent is required", "agents"))
 
-    if plan.run.pre_orchestrator.enabled and plan.run.pre_orchestrator.agent not in agent_ids:
-        issues.append(
-            ValidationIssue(
-                "run.pre_orchestrator.unknown_agent",
-                f"unknown pre orchestrator agent '{plan.run.pre_orchestrator.agent}'",
-                "run.pre_orchestrator.agent",
+    behavior_ids: set[str] = set()
+    for idx, behavior in enumerate(plan.orchestration.behaviors):
+        path_prefix = f"orchestration.behaviors[{idx}]"
+        if behavior.id in behavior_ids:
+            issues.append(
+                ValidationIssue(
+                    "orchestration.behavior.duplicate_id",
+                    f"duplicate behavior id '{behavior.id}'",
+                    f"{path_prefix}.id",
+                )
             )
-        )
-    if plan.run.post_orchestrator.enabled and plan.run.post_orchestrator.agent not in agent_ids:
-        issues.append(
-            ValidationIssue(
-                "run.post_orchestrator.unknown_agent",
-                f"unknown post orchestrator agent '{plan.run.post_orchestrator.agent}'",
-                "run.post_orchestrator.agent",
+        behavior_ids.add(behavior.id)
+        if behavior.agent and behavior.agent not in agent_ids:
+            issues.append(
+                ValidationIssue(
+                    "orchestration.behavior.unknown_agent",
+                    f"behavior '{behavior.id}' references unknown agent '{behavior.agent}'",
+                    f"{path_prefix}.agent",
+                )
             )
-        )
 
     task_ids: set[str] = set()
-    first_seen_group_index: dict[int, int] = {}
-    last_group: int | None = None
-    closed_groups: set[int] = set()
-
+    position: dict[str, int] = {}
+    pending_task_ids: list[str] = []
     for idx, task in enumerate(plan.tasks):
         path_prefix = f"tasks[{idx}]"
         if task.id in task_ids:
             issues.append(ValidationIssue("task.duplicate_id", f"duplicate task id '{task.id}'", f"{path_prefix}.id"))
         task_ids.add(task.id)
+        position[task.id] = idx
+        if not task.completed:
+            pending_task_ids.append(task.id)
 
         if task.agent and task.agent not in agent_ids:
             issues.append(
@@ -96,38 +113,6 @@ def validate_plan(plan: PlanSpecV4) -> list[ValidationIssue]:
             if dep == task.id:
                 issues.append(ValidationIssue("task.self_dep", f"task '{task.id}' has self dependency", f"{path_prefix}.deps"))
 
-        group = int(task.parallel_group or 0)
-        if group > 0:
-            if last_group is None:
-                last_group = group
-                first_seen_group_index.setdefault(group, idx)
-            else:
-                if group < last_group and group not in closed_groups:
-                    issues.append(
-                        ValidationIssue(
-                            "tasks.parallel_group.non_monotonic",
-                            f"parallel_group {group} appears after group {last_group}; groups must be non-decreasing by first appearance",
-                            f"{path_prefix}.parallel_group",
-                        )
-                    )
-                if group != last_group:
-                    closed_groups.add(last_group)
-                    if group in closed_groups:
-                        issues.append(
-                            ValidationIssue(
-                                "tasks.parallel_group.non_contiguous",
-                                f"parallel_group {group} appears in non-contiguous blocks",
-                                f"{path_prefix}.parallel_group",
-                            )
-                        )
-                    last_group = group
-                    first_seen_group_index.setdefault(group, idx)
-        else:
-            if last_group is not None:
-                closed_groups.add(last_group)
-
-    ordered_ids = [task.id for task in plan.tasks]
-    position = {task_id: idx for idx, task_id in enumerate(ordered_ids)}
     for idx, task in enumerate(plan.tasks):
         for dep in task.deps:
             if dep not in position:
@@ -148,53 +133,123 @@ def validate_plan(plan: PlanSpecV4) -> list[ValidationIssue]:
                     )
                 )
 
+    if plan.orchestration.template == OrchestrationTemplate.BRANCHED:
+        known_lanes = set(plan.orchestration.branched.lanes)
+        if not known_lanes:
+            issues.append(
+                ValidationIssue(
+                    "orchestration.branched.lanes_empty",
+                    "branched template requires at least one lane in orchestration.branched.lanes",
+                    "orchestration.branched.lanes",
+                )
+            )
+        for idx, task in enumerate(plan.tasks):
+            if task.completed:
+                continue
+            lane = (task.routing.lane or "").strip() or None
+            group = (task.routing.group or "").strip() or None
+            cell = (task.routing.cell or "").strip() or None
+            if not _task_is_branched_mapped(lane, group, cell):
+                issues.append(
+                    ValidationIssue(
+                        "tasks.unassigned",
+                        f"task '{task.id}' is not mapped for branched orchestration; set routing.lane, routing.group='trunk', or routing.cell",
+                        f"tasks[{idx}].routing",
+                    )
+                )
+            if lane and lane not in known_lanes:
+                issues.append(
+                    ValidationIssue(
+                        "tasks.routing.unknown_lane",
+                        f"task '{task.id}' references unknown lane '{lane}'",
+                        f"tasks[{idx}].routing.lane",
+                    )
+                )
+
+    if plan.orchestration.template == OrchestrationTemplate.CUSTOM:
+        if not plan.orchestration.custom.cells:
+            issues.append(
+                ValidationIssue(
+                    "orchestration.custom.cells_empty",
+                    "custom template requires orchestration.custom.cells",
+                    "orchestration.custom.cells",
+                )
+            )
+        cell_ids: set[str] = set()
+        for idx, cell in enumerate(plan.orchestration.custom.cells):
+            path_prefix = f"orchestration.custom.cells[{idx}]"
+            if cell.id in cell_ids:
+                issues.append(
+                    ValidationIssue(
+                        "orchestration.custom.duplicate_cell_id",
+                        f"duplicate custom cell id '{cell.id}'",
+                        f"{path_prefix}.id",
+                    )
+                )
+            cell_ids.add(cell.id)
+            if cell.kind == CustomCellKind.ORCHESTRATOR and cell.behavior and cell.behavior not in behavior_ids:
+                issues.append(
+                    ValidationIssue(
+                        "orchestration.custom.unknown_behavior",
+                        f"custom cell '{cell.id}' references unknown behavior '{cell.behavior}'",
+                        f"{path_prefix}.behavior",
+                    )
+                )
+            for dep in cell.depends_on:
+                if dep not in cell_ids:
+                    issues.append(
+                        ValidationIssue(
+                            "orchestration.custom.dep_unknown",
+                            f"custom cell '{cell.id}' depends on unknown or forward cell '{dep}'",
+                            f"{path_prefix}.depends_on",
+                        )
+                    )
+
+    for idx, task in enumerate(plan.tasks):
+        if plan.orchestration.template != OrchestrationTemplate.GENERAL_SPS and not task.completed:
+            # For non-SPS templates, require at least one routing signal unless template-level mapping exists.
+            if not (task.routing.lane or task.routing.cell or task.routing.group):
+                issues.append(
+                    ValidationIssue(
+                        "tasks.routing.missing",
+                        f"task '{task.id}' is missing routing metadata for template '{plan.orchestration.template.value}'",
+                        f"tasks[{idx}].routing",
+                    )
+                )
+
     return issues
 
 
-def _compile_plan(plan: PlanSpecV4) -> CompiledPlan:
+def _compile_plan(plan: PlanSpecV5) -> CompiledPlan:
     incoming: dict[str, list[str]] = defaultdict(list)
     outgoing: dict[str, list[str]] = defaultdict(list)
     groups: dict[str, list[str]] = defaultdict(list)
 
-    def add_node(node_id: str, group: str, depends_on: list[str]) -> None:
-        groups[group].append(node_id)
-        for dep in depends_on:
-            incoming[node_id].append(dep)
-            outgoing[dep].append(node_id)
-        incoming.setdefault(node_id, incoming.get(node_id, []))
-        outgoing.setdefault(node_id, outgoing.get(node_id, []))
-
-    anchor: list[str] = []
-    if plan.run.pre_orchestrator.enabled:
-        pre_id = "phase-1::orchestrator_pre"
-        add_node(pre_id, "phase-1", anchor)
-        anchor = [pre_id]
-
+    task_ids = [task.id for task in plan.tasks if not task.completed]
     for task in plan.tasks:
         if task.completed:
             continue
-        task_node_id = f"phase-1::task::{task.id}"
-        add_node(task_node_id, "phase-1", list(anchor))
-        if int(task.parallel_group or 0) > 0:
-            # Parallel tasks in the same group share the same anchor.
-            pass
-        else:
-            anchor = [task_node_id]
-
-    if plan.run.post_orchestrator.enabled:
-        post_id = "phase-1::orchestrator_post"
-        add_node(post_id, "phase-1", list(anchor))
+        node_id = f"task::{task.id}"
+        group = task.routing.lane or task.routing.group or "phase-1"
+        groups[group].append(node_id)
+        incoming.setdefault(node_id, [])
+        outgoing.setdefault(node_id, [])
+        for dep in task.deps:
+            dep_id = f"task::{dep}"
+            if dep in task_ids:
+                incoming[node_id].append(dep_id)
+                outgoing[dep_id].append(node_id)
 
     indegree = {node_id: len(parents) for node_id, parents in incoming.items()}
-    q = deque([nid for nid, deg in indegree.items() if deg == 0])
+    queue = deque([nid for nid, degree in indegree.items() if degree == 0])
     topo: list[str] = []
-    while q:
-        node_id = q.popleft()
+    while queue:
+        node_id = queue.popleft()
         topo.append(node_id)
         for nxt in outgoing.get(node_id, []):
             indegree[nxt] -= 1
             if indegree[nxt] == 0:
-                q.append(nxt)
+                queue.append(nxt)
 
     if len(topo) != len(indegree):
         raise ValidationError([ValidationIssue("tasks.illegal_cycle", "tasks introduce a cycle", "tasks")])
@@ -216,7 +271,7 @@ def _compile_plan(plan: PlanSpecV4) -> CompiledPlan:
     )
 
 
-def compile_plan(plan: PlanSpecV4) -> CompiledPlan:
+def compile_plan(plan: PlanSpecV5) -> CompiledPlan:
     issues = validate_plan(plan)
     errors = [issue for issue in issues if issue.level == "error"]
     if errors:

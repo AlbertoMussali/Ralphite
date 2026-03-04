@@ -1,6 +1,6 @@
-# Ralphite User Guide (v4 Unified YAML)
+# Ralphite User Guide (v5)
 
-## 1) Install (Placeholder)
+## 1) Install
 
 ```bash
 uv sync --all-packages
@@ -19,7 +19,7 @@ Requirements:
 uv run ralphite init --workspace .
 ```
 
-This creates `.ralphite/` folders and seeds a starter v4 YAML plan.
+This creates `.ralphite/` folders and seeds a starter v5 YAML plan.
 
 Quick onboarding path:
 
@@ -27,82 +27,71 @@ Quick onboarding path:
 uv run ralphite quickstart --workspace . --no-tui --yes --output stream
 ```
 
-## 3) Write a Plan
+## 3) Author a v5 Plan
 
-Create or edit `.ralphite/plans/<name>.yaml` using `version: 4`.
+Create or edit `.ralphite/plans/<name>.yaml` using `version: 5`.
 
-Minimum required top-level sections:
+Required top-level sections:
 
 - `version`
 - `plan_id`
 - `name`
-- `run`
+- `materials`
 - `constraints`
 - `agents`
 - `tasks`
+- `orchestration`
+- `outputs`
 
-Example:
+Task authoring model:
 
-```yaml
-version: 4
-plan_id: calc_cli
-name: Calculator CLI
+1. Define tasks (`id`, `title`, `deps`, `routing`, `acceptance`).
+2. Select an orchestration template (`general_sps`, `branched`, `blue_red`, `custom`) and configure it.
 
-run:
-  pre_orchestrator:
-    enabled: false
-    agent: orchestrator_pre_default
-  post_orchestrator:
-    enabled: true
-    agent: orchestrator_post_default
+## 4) Built-in Orchestration Templates
 
-constraints:
-  max_parallel: 3
-  fail_fast: true
+### `general_sps`
 
-agents:
-  - id: worker_default
-    role: worker
-    provider: openai
-    model: gpt-4.1
-    tools_allow: [tool:*]
-  - id: orchestrator_pre_default
-    role: orchestrator_pre
-    provider: openai
-    model: gpt-4.1-mini
-  - id: orchestrator_post_default
-    role: orchestrator_post
-    provider: openai
-    model: gpt-4.1-mini
+Default built-in flow:
 
-tasks:
-  - id: t1
-    title: Define CLI requirements
-    completed: false
-  - id: t2
-    title: Build parser module
-    completed: false
-    parallel_group: 1
-    deps: [t1]
-```
+- `seq_pre -> orch_merge_1 -> par_core -> orch_merge_2 -> seq_post -> orch_finalize`
 
-## 4) Task Ordering Model
+Inference mode is mixed:
 
-Ordering is fully task-driven:
+- explicit `routing.cell` wins
+- otherwise SPS can infer using task order + `parallel_group`
 
-- list order defines base order
-- `parallel_group > 0` creates parallel blocks for consecutive tasks in the same group
-- no `parallel_group` (or `0`) means sequential
+### `branched`
 
-Validation rules:
+Flow:
 
-- `parallel_group` must be integer `>= 1` when set
-- group ids are non-decreasing by first appearance
-- group ids must be contiguous (no split/rejoin)
-- `deps` can only point to earlier tasks
-- cycle detection is enforced
+- trunk prelude
+- split orchestrator
+- user lanes (`orchestration.branched.lanes`)
+- lane-local orchestrators
+- join orchestrator
 
-## 5) Run in TUI (Primary)
+Routing rules:
+
+- set `routing.lane` for lane work
+- or mark trunk work with `routing.group: trunk`
+- unknown lanes fail validation
+
+### `blue_red`
+
+Per selected task unit:
+
+- `prepare -> blue worker -> handoff -> red worker -> merge/summarize`
+
+Used for implement-then-audit loops.
+
+### `custom`
+
+Use `orchestration.custom.cells` with typed cell kinds (`sequential`, `parallel`, `orchestrator`, `split`, `join`, `team_cycle`).
+
+No aggressive inference.
+
+## 5) Run Setup (TUI)
 
 ```bash
 uv run ralphite tui --workspace .
@@ -110,25 +99,34 @@ uv run ralphite tui --workspace .
 
 Flow:
 
-1. open `Run Setup`
-2. load a plan
-3. review task block preview
-4. edit task rows (`title`, `deps`, `parallel_group`, `agent`, `completed`) as needed
-5. use validation badges (`Title`, `Deps`, `Agent`, `Group`) to locate row-level issues
-6. run `Apply Safe Fixes`, review the diff preview, then `Accept` or `Reject`
-7. toggle pre/post orchestrators and adjust constraints
-8. validate and save a revision
-9. start run
-10. monitor `Phase Timeline` with retention (`200/500/1000`), paging, and event-type/failure filters
-11. use `Recovery` if needed (`Show Worktree`, `Show Commands`)
-12. review `Summary`
+1. Open `Run Setup`.
+2. Load a plan.
+3. Review template/config summary.
+4. Edit task routing fields (`lane`, `cell`, `team_mode`) and task deps/agent/completion.
+5. Use validation badges (`Title`, `Deps`, `Agent`, `Routing`) for row-level issues.
+6. Optionally apply safe fixes and inspect diff preview (`Accept` / `Reject`).
+7. Review **Resolved Run Preview** (cells + expanded node order).
+8. Validate and save revision.
+9. Start run.
 
-## 6) CLI (Automation)
+## 6) CLI
 
 Run:
 
 ```bash
 uv run ralphite run --workspace . --no-tui --output stream
+```
+
+Validate with resolved execution payload:
+
+```bash
+uv run ralphite validate --workspace . --json
+```
+
+Migrate legacy plan:
+
+```bash
+uv run ralphite migrate --workspace . --plan .ralphite/plans/legacy.yaml
 ```
 
 Recovery:
@@ -138,16 +136,9 @@ uv run ralphite recover --workspace . --run-id <RUN_ID> --mode manual --prefligh
 uv run ralphite recover --workspace . --run-id <RUN_ID> --mode agent_best_effort --prompt "resolve conflicts" --resume --no-tui --json
 ```
 
-Validation with fix suggestions:
-
-```bash
-uv run ralphite validate --workspace . --json
-uv run ralphite validate --workspace . --apply-safe-fixes
-```
-
 Machine-readable JSON envelopes (`schema_version: cli-output.v1`) are available for:
 
-- `quickstart`, `validate`, `doctor`, `run`, `recover`, `history`, `replay`, `check`
+- `quickstart`, `validate`, `migrate`, `doctor`, `run`, `recover`, `history`, `replay`, `check`
 - `tui` supports JSON only with `--dry-run`
 
 Recover exit codes:
@@ -161,37 +152,29 @@ Recover exit codes:
 - `15` terminal failed/cancelled
 - `16` internal error
 
-## 7) Completion Write-Back
+## 7) Validation Diagnostics
 
-After successful post-orchestrator integration, Ralphite handles task completion write-back using `[run].task_writeback_mode`:
+`validate --json` includes:
 
-- `revision_only` (default): writes a completed-task revision under `.ralphite/plans` and avoids commit failures on ignored paths
-- `in_place`: updates and commits the active plan path
+- schema/contract issues
+- behavior resolution issues (unknown behavior/agent)
+- routing issues (unmapped tasks for template requirements)
+- `summary.resolved_execution` with resolved cells/nodes/assignment/warnings
+
+## 8) Completion Write-Back
+
+After successful run completion, task completion write-back follows `[run].task_writeback_mode`:
+
+- `revision_only` (default): writes completed-task revision under `.ralphite/plans`
+- `in_place`: updates and commits active plan path
 - `disabled`: skips task completion write-back
-
-When write-back applies, successful worker tasks are marked with:
-
-- `completed: true`
-
-Write-back commit message:
-
-- `chore(tasks): mark completed for run`
-
-## 8) Checks
-
-```bash
-uv run ralphite doctor --workspace . --output table --fix-suggestions
-uv run ralphite check --workspace . --full
-uv run ralphite check --workspace . --release-gate
-```
-
-`--release-gate` is the stabilization gate for parser/compiler, orchestrator integration, TUI tests, and e2e recovery.
 
 ## 9) Troubleshooting
 
 Unsupported plan version:
 
-- use `version: 4`
+- runtime accepts only `version: 5`
+- convert with `ralphite migrate`
 
 Recovery blocked:
 
@@ -199,8 +182,9 @@ Recovery blocked:
 
 Validation failures:
 
-- run `doctor` or use the Run Setup validation panel.
+- inspect `validate --json` issues and resolved execution block
+- use Run Setup badges and safe-fix preview
 
 ## 10) User-Centered Playbook
 
-- See `docs/USER_CENTERED_PLAYBOOK.md` for canonical user flows, automation examples, and troubleshooting mapped to status language.
+- See `docs/USER_CENTERED_PLAYBOOK.md` for canonical user flows, automation examples, and troubleshooting language.

@@ -38,7 +38,7 @@ class RunSetupScreen(Vertical):
       margin-bottom: 1;
     }
     #setup-run {
-      height: 6;
+      height: 7;
       margin-bottom: 1;
     }
     #setup-tasks {
@@ -89,12 +89,11 @@ class RunSetupScreen(Vertical):
         return self.app  # type: ignore[return-value]
 
     def compose(self) -> ComposeResult:
-        yield Static("Run Setup (Unified YAML v4)", id="setup-status")
+        yield Static("Run Setup (Unified YAML v5)", id="setup-status")
         with Horizontal(id="setup-controls"):
             yield Button("Refresh", id="refresh")
             yield Button("Load Selected", id="load-selected", variant="primary")
-            yield Button("Toggle Pre", id="toggle-pre")
-            yield Button("Toggle Post", id="toggle-post")
+            yield Button("Cycle Template", id="cycle-template")
             yield Button("MaxParallel -", id="max-parallel-dec")
             yield Button("MaxParallel +", id="max-parallel-inc")
             yield Button("Validate", id="validate")
@@ -105,7 +104,7 @@ class RunSetupScreen(Vertical):
             yield Button("Start", id="start-selected", variant="success")
 
         plans = DataTable(id="setup-plans")
-        plans.add_columns("Plan", "Valid", "Tasks", "Pending", "Parallel", "MaxParallel")
+        plans.add_columns("Plan", "Valid", "Template", "Tasks", "Pending", "Cells", "Nodes")
         yield plans
 
         run_table = DataTable(id="setup-run")
@@ -113,20 +112,35 @@ class RunSetupScreen(Vertical):
         yield run_table
 
         tasks = DataTable(id="setup-tasks")
-        tasks.add_columns("Task", "Done", "Parallel Group", "Deps", "Agent", "Order", "Title", "Deps✓", "Agent✓", "Group✓")
+        tasks.add_columns(
+            "Task",
+            "Done",
+            "Lane",
+            "Cell",
+            "Team",
+            "Deps",
+            "Agent",
+            "Order",
+            "Title✓",
+            "Deps✓",
+            "Agent✓",
+            "Routing✓",
+        )
         yield tasks
 
         with Horizontal(id="setup-task-editor"):
             yield Input(placeholder="title", id="edit-task-title", classes="setup-edit-input")
             yield Input(placeholder="deps (comma-separated ids)", id="edit-task-deps", classes="setup-edit-input")
-            yield Input(placeholder="parallel_group", id="edit-task-group", classes="setup-edit-input")
+            yield Input(placeholder="routing.lane", id="edit-task-lane", classes="setup-edit-input")
+            yield Input(placeholder="routing.cell", id="edit-task-cell", classes="setup-edit-input")
+            yield Input(placeholder="routing.team_mode", id="edit-task-team", classes="setup-edit-input")
             yield Input(placeholder="agent id (optional)", id="edit-task-agent", classes="setup-edit-input")
             yield Input(placeholder="completed true|false", id="edit-task-completed", classes="setup-edit-input")
             yield Button("Apply Task Edit", id="apply-task-edit", variant="primary")
 
-        yield Static("No structure preview yet.", id="setup-structure")
+        yield Static("No resolved run preview yet.", id="setup-structure")
         yield Static("No safe-fix preview yet.", id="setup-fix-preview")
-        yield Static("Load a plan to edit run controls and preview task blocks.", id="setup-validation")
+        yield Static("Load a v5 plan to edit orchestration and routing.", id="setup-validation")
 
     def on_mount(self) -> None:
         self._refresh_plans()
@@ -166,7 +180,7 @@ class RunSetupScreen(Vertical):
             match = re.search(r"tasks\.(\d+)", path)
         if not match:
             if path == "tasks":
-                return -1, "group"
+                return -1, "routing"
             return None, None
         index = int(match.group(1))
         if ".title" in path:
@@ -175,13 +189,13 @@ class RunSetupScreen(Vertical):
             return index, "deps"
         if ".agent" in path:
             return index, "agent"
-        if ".parallel_group" in path:
-            return index, "group"
+        if ".routing" in path:
+            return index, "routing"
         return index, None
 
     def _rebuild_task_badges(self) -> None:
         self._task_badges = {
-            idx: {"title": "OK", "deps": "OK", "agent": "OK", "group": "OK"}
+            idx: {"title": "OK", "deps": "OK", "agent": "OK", "routing": "OK"}
             for idx in range(len(self._tasks))
         }
         for issue in self._latest_validation_issues:
@@ -192,13 +206,13 @@ class RunSetupScreen(Vertical):
             index, field = self._task_index_from_issue_path(path)
             if index is None:
                 continue
-            if index == -1 and field == "group":
+            if index == -1 and field == "routing":
                 for idx in self._task_badges:
-                    self._task_badges[idx]["group"] = f"ERR({code})"
+                    self._task_badges[idx]["routing"] = f"ERR({code})"
                 continue
             if index < 0 or index >= len(self._tasks):
                 continue
-            target_fields = [field] if field else ["title", "deps", "agent", "group"]
+            target_fields = [field] if field else ["title", "deps", "agent", "routing"]
             for target in target_fields:
                 self._task_badges[index][target] = f"ERR({code})"
 
@@ -221,7 +235,9 @@ class RunSetupScreen(Vertical):
         task = self._tasks[idx]
         self._set_edit_field("edit-task-title", task.title)
         self._set_edit_field("edit-task-deps", ",".join(task.depends_on))
-        self._set_edit_field("edit-task-group", str(task.parallel_group))
+        self._set_edit_field("edit-task-lane", task.routing_lane or "")
+        self._set_edit_field("edit-task-cell", task.routing_cell or "")
+        self._set_edit_field("edit-task-team", task.routing_team_mode or "")
         self._set_edit_field("edit-task-agent", task.agent or "")
         self._set_edit_field("edit-task-completed", "true" if task.completed else "false")
 
@@ -247,18 +263,19 @@ class RunSetupScreen(Vertical):
                 workspace_root=self.shell.orchestrator.workspace_root,
             )
             task_counts = summary.get("task_counts", {})
-            block_counts = summary.get("block_counts", {})
+            resolved = summary.get("resolved_execution", {}) if isinstance(summary.get("resolved_execution"), dict) else {}
             table.add_row(
                 plan_path.name,
                 "yes" if valid else "no",
+                str(summary.get("template", "-")),
                 str(task_counts.get("total", "-")),
                 str(task_counts.get("pending", "-")),
-                str(block_counts.get("parallel", "-")),
-                str(summary.get("parallel_limit", "-")),
+                str(len(resolved.get("resolved_cells", [])) if isinstance(resolved.get("resolved_cells"), list) else "-"),
+                str(summary.get("nodes", "-")),
             )
 
         table.move_cursor(row=0, column=0)
-        self._status().update(f"{len(self._plans)} plan(s) discovered. Load one to configure run controls.")
+        self._status().update(f"{len(self._plans)} plan(s) discovered. Load one to configure orchestration.")
 
     def _render_editor_tables(self) -> None:
         run_table = self._run_table()
@@ -269,33 +286,38 @@ class RunSetupScreen(Vertical):
         if not self._loaded_plan_data:
             return
 
-        run_cfg = self._loaded_plan_data.get("run") if isinstance(self._loaded_plan_data.get("run"), dict) else {}
-        constraints = (
-            self._loaded_plan_data.get("constraints") if isinstance(self._loaded_plan_data.get("constraints"), dict) else {}
+        constraints = self._loaded_plan_data.get("constraints") if isinstance(self._loaded_plan_data.get("constraints"), dict) else {}
+        orchestration = (
+            self._loaded_plan_data.get("orchestration") if isinstance(self._loaded_plan_data.get("orchestration"), dict) else {}
         )
+        branched = orchestration.get("branched") if isinstance(orchestration.get("branched"), dict) else {}
+        behaviors = orchestration.get("behaviors") if isinstance(orchestration.get("behaviors"), list) else []
 
-        pre = run_cfg.get("pre_orchestrator") if isinstance(run_cfg.get("pre_orchestrator"), dict) else {}
-        post = run_cfg.get("post_orchestrator") if isinstance(run_cfg.get("post_orchestrator"), dict) else {}
-
-        run_table.add_row("Pre orchestrator", "on" if bool(pre.get("enabled", False)) else "off")
-        run_table.add_row("Pre agent", str(pre.get("agent", "-")))
-        run_table.add_row("Post orchestrator", "on" if bool(post.get("enabled", True)) else "off")
-        run_table.add_row("Post agent", str(post.get("agent", "-")))
+        run_table.add_row("Template", str(orchestration.get("template", "-")))
+        run_table.add_row("Inference mode", str(orchestration.get("inference_mode", "-")))
         run_table.add_row("Max parallel", str(constraints.get("max_parallel", 1)))
+        run_table.add_row("Behaviors", str(len(behaviors)))
+        run_table.add_row(
+            "Branched lanes",
+            ", ".join(str(item) for item in branched.get("lanes", []) if isinstance(item, str)) or "-",
+        )
+        run_table.add_row("Plan version", str(self._loaded_plan_data.get("version", "-")))
 
         for idx, task in enumerate(self._tasks, start=1):
-            badges = self._task_badges.get(idx - 1, {"title": "OK", "deps": "OK", "agent": "OK", "group": "OK"})
+            badges = self._task_badges.get(idx - 1, {"title": "OK", "deps": "OK", "agent": "OK", "routing": "OK"})
             tasks_table.add_row(
                 task.id,
                 "yes" if task.completed else "no",
-                str(task.parallel_group),
+                task.routing_lane or "-",
+                task.routing_cell or "-",
+                task.routing_team_mode or "-",
                 ",".join(task.depends_on) or "-",
                 task.agent or "worker_default",
                 str(idx),
                 badges["title"],
                 badges["deps"],
                 badges["agent"],
-                badges["group"],
+                badges["routing"],
             )
 
         if self._tasks:
@@ -303,10 +325,49 @@ class RunSetupScreen(Vertical):
             self._populate_task_editor()
         run_table.move_cursor(row=0, column=0)
 
+    def _render_resolved_preview(self, summary: dict[str, Any]) -> None:
+        resolved = summary.get("resolved_execution") if isinstance(summary.get("resolved_execution"), dict) else {}
+        cells = resolved.get("resolved_cells") if isinstance(resolved.get("resolved_cells"), list) else []
+        nodes = resolved.get("resolved_nodes") if isinstance(resolved.get("resolved_nodes"), list) else []
+        warnings = resolved.get("compile_warnings") if isinstance(resolved.get("compile_warnings"), list) else []
+
+        lines = [
+            "Resolved Run Preview:",
+            f"- Template: {resolved.get('template', summary.get('template', '-'))}",
+            f"- Cells: {len(cells)}",
+            f"- Nodes: {len(nodes)}",
+        ]
+        if warnings:
+            lines.append("- Compile warnings:")
+            for warning in warnings[:8]:
+                lines.append(f"  - {warning}")
+
+        if cells:
+            lines.append("- Cell order:")
+            for idx, cell in enumerate(cells[:16], start=1):
+                if not isinstance(cell, dict):
+                    continue
+                lines.append(
+                    f"  {idx}. {cell.get('id', '?')} [{cell.get('kind', '?')}] lane={cell.get('lane', '-')} team={cell.get('team', '-') or '-'}"
+                )
+
+        if nodes:
+            lines.append("- Expanded nodes:")
+            for idx, node in enumerate(nodes[:24], start=1):
+                if not isinstance(node, dict):
+                    continue
+                lines.append(
+                    f"  {idx}. {node.get('id', '?')} role={node.get('role', '?')} cell={node.get('cell_id', '?')} deps={len(node.get('depends_on', [])) if isinstance(node.get('depends_on'), list) else 0}"
+                )
+            if len(nodes) > 24:
+                lines.append(f"  ... ({len(nodes) - 24} more node(s))")
+
+        self._structure().update("\n".join(lines))
+
     def _refresh_validation(self) -> None:
         if not self._loaded_plan_data:
-            self._validation().update("Load a plan to validate unified YAML tasks/run/agents.")
-            self._structure().update("No structure preview yet.")
+            self._validation().update("Load a plan to validate orchestration, routing, and resolved execution.")
+            self._structure().update("No resolved run preview yet.")
             self._latest_validation_issues = []
             self._task_badges = {}
             return
@@ -321,8 +382,10 @@ class RunSetupScreen(Vertical):
         lines = [
             f"Plan: {summary.get('plan_id', '-')}",
             f"Valid: {'yes' if valid else 'no'}",
+            f"Template: {summary.get('template', '-')}",
             f"Tasks: total={task_counts.get('total', '-')} pending={task_counts.get('pending', '-')}",
-            f"Blocks: sequential={block_counts.get('sequential', '-')} parallel={block_counts.get('parallel', '-')}",
+            f"Cells: sequential={block_counts.get('sequential', '-')} parallel={block_counts.get('parallel', '-')} orchestrator={block_counts.get('orchestrator', '-')}",
+            f"Nodes/Edges: {summary.get('nodes', '-')} / {summary.get('edges', '-')}",
             f"MaxParallel: {summary.get('parallel_limit', '-')}",
             f"Task status: {summary.get('tasks_status', {})}",
         ]
@@ -333,19 +396,8 @@ class RunSetupScreen(Vertical):
             lines.append("Validation issues:")
             lines.extend([f"- {issue.get('code')}: {issue.get('message')} ({issue.get('path')})" for issue in issues])
         self._validation().update("\n".join(lines))
-        groups = summary.get("groups", {})
-        blocks = summary.get("block_counts", {})
-        structure_lines = [
-            "Structure Preview:",
-            f"- Sequential blocks: {blocks.get('sequential', '-')}",
-            f"- Parallel blocks: {blocks.get('parallel', '-')}",
-            f"- Max parallel: {summary.get('parallel_limit', '-')}",
-        ]
-        if isinstance(groups, dict):
-            for name, node_ids in groups.items():
-                if isinstance(node_ids, list):
-                    structure_lines.append(f"- {name}: {len(node_ids)} node(s)")
-        self._structure().update("\n".join(structure_lines))
+        self._render_resolved_preview(summary)
+
         errored_rows = len(
             [
                 idx
@@ -370,22 +422,40 @@ class RunSetupScreen(Vertical):
 
         self._render_editor_tables()
         self._refresh_validation()
-        self._status().update(f"Loaded plan {path.name}. You can edit task fields safely and save a validated revision.")
+        self._status().update(f"Loaded plan {path.name}. Edit routing/template and save a validated revision.")
 
-    def _toggle_orchestrator(self, key: str) -> None:
+    def _cycle_template(self) -> None:
         if not self._loaded_plan_data:
+            self._status().update("Load a plan before changing template.")
             return
-        run_cfg = self._loaded_plan_data.get("run")
-        if not isinstance(run_cfg, dict):
-            run_cfg = {}
-            self._loaded_plan_data["run"] = run_cfg
-        block = run_cfg.get(key)
-        if not isinstance(block, dict):
+        orchestration = self._loaded_plan_data.get("orchestration")
+        if not isinstance(orchestration, dict):
+            self._status().update("Plan missing orchestration section.")
             return
-        block["enabled"] = not bool(block.get("enabled", False))
+
+        order = ["general_sps", "branched", "blue_red", "custom"]
+        current = str(orchestration.get("template", "general_sps"))
+        try:
+            idx = order.index(current)
+        except ValueError:
+            idx = 0
+        next_template = order[(idx + 1) % len(order)]
+        orchestration["template"] = next_template
+
+        if next_template == "branched":
+            branched = orchestration.get("branched") if isinstance(orchestration.get("branched"), dict) else {}
+            if not isinstance(branched.get("lanes"), list) or not branched.get("lanes"):
+                branched["lanes"] = ["lane_a", "lane_b"]
+            orchestration["branched"] = branched
+        if next_template == "custom":
+            custom = orchestration.get("custom") if isinstance(orchestration.get("custom"), dict) else {}
+            custom.setdefault("cells", [])
+            orchestration["custom"] = custom
+
         self._clear_fix_preview()
         self._render_editor_tables()
         self._refresh_validation()
+        self._status().update(f"Template set to {next_template}.")
 
     def _change_max_parallel(self, delta: int) -> None:
         if not self._loaded_plan_data:
@@ -417,18 +487,24 @@ class RunSetupScreen(Vertical):
 
         title = self.query_one("#edit-task-title", Input).value.strip()
         deps_raw = self.query_one("#edit-task-deps", Input).value.strip()
-        group_raw = self.query_one("#edit-task-group", Input).value.strip()
+        lane_raw = self.query_one("#edit-task-lane", Input).value.strip()
+        cell_raw = self.query_one("#edit-task-cell", Input).value.strip()
+        team_raw = self.query_one("#edit-task-team", Input).value.strip()
         agent_raw = self.query_one("#edit-task-agent", Input).value.strip()
         completed_raw = self.query_one("#edit-task-completed", Input).value.strip().lower()
 
         if title:
             row["title"] = title
         row["deps"] = [item.strip() for item in deps_raw.split(",") if item.strip()] if deps_raw else []
-        try:
-            row["parallel_group"] = max(0, int(group_raw or "0"))
-        except ValueError:
-            self._status().update("parallel_group must be an integer.")
-            return
+
+        routing = row.get("routing") if isinstance(row.get("routing"), dict) else {}
+        routing["lane"] = lane_raw or None
+        routing["cell"] = cell_raw or None
+        routing["team_mode"] = team_raw or None
+        routing.setdefault("group", None)
+        routing.setdefault("tags", [])
+        row["routing"] = routing
+
         row["agent"] = agent_raw or None
         row["completed"] = completed_raw in {"1", "true", "yes", "y"}
         self._clear_fix_preview()
@@ -531,11 +607,8 @@ class RunSetupScreen(Vertical):
                 return
             self._load_plan(selected)
             return
-        if button == "toggle-pre":
-            self._toggle_orchestrator("pre_orchestrator")
-            return
-        if button == "toggle-post":
-            self._toggle_orchestrator("post_orchestrator")
+        if button == "cycle-template":
+            self._cycle_template()
             return
         if button == "max-parallel-dec":
             self._change_max_parallel(-1)

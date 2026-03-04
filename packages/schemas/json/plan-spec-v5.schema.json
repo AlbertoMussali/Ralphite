@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ralphite.dev/schemas/plan-spec-v5.json",
+  "title": "PlanSpecV5",
+  "type": "object",
+  "required": [
+    "version",
+    "plan_id",
+    "name",
+    "materials",
+    "constraints",
+    "agents",
+    "tasks",
+    "orchestration",
+    "outputs"
+  ],
+  "properties": {
+    "version": { "type": "integer", "const": 5 },
+    "plan_id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "workspace": {
+      "type": "object",
+      "properties": {
+        "root": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "materials": {
+      "type": "object",
+      "properties": {
+        "autodiscover": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "path": { "type": "string" },
+            "include_globs": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          },
+          "additionalProperties": false
+        },
+        "includes": { "type": "array", "items": { "type": "string" } },
+        "uploads": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "constraints": {
+      "type": "object",
+      "properties": {
+        "max_runtime_seconds": { "type": "integer", "minimum": 1 },
+        "max_total_steps": { "type": "integer", "minimum": 1 },
+        "max_cost_usd": { "type": "number", "minimum": 0 },
+        "fail_fast": { "type": "boolean" },
+        "max_parallel": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "role", "provider", "model"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "role": { "type": "string", "enum": ["worker", "orchestrator"] },
+          "provider": { "type": "string" },
+          "model": { "type": "string" },
+          "system_prompt": { "type": "string" },
+          "tools_allow": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "completed"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "title": { "type": "string", "minLength": 1 },
+          "completed": { "type": "boolean" },
+          "description": { "type": "string" },
+          "parallel_group": { "type": "integer", "minimum": 0 },
+          "deps": { "type": "array", "items": { "type": "string" } },
+          "agent": { "type": "string" },
+          "routing": {
+            "type": "object",
+            "properties": {
+              "lane": { "type": ["string", "null"] },
+              "cell": { "type": ["string", "null"] },
+              "group": { "type": ["string", "null"] },
+              "team_mode": { "type": ["string", "null"] },
+              "tags": { "type": "array", "items": { "type": "string" } }
+            },
+            "additionalProperties": false
+          },
+          "acceptance": {
+            "type": "object",
+            "properties": {
+              "commands": { "type": "array", "items": { "type": "string" } },
+              "required_artifacts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["id", "path_glob", "format"],
+                  "properties": {
+                    "id": { "type": "string" },
+                    "path_glob": { "type": "string" },
+                    "format": { "type": "string" }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "rubric": { "type": "array", "items": { "type": "string" } }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "orchestration": {
+      "type": "object",
+      "required": ["template", "inference_mode", "behaviors"],
+      "properties": {
+        "template": {
+          "type": "string",
+          "enum": ["general_sps", "branched", "blue_red", "custom"]
+        },
+        "inference_mode": { "type": "string", "enum": ["mixed"] },
+        "behaviors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "kind", "enabled"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "merge_and_conflict_resolution",
+                  "summarize_work",
+                  "prepare_dispatch",
+                  "custom"
+                ]
+              },
+              "agent": { "type": ["string", "null"] },
+              "prompt_template": { "type": ["string", "null"] },
+              "enabled": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "branched": {
+          "type": "object",
+          "properties": {
+            "lanes": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          },
+          "additionalProperties": false
+        },
+        "blue_red": {
+          "type": "object",
+          "properties": {
+            "loop_unit": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "custom": {
+          "type": "object",
+          "properties": {
+            "cells": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["id", "kind"],
+                "properties": {
+                  "id": { "type": "string", "minLength": 1 },
+                  "kind": {
+                    "type": "string",
+                    "enum": ["sequential", "parallel", "orchestrator", "split", "join", "team_cycle"]
+                  },
+                  "task_ids": { "type": "array", "items": { "type": "string" } },
+                  "behavior": { "type": ["string", "null"] },
+                  "depends_on": { "type": "array", "items": { "type": "string" } },
+                  "lane": { "type": ["string", "null"] },
+                  "team": { "type": ["string", "null"] }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "outputs": {
+      "type": "object",
+      "properties": {
+        "required_artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "format"],
+            "properties": {
+              "id": { "type": "string" },
+              "format": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

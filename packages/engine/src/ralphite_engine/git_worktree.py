@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 import re
+import shutil
 import subprocess
 from typing import Any
 
@@ -209,6 +210,10 @@ class GitWorktreeManager:
         integration_path = self._worktrees_root() / _slug(self.run_id) / _slug(phase) / "integration"
         integration_path.parent.mkdir(parents=True, exist_ok=True)
         phase_state["integration_worktree"] = str(integration_path)
+        if integration_path.exists():
+            removed = self._git(["worktree", "remove", "--force", str(integration_path)], check=False)
+            if removed.returncode != 0 and integration_path.exists():
+                shutil.rmtree(integration_path, ignore_errors=True)
 
         add_wt = self._git(
             ["worktree", "add", "--force", str(integration_path), phase_state["phase_branch"]],

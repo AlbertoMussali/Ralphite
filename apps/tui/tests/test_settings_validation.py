@@ -54,7 +54,7 @@ def test_save_settings_with_rollback_persists_valid_update(tmp_path: Path) -> No
     save_config(tmp_path, cfg)
     plan = tmp_path / ".ralphite" / "plans" / "demo.yaml"
     plan.parent.mkdir(parents=True, exist_ok=True)
-    plan.write_text("version: 4\nplan_id: demo\nname: demo\n", encoding="utf-8")
+    plan.write_text("version: 5\nplan_id: demo\nname: demo\n", encoding="utf-8")
 
     updated = _valid_config(tmp_path)
     updated.default_plan = str(plan)

@@ -12,34 +12,46 @@ from ralphite_tui.cli import app
 
 def _plan_content() -> str:
     return """
-version: 4
+version: 5
 plan_id: contract
 name: contract
-run:
-  pre_orchestrator:
+materials:
+  autodiscover:
     enabled: false
-    agent: orchestrator_pre_default
-  post_orchestrator:
-    enabled: true
-    agent: orchestrator_post_default
+    path: .
+    include_globs: []
+  includes: []
+  uploads: []
 agents:
   - id: worker_default
     role: worker
     provider: openai
     model: gpt-4.1-mini
     tools_allow: [tool:*]
-  - id: orchestrator_pre_default
-    role: orchestrator_pre
+  - id: orchestrator_default
+    role: orchestrator
     provider: openai
     model: gpt-4.1-mini
-  - id: orchestrator_post_default
-    role: orchestrator_post
-    provider: openai
-    model: gpt-4.1-mini
+orchestration:
+  template: general_sps
+  inference_mode: mixed
+  behaviors:
+    - id: merge_default
+      kind: merge_and_conflict_resolution
+      agent: orchestrator_default
+      enabled: true
+  branched:
+    lanes: [lane_a, lane_b]
+  blue_red:
+    loop_unit: per_task
+  custom:
+    cells: []
 tasks:
   - id: t1
     title: Build
     completed: false
+outputs:
+  required_artifacts: []
 """
 
 

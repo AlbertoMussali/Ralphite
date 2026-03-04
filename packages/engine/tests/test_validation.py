@@ -4,7 +4,44 @@ from ralphite_engine.models import ValidationFix
 from ralphite_engine.validation import apply_fix, suggest_fixes, validate_plan_content
 
 
-def test_non_v4_plan_is_rejected_with_guidance() -> None:
+def _minimal_v5_content(*, agents_block: str, tasks_block: str) -> str:
+    return f"""
+version: 5
+plan_id: sample
+name: sample
+materials:
+  autodiscover:
+    enabled: false
+    path: .
+    include_globs: []
+  includes: []
+  uploads: []
+constraints:
+  max_parallel: 2
+agents:
+{agents_block}
+tasks:
+{tasks_block}
+orchestration:
+  template: general_sps
+  inference_mode: mixed
+  behaviors:
+    - id: merge_default
+      kind: merge_and_conflict_resolution
+      agent: orchestrator_default
+      enabled: true
+  branched:
+    lanes: [lane_a, lane_b]
+  blue_red:
+    loop_unit: per_task
+  custom:
+    cells: []
+outputs:
+  required_artifacts: []
+"""
+
+
+def test_non_v5_plan_is_rejected_with_guidance() -> None:
     content = """
 version: 3
 plan_id: old
@@ -12,108 +49,102 @@ name: old
 """
     valid, issues, summary = validate_plan_content(content)
     assert not valid
-    assert summary.get("supported_versions") == [4]
+    assert summary.get("supported_versions") == [5]
     assert any(issue.get("code") == "version.unsupported" for issue in issues)
 
     fixes = suggest_fixes({}, issues)
     assert fixes == []
     noop = ValidationFix(code="noop", title="noop", description="noop", path="root")
-    assert apply_fix({"version": 4}, fix=noop) == {"version": 4}
+    assert apply_fix({"version": 5}, fix=noop) == {"version": 5}
 
 
-def test_validate_plan_v4_with_embedded_tasks() -> None:
-    content = """
-version: 4
-plan_id: v4_sample
-name: v4_sample
-run:
-  pre_orchestrator:
-    enabled: false
-    agent: orchestrator_pre_default
-  post_orchestrator:
-    enabled: true
-    agent: orchestrator_post_default
-constraints:
-  max_parallel: 2
-agents:
+def test_validate_plan_v5_with_embedded_tasks() -> None:
+    content = _minimal_v5_content(
+        agents_block="""
   - id: worker_default
     role: worker
     provider: openai
     model: gpt-4.1-mini
     tools_allow: [tool:*]
-  - id: orchestrator_pre_default
-    role: orchestrator_pre
+  - id: orchestrator_default
+    role: orchestrator
     provider: openai
     model: gpt-4.1-mini
-  - id: orchestrator_post_default
-    role: orchestrator_post
-    provider: openai
-    model: gpt-4.1-mini
-tasks:
+""",
+        tasks_block="""
   - id: t1
     title: Plan work
     completed: false
+    routing:
+      cell: seq_pre
+      tags: [planning]
   - id: t2
     title: Execute work
     completed: false
     parallel_group: 1
     deps: [t1]
+    routing:
+      cell: par_core
+      tags: [build]
   - id: t3
     title: Verify work
     completed: false
     deps: [t2]
-"""
+    routing:
+      cell: seq_post
+      tags: [verify]
+""",
+    )
     valid, issues, summary = validate_plan_content(content)
     assert valid is True, issues
-    assert summary.get("version") == 4
+    assert summary.get("version") == 5
     assert summary.get("phases") == 1
+    assert summary.get("template") == "general_sps"
     assert summary.get("tasks_status", {}).get("status") == "ok"
     assert summary.get("parallel_limit") == 2
 
 
 def test_suggest_fixes_adds_missing_worker_agent() -> None:
     plan_data = {
-        "version": 4,
+        "version": 5,
         "plan_id": "missing_worker",
         "name": "missing_worker",
-        "run": {
-            "pre_orchestrator": {"enabled": False, "agent": "orchestrator_pre_default"},
-            "post_orchestrator": {"enabled": True, "agent": "orchestrator_post_default"},
-        },
+        "materials": {"autodiscover": {"enabled": False, "path": ".", "include_globs": []}, "includes": [], "uploads": []},
         "constraints": {"max_parallel": 1},
         "agents": [
-            {"id": "orchestrator_pre_default", "role": "orchestrator_pre", "provider": "openai", "model": "gpt-4.1-mini"},
-            {"id": "orchestrator_post_default", "role": "orchestrator_post", "provider": "openai", "model": "gpt-4.1-mini"},
+            {"id": "orchestrator_default", "role": "orchestrator", "provider": "openai", "model": "gpt-4.1-mini"}
         ],
         "tasks": [{"id": "t1", "title": "task", "completed": False}],
+        "orchestration": {
+            "template": "general_sps",
+            "inference_mode": "mixed",
+            "behaviors": [
+                {
+                    "id": "merge_default",
+                    "kind": "merge_and_conflict_resolution",
+                    "agent": "orchestrator_default",
+                    "enabled": True,
+                }
+            ],
+            "branched": {"lanes": ["lane_a", "lane_b"]},
+            "blue_red": {"loop_unit": "per_task"},
+            "custom": {"cells": []},
+        },
+        "outputs": {"required_artifacts": []},
     }
-    content = """
-version: 4
-plan_id: missing_worker
-name: missing_worker
-run:
-  pre_orchestrator:
-    enabled: false
-    agent: orchestrator_pre_default
-  post_orchestrator:
-    enabled: true
-    agent: orchestrator_post_default
-constraints:
-  max_parallel: 1
-agents:
-  - id: orchestrator_pre_default
-    role: orchestrator_pre
+    content = _minimal_v5_content(
+        agents_block="""
+  - id: orchestrator_default
+    role: orchestrator
     provider: openai
     model: gpt-4.1-mini
-  - id: orchestrator_post_default
-    role: orchestrator_post
-    provider: openai
-    model: gpt-4.1-mini
-tasks:
+""",
+        tasks_block="""
   - id: t1
     title: task
     completed: false
-"""
+""",
+    )
     valid, issues, _summary = validate_plan_content(content)
     assert valid is False
     fixes = suggest_fixes(plan_data, issues)
@@ -126,51 +157,48 @@ tasks:
 
 def test_suggest_fixes_removes_forward_dependency() -> None:
     plan_data = {
-        "version": 4,
+        "version": 5,
         "plan_id": "forward_dep",
         "name": "forward_dep",
-        "run": {
-            "pre_orchestrator": {"enabled": False, "agent": "orchestrator_pre_default"},
-            "post_orchestrator": {"enabled": True, "agent": "orchestrator_post_default"},
-        },
+        "materials": {"autodiscover": {"enabled": False, "path": ".", "include_globs": []}, "includes": [], "uploads": []},
         "constraints": {"max_parallel": 1},
         "agents": [
             {"id": "worker_default", "role": "worker", "provider": "openai", "model": "gpt-4.1-mini"},
-            {"id": "orchestrator_pre_default", "role": "orchestrator_pre", "provider": "openai", "model": "gpt-4.1-mini"},
-            {"id": "orchestrator_post_default", "role": "orchestrator_post", "provider": "openai", "model": "gpt-4.1-mini"},
+            {"id": "orchestrator_default", "role": "orchestrator", "provider": "openai", "model": "gpt-4.1-mini"},
         ],
         "tasks": [
             {"id": "t1", "title": "one", "completed": False, "deps": ["t2"]},
             {"id": "t2", "title": "two", "completed": False},
         ],
+        "orchestration": {
+            "template": "general_sps",
+            "inference_mode": "mixed",
+            "behaviors": [
+                {
+                    "id": "merge_default",
+                    "kind": "merge_and_conflict_resolution",
+                    "agent": "orchestrator_default",
+                    "enabled": True,
+                }
+            ],
+            "branched": {"lanes": ["lane_a", "lane_b"]},
+            "blue_red": {"loop_unit": "per_task"},
+            "custom": {"cells": []},
+        },
+        "outputs": {"required_artifacts": []},
     }
-    content = """
-version: 4
-plan_id: forward_dep
-name: forward_dep
-run:
-  pre_orchestrator:
-    enabled: false
-    agent: orchestrator_pre_default
-  post_orchestrator:
-    enabled: true
-    agent: orchestrator_post_default
-constraints:
-  max_parallel: 1
-agents:
+    content = _minimal_v5_content(
+        agents_block="""
   - id: worker_default
     role: worker
     provider: openai
     model: gpt-4.1-mini
-  - id: orchestrator_pre_default
-    role: orchestrator_pre
+  - id: orchestrator_default
+    role: orchestrator
     provider: openai
     model: gpt-4.1-mini
-  - id: orchestrator_post_default
-    role: orchestrator_post
-    provider: openai
-    model: gpt-4.1-mini
-tasks:
+""",
+        tasks_block="""
   - id: t1
     title: one
     completed: false
@@ -178,7 +206,8 @@ tasks:
   - id: t2
     title: two
     completed: false
-"""
+""",
+    )
     valid, issues, _summary = validate_plan_content(content)
     assert valid is False
     fixes = suggest_fixes(plan_data, issues)

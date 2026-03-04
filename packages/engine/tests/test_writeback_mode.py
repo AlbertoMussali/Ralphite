@@ -12,34 +12,46 @@ def _git(path: Path, *args: str) -> None:
 
 def _plan_content() -> str:
     return """
-version: 4
+version: 5
 plan_id: writeback_mode
 name: writeback_mode
-run:
-  pre_orchestrator:
+materials:
+  autodiscover:
     enabled: false
-    agent: orchestrator_pre_default
-  post_orchestrator:
-    enabled: true
-    agent: orchestrator_post_default
+    path: .
+    include_globs: []
+  includes: []
+  uploads: []
 agents:
   - id: worker_default
     role: worker
     provider: openai
     model: gpt-4.1-mini
     tools_allow: [tool:*]
-  - id: orchestrator_pre_default
-    role: orchestrator_pre
+  - id: orchestrator_default
+    role: orchestrator
     provider: openai
     model: gpt-4.1-mini
-  - id: orchestrator_post_default
-    role: orchestrator_post
-    provider: openai
-    model: gpt-4.1-mini
+orchestration:
+  template: general_sps
+  inference_mode: mixed
+  behaviors:
+    - id: merge_default
+      kind: merge_and_conflict_resolution
+      agent: orchestrator_default
+      enabled: true
+  branched:
+    lanes: [lane_a, lane_b]
+  blue_red:
+    loop_unit: per_task
+  custom:
+    cells: []
 tasks:
   - id: t1
     title: Build
     completed: false
+outputs:
+  required_artifacts: []
 """
 
 
@@ -81,10 +93,10 @@ def test_in_place_writeback_fails_when_plan_path_is_ignored(tmp_path: Path) -> N
     assert run is not None
     assert run.status == "failed"
 
-    failed_node = next((node for node in run.nodes.values() if node.status == "failed"), None)
-    assert failed_node is not None
-    assert isinstance(failed_node.result, dict)
-    assert failed_node.result.get("reason") == "git_add_failed"
+    writeback_event = next((event for event in run.events if event.get("event") == "TASK_WRITEBACK_FAILED"), None)
+    assert writeback_event is not None
+    assert isinstance(writeback_event.get("meta"), dict)
+    assert str(writeback_event["meta"].get("reason", "")) == "git_add_failed"
 
 
 def test_disabled_writeback_skips_task_updates(tmp_path: Path) -> None:

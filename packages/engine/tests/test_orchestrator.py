@@ -7,16 +7,16 @@ from ralphite_engine import LocalOrchestrator
 
 def _plan_content() -> str:
     return """
-version: 4
-plan_id: v4_orch
-name: v4_orch
-run:
-  pre_orchestrator:
+version: 5
+plan_id: orch
+name: orch
+materials:
+  autodiscover:
     enabled: false
-    agent: orchestrator_pre_default
-  post_orchestrator:
-    enabled: true
-    agent: orchestrator_post_default
+    path: .
+    include_globs: []
+  includes: []
+  uploads: []
 constraints:
   max_parallel: 2
 agents:
@@ -25,65 +25,97 @@ agents:
     provider: openai
     model: gpt-4.1-mini
     tools_allow: [tool:*]
-  - id: orchestrator_pre_default
-    role: orchestrator_pre
+  - id: orchestrator_default
+    role: orchestrator
     provider: openai
     model: gpt-4.1-mini
-  - id: orchestrator_post_default
-    role: orchestrator_post
-    provider: openai
-    model: gpt-4.1-mini
+orchestration:
+  template: general_sps
+  inference_mode: mixed
+  behaviors:
+    - id: merge_default
+      kind: merge_and_conflict_resolution
+      agent: orchestrator_default
+      enabled: true
+  branched:
+    lanes: [lane_a, lane_b]
+  blue_red:
+    loop_unit: per_task
+  custom:
+    cells: []
 tasks:
   - id: t1
     title: Plan
     completed: false
+    routing:
+      cell: seq_pre
   - id: t2
     title: Build A
     completed: false
     parallel_group: 1
     deps: [t1]
+    routing:
+      cell: par_core
   - id: t3
     title: Build B
     completed: false
     parallel_group: 1
     deps: [t1]
+    routing:
+      cell: par_core
   - id: t4
     title: Verify
     completed: false
     deps: [t2, t3]
+    routing:
+      cell: seq_post
+outputs:
+  required_artifacts: []
 """
 
 
 def _conflict_plan_content() -> str:
     return """
-version: 4
-plan_id: v4_recovery
-name: v4_recovery
-run:
-  pre_orchestrator:
+version: 5
+plan_id: recovery
+name: recovery
+materials:
+  autodiscover:
     enabled: false
-    agent: orchestrator_pre_default
-  post_orchestrator:
-    enabled: true
-    agent: orchestrator_post_default
+    path: .
+    include_globs: []
+  includes: []
+  uploads: []
 agents:
   - id: worker_default
     role: worker
     provider: openai
     model: gpt-4.1-mini
     tools_allow: [tool:*]
-  - id: orchestrator_pre_default
-    role: orchestrator_pre
+  - id: orchestrator_default
+    role: orchestrator
     provider: openai
     model: gpt-4.1-mini
-  - id: orchestrator_post_default
-    role: orchestrator_post
-    provider: openai
-    model: gpt-4.1-mini
+orchestration:
+  template: general_sps
+  inference_mode: mixed
+  behaviors:
+    - id: merge_default
+      kind: merge_and_conflict_resolution
+      agent: orchestrator_default
+      enabled: true
+  branched:
+    lanes: [lane_a, lane_b]
+  blue_red:
+    loop_unit: per_task
+  custom:
+    cells: []
 tasks:
   - id: t1
     title: Build
     completed: false
+outputs:
+  required_artifacts: []
 """
 
 
@@ -115,7 +147,7 @@ def test_cancel_run(tmp_path: Path) -> None:
     assert any(evt["event"] in {"RUN_CANCEL_REQUESTED", "RUN_DONE"} for evt in events)
 
 
-def test_v4_plan_executes_with_phase_events(tmp_path: Path) -> None:
+def test_v5_plan_executes_with_phase_events(tmp_path: Path) -> None:
     orch = LocalOrchestrator(tmp_path)
     run_id = orch.start_run(plan_content=_plan_content())
     events = list(orch.stream_events(run_id))
@@ -125,7 +157,7 @@ def test_v4_plan_executes_with_phase_events(tmp_path: Path) -> None:
     assert "LANE_STARTED" in names
     assert "WORKER_STARTED" in names
     assert "WORKER_MERGED" in names
-    assert "ORCH_POST_DONE" in names
+    assert "ORCH_DONE" in names
     assert "PHASE_DONE" in names
     assert "RUN_DONE" in names
 

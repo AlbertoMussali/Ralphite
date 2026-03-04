@@ -1,6 +1,6 @@
 # Ralphite
 
-Ralphite is a TUI-first local multi-agent runner using a single YAML plan file.
+Ralphite is a TUI-first local multi-agent runner with a single YAML plan file.
 
 ## Quick Start
 
@@ -11,7 +11,7 @@ Ralphite is a TUI-first local multi-agent runner using a single YAML plan file.
 - `git`
 - `rg`
 
-### Install (placeholder)
+### Install
 
 ```bash
 uv sync --all-packages
@@ -50,22 +50,22 @@ uv run ralphite check --workspace . --full
 uv run ralphite check --workspace . --release-gate
 ```
 
-## Canonical Plan (v4 Only)
+## Canonical Plan (v5)
 
-Ralphite accepts only `version: 4` plans.
+Ralphite runtime requires `version: 5`.
 
 ```yaml
-version: 4
+version: 5
 plan_id: calculator_cli
 name: Calculator CLI Build
 
-run:
-  pre_orchestrator:
-    enabled: false
-    agent: orchestrator_pre_default
-  post_orchestrator:
+materials:
+  autodiscover:
     enabled: true
-    agent: orchestrator_post_default
+    path: .ralphite/plans
+    include_globs: ["**/*.yaml", "**/*.yml", "**/*.md", "**/*.txt"]
+  includes: []
+  uploads: []
 
 constraints:
   max_parallel: 3
@@ -80,12 +80,8 @@ agents:
     provider: openai
     model: gpt-4.1
     tools_allow: [tool:*, mcp:*]
-  - id: orchestrator_pre_default
-    role: orchestrator_pre
-    provider: openai
-    model: gpt-4.1-mini
-  - id: orchestrator_post_default
-    role: orchestrator_post
+  - id: orchestrator_default
+    role: orchestrator
     provider: openai
     model: gpt-4.1-mini
 
@@ -93,31 +89,92 @@ tasks:
   - id: t1
     title: Define requirements
     completed: false
+    routing:
+      cell: seq_pre
+      tags: [planning]
+    acceptance:
+      commands: []
+      required_artifacts: []
+      rubric: ["Requirements are explicit and testable."]
+
   - id: t2
-    title: Scaffold project
-    completed: false
-  - id: t3
     title: Implement parser
     completed: false
+    deps: [t1]
     parallel_group: 1
-    deps: [t2]
+    routing:
+      cell: par_core
+      tags: [implementation]
+    acceptance:
+      commands: ["pytest -q"]
+      required_artifacts:
+        - id: parser_module
+          path_glob: src/parser*.py
+          format: text
+      rubric: ["Parser covers required inputs."]
+
+orchestration:
+  template: general_sps
+  inference_mode: mixed
+  behaviors:
+    - id: prepare_dispatch_default
+      kind: prepare_dispatch
+      agent: orchestrator_default
+      enabled: true
+    - id: merge_and_conflict_resolution_default
+      kind: merge_and_conflict_resolution
+      agent: orchestrator_default
+      enabled: true
+    - id: summarize_work_default
+      kind: summarize_work
+      agent: orchestrator_default
+      enabled: true
+  branched:
+    lanes: [lane_a, lane_b]
+  blue_red:
+    loop_unit: per_task
+  custom:
+    cells: []
+
+outputs:
+  required_artifacts:
+    - id: final_report
+      format: markdown
+    - id: machine_bundle
+      format: json
 ```
 
-## Runtime Semantics
+## Built-in Templates
 
-Execution is single-phase and block-based from `tasks` list order:
+- `general_sps`: `seq_pre -> orch_merge_1 -> par_core -> orch_merge_2 -> seq_post -> orch_finalize`
+- `branched`: trunk prelude, split orchestrator, lane execution, lane merges, join orchestrator
+- `blue_red`: per-task `prepare -> blue -> handoff -> red -> merge`, then finalize
+- `custom`: explicit cell DSL in `orchestration.custom.cells`
 
-1. optional pre-orchestrator
-2. sequential block(s): tasks with `parallel_group` missing or `0`
-3. parallel block(s): consecutive tasks sharing same `parallel_group > 0`
-4. optional post-orchestrator
+## Validation and Resolved Run Preview
 
-Rules:
+`validate --json` includes resolved execution structure:
 
-- `parallel_group` must be integer `>= 1` when set.
-- group first appearance must be non-decreasing.
-- a group can appear in only one contiguous block.
-- `deps` must reference earlier tasks only.
+- `summary.resolved_execution.template`
+- `summary.resolved_execution.resolved_cells`
+- `summary.resolved_execution.resolved_nodes`
+- `summary.resolved_execution.task_assignment`
+- `summary.resolved_execution.compile_warnings`
+
+Run Setup in TUI shows the same resolved run preview before execution.
+
+## Migration
+
+Use `ralphite migrate` to convert a v4 plan to v5.
+
+```bash
+uv run ralphite migrate --workspace . --plan .ralphite/plans/legacy.yaml
+```
+
+Behavior:
+
+- v4 -> emits v5 plan with `orchestration.template=general_sps`
+- v5 -> idempotent no-op (reports already v5)
 
 ## Recovery Contract
 
@@ -154,8 +211,8 @@ No task sidecar markdown file is required.
 
 ## Config Notes
 
-`[run].task_writeback_mode` controls how task completion write-back is handled:
+`[run].task_writeback_mode` controls task completion write-back:
 
-- `revision_only` (default): write a completed-task revision under `.ralphite/plans`, no commit required.
-- `in_place`: update and commit the active plan path.
-- `disabled`: skip task completion write-back.
+- `revision_only` (default): write completed-task revision under `.ralphite/plans`, no commit required
+- `in_place`: update and commit active plan path
+- `disabled`: skip task completion write-back

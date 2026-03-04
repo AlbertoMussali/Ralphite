@@ -17,6 +17,7 @@ from ralphite_engine import (
     LocalConfig,
     LocalOrchestrator,
     apply_fix,
+    migrate_v4_to_v5,
     present_event,
     present_run_status,
     save_config,
@@ -140,7 +141,7 @@ def _doctor_snapshot(orch: LocalOrchestrator, include_fix_suggestions: bool = Fa
         ok = False
 
     tasks_ok = True
-    task_group_ok = True
+    resolver_ok = True
     git_ready_ok = True
     for plan in plans:
         valid, _issues, summary = validate_plan_content(plan.read_text(encoding="utf-8"), workspace_root=orch.workspace_root)
@@ -149,8 +150,11 @@ def _doctor_snapshot(orch: LocalOrchestrator, include_fix_suggestions: bool = Fa
         task_status = str(summary.get("tasks_status", {}).get("status", "unknown"))
         if task_status not in {"ok", "issues"}:
             tasks_ok = False
-        if summary.get("task_group_issues"):
-            task_group_ok = False
+        resolved = summary.get("resolved_execution", {})
+        if not isinstance(resolved, dict):
+            resolver_ok = False
+        elif not isinstance(resolved.get("resolved_nodes"), list):
+            resolver_ok = False
         readiness = summary.get("recovery_readiness", {})
         if str(readiness.get("status")) not in {"ready", "dirty", "degraded"}:
             git_ready_ok = False
@@ -161,12 +165,12 @@ def _doctor_snapshot(orch: LocalOrchestrator, include_fix_suggestions: bool = Fa
 
     checks.append(
         {
-            "check": "task-groups",
-            "status": "OK" if task_group_ok else "FAIL",
-            "detail": "parallel_group definitions are consistent",
+            "check": "orchestration-resolver",
+            "status": "OK" if resolver_ok else "FAIL",
+            "detail": "resolved execution structure is available",
         }
     )
-    if not task_group_ok:
+    if not resolver_ok:
         ok = False
 
     checks.append(
@@ -517,6 +521,100 @@ def validate(
         if apply_safe_fixes and payload.get("fixed_revision"):
             console.print(f"Wrote fixed revision: {payload['fixed_revision']}")
 
+    raise typer.Exit(code=0 if valid else 1)
+
+
+@app.command()
+def migrate(
+    workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
+    plan: Annotated[str | None, typer.Option(help="Plan file path or name")] = None,
+    output: Annotated[str, typer.Option("--output", help="Output mode: table | json")] = "table",
+    json_mode: Annotated[bool, typer.Option("--json", help="Emit machine-readable output")] = False,
+    strict: Annotated[bool, typer.Option("--strict", help="Fail when converted plan still has validation issues")] = False,
+    in_place: Annotated[bool, typer.Option("--in-place", help="Overwrite original plan path")] = False,
+) -> None:
+    """Migrate a v4 plan to v5 orchestration format."""
+    orch = _orchestrator(workspace)
+    mode = _normalize_output(output, json_mode=json_mode)
+    path = _resolve_plan_ref(orch, plan)
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        payload = _result_payload(
+            command="migrate",
+            ok=False,
+            status="failed",
+            run_id=None,
+            exit_code=1,
+            issues=[{"code": "yaml.invalid", "message": "plan content must be a YAML object"}],
+        )
+        _emit_payload(mode, payload, title="Migrate")
+        raise typer.Exit(code=1)
+
+    version = int(raw.get("version", 1) or 1)
+    if version == 5:
+        envelope = _result_payload(
+            command="migrate",
+            ok=True,
+            status="succeeded",
+            run_id=None,
+            exit_code=0,
+            next_actions=["Plan is already v5; no migration required."],
+            data={"source_plan": str(path), "version": 5, "migrated": False, "target_plan": str(path)},
+        )
+        _emit_payload(mode, envelope, title="Migrate")
+        return
+    if version != 4:
+        envelope = _result_payload(
+            command="migrate",
+            ok=False,
+            status="failed",
+            run_id=None,
+            exit_code=1,
+            issues=[{"code": "version.unsupported", "message": "migrate only supports version 4 -> 5"}],
+            data={"source_plan": str(path), "version": version},
+        )
+        _emit_payload(mode, envelope, title="Migrate")
+        raise typer.Exit(code=1)
+
+    migrated = migrate_v4_to_v5(raw)
+    content = yaml.safe_dump(migrated, sort_keys=False, allow_unicode=False)
+    valid, issues, summary = validate_plan_content(content, workspace_root=orch.workspace_root)
+    if strict and not valid:
+        envelope = _result_payload(
+            command="migrate",
+            ok=False,
+            status="failed",
+            run_id=None,
+            exit_code=1,
+            issues=issues,
+            data={"source_plan": str(path), "version": version, "summary": summary},
+        )
+        _emit_payload(mode, envelope, title="Migrate")
+        raise typer.Exit(code=1)
+
+    if in_place:
+        target = path
+    else:
+        target = path.with_name(f"{path.stem}.v5.yaml")
+    target.write_text(content, encoding="utf-8")
+
+    envelope = _result_payload(
+        command="migrate",
+        ok=valid,
+        status="succeeded" if valid else "failed",
+        run_id=None,
+        exit_code=0 if valid else 1,
+        issues=issues,
+        next_actions=["Run `ralphite validate --plan <target>` to review diagnostics."],
+        data={
+            "source_plan": str(path),
+            "target_plan": str(target),
+            "version": 5,
+            "migrated": True,
+            "summary": summary,
+        },
+    )
+    _emit_payload(mode, envelope, title="Migrate")
     raise typer.Exit(code=0 if valid else 1)
 
 
@@ -1003,7 +1101,7 @@ def _run_release_gate(
 def check(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
     full: Annotated[bool, typer.Option("--full", help="Run full repo test suite")] = False,
-    release_gate: Annotated[bool, typer.Option("--release-gate", help="Run v4 stabilization release gate suites")] = False,
+    release_gate: Annotated[bool, typer.Option("--release-gate", help="Run v5 stabilization release gate suites")] = False,
     output: Annotated[str, typer.Option("--output", help="Output mode: table | json")] = "table",
     quiet: Annotated[bool, typer.Option("--quiet", help="Suppress non-critical output")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", help="Show extra details")] = False,

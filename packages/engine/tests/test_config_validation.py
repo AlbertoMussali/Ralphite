@@ -47,7 +47,7 @@ def test_save_config_raises_on_invalid_entries(tmp_path: Path) -> None:
 def test_resolve_default_plan_path_finds_plan_in_workspace(tmp_path: Path) -> None:
     plan = tmp_path / ".ralphite" / "plans" / "demo.yaml"
     plan.parent.mkdir(parents=True, exist_ok=True)
-    plan.write_text("version: 4\nplan_id: demo\nname: demo\n", encoding="utf-8")
+    plan.write_text("version: 5\nplan_id: demo\nname: demo\n", encoding="utf-8")
     resolved = resolve_default_plan_path(tmp_path, "demo.yaml")
     assert resolved == plan.resolve()
 

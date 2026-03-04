@@ -28,13 +28,13 @@ FAILURE_MAP: dict[str, FailureAdvice] = {
         code="unknown_node_kind",
         title="Unsupported Node",
         message="Plan contains an unsupported node kind for local engine execution.",
-        next_action="Use v4 unified YAML plans with task, run, and agent sections.",
+        next_action="Use v5 unified YAML plans with tasks plus orchestration sections.",
     ),
     "validation_error": FailureAdvice(
         code="validation_error",
         title="Plan Validation Failed",
         message="Plan schema or graph constraints failed validation.",
-        next_action="Fix validation errors in the v4 plan YAML, then rerun.",
+        next_action="Fix validation errors in the v5 plan YAML, then rerun.",
     ),
     "runtime_error": FailureAdvice(
         code="runtime_error",

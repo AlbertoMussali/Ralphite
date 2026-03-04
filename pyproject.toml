@@ -9,3 +9,8 @@ members = [
 ralphite-tui = { workspace = true }
 ralphite-engine = { workspace = true }
 ralphite-schemas = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

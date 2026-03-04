@@ -5,57 +5,92 @@
 - `apps/tui`: primary UX (run setup, timeline, recovery, summary)
 - `apps/tui/cli.py`: automation wrapper around the same engine
 - `packages/engine`: local orchestrator, validation, compiler, git/worktree lifecycle, recovery
-- `packages/schemas`: shared v4 schema + validation rules
+- `packages/schemas`: shared v5 schema + validation rules
 
-## Plan Contract
+## Plan Contract (v5)
 
-Ralphite is v4-only. The single YAML plan is the source of truth for:
+Runtime executes only `version: 5` plans.
 
-- task list
-- run structure (pre/post orchestrator)
-- agent configuration
-- constraints
+Design split:
 
-No task sidecar file and no multi-version bridge.
+1. Task definition (`tasks`, including `routing` + `acceptance`).
+2. Execution architecture (`orchestration`, templates + behavior catalog).
 
-## Runtime Model
+Required top-level keys:
 
-Single-phase block scheduler compiled from ordered tasks:
+- `version`, `plan_id`, `name`, `materials`, `constraints`, `agents`, `tasks`, `orchestration`, `outputs`
 
-1. optional `run.pre_orchestrator`
-2. task blocks from list order
-3. optional `run.post_orchestrator`
+## Orchestration Templates
 
-Block construction:
+Built-ins:
 
-- sequential block: consecutive tasks with `parallel_group` absent or `0`
-- parallel block: consecutive tasks sharing `parallel_group > 0`
+- `general_sps`
+- `branched`
+- `blue_red`
+- `custom`
 
-Execution guarantees:
+Behavior catalog:
 
-- later blocks wait for earlier blocks
-- parallel block concurrency bounded by `constraints.max_parallel`
-- `fail_fast=true` blocks downstream tasks after failure
+- `orchestration.behaviors[*]` defines orchestrator roles (`merge_and_conflict_resolution`, `summarize_work`, `prepare_dispatch`, `custom`) and optional agent override.
 
-## Validation Invariants
+## Compiler/Runtime Model
 
-- plan version must be `4`
-- at least one worker agent
-- orchestrator agent references must exist when enabled
-- `parallel_group` monotonic by first appearance
-- `parallel_group` contiguous (no split/rejoin)
-- `deps` must reference existing earlier tasks
-- no dependency cycles
+Compilation stages:
 
-## Recovery and Git Safety
+1. Parse tasks (`task_parser`).
+2. Resolve selected template into canonical cells.
+3. Expand cells into runtime DAG nodes (workers + intermediate orchestrators).
+4. Validate DAG acyclicity/dependencies and emit node levels.
 
-- worker tasks run in managed run-scoped worktrees
-- post-orchestrator integrates phase branch back to base branch
-- unresolved conflicts are fail-closed (`paused_recovery_required`)
+Runtime node metadata includes:
+
+- `cell_id`, `lane`, `team`, `phase`, `behavior_id`
+
+Execution remains DAG/block-aware with:
+
+- `constraints.max_parallel`
+- dependency enforcement
+- fail-fast handling
+
+## Acceptance Enforcement
+
+Per worker node completion:
+
+1. run `task.acceptance.commands` in task worktree
+2. verify `task.acceptance.required_artifacts` globs
+3. attach rubric context
+
+Failures are typed runtime failures and participate in fail-fast/recovery behavior.
+
+## Git/Worktree Integration
+
+- workers commit in managed worktrees
+- orchestrator merge cells call phase integration
+- multiple intermediate merge points per template are supported
+- merge conflicts are fail-closed (`paused_recovery_required`)
 - recovery modes: `manual`, `agent_best_effort`, `abort_phase`
-- `recovery_preflight` checks mode/prompt/locks/worktree/conflict markers before resume
-- cleanup operations are idempotent
-- stale managed artifacts reported by doctor
+
+## Validation and Preview Surfaces
+
+`validate --json` and Run Setup both expose resolved execution structure:
+
+- `template`
+- `resolved_cells`
+- `resolved_nodes`
+- `task_assignment`
+- `compile_warnings`
+
+Run Setup is v5-native:
+
+- template/config summary
+- routing-aware task table (`lane`, `cell`, `team_mode`)
+- resolved run preview before execution
+
+## Migration Strategy
+
+- `ralphite migrate` performs v4 -> v5 conversion
+- conversion is idempotent for existing v5 plans
+- runtime does not execute v4 directly
 
 ## Persistence
 
@@ -68,10 +103,6 @@ Per-run state lives in `.ralphite/runs/<run_id>/`:
 
 Artifacts live in `.ralphite/artifacts/<run_id>/`.
 
-## TUI-First Boundary
-
-Run Setup edits run controls plus task-level fields (`title`, `deps`, `agent`, `parallel_group`, `completed`) from the same YAML plan, with per-row validation badges and safe-fix diff preview (`Apply` -> `Accept/Reject`). Task order semantics remain task-list driven and are not edited as separate lane selectors.
-
 ## Operator Playbook
 
-User-facing operational workflows are documented in `docs/USER_CENTERED_PLAYBOOK.md`.
+User-facing workflows are in `docs/USER_CENTERED_PLAYBOOK.md`.

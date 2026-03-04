@@ -8,29 +8,39 @@ from ralphite_tui.tui.screens.run_setup_screen import RunSetupScreen
 
 
 PLAN = """
-version: 4
+version: 5
 plan_id: setup
 name: setup
-run:
-  pre_orchestrator:
+materials:
+  autodiscover:
     enabled: false
-    agent: orchestrator_pre_default
-  post_orchestrator:
-    enabled: true
-    agent: orchestrator_post_default
+    path: .
+    include_globs: []
+  includes: []
+  uploads: []
 agents:
   - id: worker_default
     role: worker
     provider: openai
     model: gpt-4.1-mini
-  - id: orchestrator_pre_default
-    role: orchestrator_pre
+  - id: orchestrator_default
+    role: orchestrator
     provider: openai
     model: gpt-4.1-mini
-  - id: orchestrator_post_default
-    role: orchestrator_post
-    provider: openai
-    model: gpt-4.1-mini
+orchestration:
+  template: general_sps
+  inference_mode: mixed
+  behaviors:
+    - id: merge_default
+      kind: merge_and_conflict_resolution
+      agent: orchestrator_default
+      enabled: true
+  branched:
+    lanes: [lane_a, lane_b]
+  blue_red:
+    loop_unit: per_task
+  custom:
+    cells: []
 tasks:
   - id: t1
     title: Task 1
@@ -38,6 +48,8 @@ tasks:
   - id: t2
     title: Task 2
     completed: false
+outputs:
+  required_artifacts: []
 """
 
 
@@ -67,17 +79,17 @@ def test_task_badges_mark_specific_fields_from_issue_paths() -> None:
     assert screen._task_badges[0]["title"] == "ERR(task.title.empty)"  # noqa: SLF001
     assert screen._task_badges[0]["deps"] == "OK"  # noqa: SLF001
     assert screen._task_badges[1]["deps"] == "ERR(task.deps.forward_reference)"  # noqa: SLF001
-    assert screen._task_badges[1]["group"] == "OK"  # noqa: SLF001
+    assert screen._task_badges[1]["routing"] == "OK"  # noqa: SLF001
 
 
-def test_task_badges_apply_global_group_issue_to_all_rows() -> None:
+def test_task_badges_apply_global_routing_issue_to_all_rows() -> None:
     screen = _build_screen()
     screen._latest_validation_issues = [  # noqa: SLF001
-        {"code": "task.group.contiguous", "path": "tasks"},
+        {"code": "tasks.unassigned", "path": "tasks"},
     ]
     screen._rebuild_task_badges()  # noqa: SLF001
-    assert screen._task_badges[0]["group"] == "ERR(task.group.contiguous)"  # noqa: SLF001
-    assert screen._task_badges[1]["group"] == "ERR(task.group.contiguous)"  # noqa: SLF001
+    assert screen._task_badges[0]["routing"] == "ERR(tasks.unassigned)"  # noqa: SLF001
+    assert screen._task_badges[1]["routing"] == "ERR(tasks.unassigned)"  # noqa: SLF001
 
 
 def test_accept_and_reject_pending_fixes_updates_state() -> None:
