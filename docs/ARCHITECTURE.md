@@ -1,71 +1,73 @@
 # Ralphite Architecture
 
-## Canonical Architecture
+## Canonical Surfaces
 
-- `apps/tui`: terminal app shell with global command palette and multi-screen navigation
-- `packages/engine`: local orchestrator, v3 validation, worktree lifecycle, durable run persistence
-- `packages/schemas`: plan contracts and validation rules
+- `apps/tui`: primary UX (run setup, timeline, recovery, summary)
+- `apps/tui/cli.py`: automation wrapper around the same engine
+- `packages/engine`: local orchestrator, validation, compiler, git/worktree lifecycle, recovery
+- `packages/schemas`: shared v4 schema + validation rules
 
-## Local Runtime Flow
+## Plan Contract
 
-1. `ralphite init` creates `.ralphite` layout and ensures a starter v3 plan exists.
-2. `ralphite run` resolves/creates a v3 plan and starts a local run.
-3. `version: 3` plans read canonical tasks from `task_source.path` (`RALPHEX_TASK.md` by default). Task metadata defines phase/lane/group ordering; plan config defines phase orchestrator toggles and constraints.
-4. Worker tasks run in per-task worktrees; post-orchestrator integrates phase output back to base branch preserving worker commits.
-5. On merge conflicts, run enters `paused_recovery_required` and exposes manual / best-effort-agent / abort recovery modes.
-6. Orchestrator writes event journal, run state, checkpoints, and summary artifacts under `.ralphite/`.
-7. TUI shell focuses on run setup, phase timeline, recovery console, and post-run summary.
+Ralphite is v4-only. The single YAML plan is the source of truth for:
 
-## Engine Interface
+- task list
+- run structure (pre/post orchestrator)
+- agent configuration
+- constraints
 
-- `start_run(plan_ref|plan_content)`
-- `stream_events(run_id)`
-- `pause_run(run_id)`
-- `resume_run(run_id)`
-- `cancel_run(run_id)`
-- `rerun_failed(run_id)`
-- `recover_run(run_id)`
-- `set_recovery_mode(run_id, mode, prompt?)`
-- `recovery_preflight(run_id) -> {ok, checks, blocking_reasons, conflict_files, next_commands, ...}`
-- `resume_from_checkpoint(run_id)`
-- `list_recoverable_runs()`
-- `load_run_state(run_id)`
+No task sidecar file and no multi-version bridge.
 
-## Persistence Contracts
+## Runtime Model
 
-Per run directory `.ralphite/runs/<run_id>/`:
+Single-phase block scheduler compiled from ordered tasks:
 
-- `run_state.json` (`RunPersistenceState`)
-- `checkpoint.json` (`RunCheckpoint`)
-- `event_log.ndjson` (`EventJournalRecord`)
-- `lock` (single-writer run lock)
+1. optional `run.pre_orchestrator`
+2. task blocks from list order
+3. optional `run.post_orchestrator`
 
-## TUI Navigation Contracts
+Block construction:
 
-- App shell uses a screen stack with top navigation.
-- Global command palette (`ctrl+p` / `:`) is authoritative for discoverability.
-- TUI is execution-first: `Run Setup` -> `Phase Timeline` -> `Recovery` (if needed) -> `Summary`.
-- Task definition remains file-sourced; TUI edits phase controls (orchestrator toggles + constraints) and recovery behavior, not task content.
-- Run Setup persists edits as timestamped plan revisions; source plan files are not overwritten in place by default.
+- sequential block: consecutive tasks with `parallel_group` absent or `0`
+- parallel block: consecutive tasks sharing `parallel_group > 0`
 
-## Recovery Preflight Lifecycle
+Execution guarantees:
 
-1. Conflict during integration emits `RECOVERY_REQUIRED` and run transitions to `paused_recovery_required`.
-2. User/operator selects recovery mode: `manual`, `agent_best_effort`, or `abort_phase`.
-3. `recovery_preflight` validates:
-   - paused status
-   - selected mode validity
-   - prompt presence for `agent_best_effort`
-   - lock availability
-   - recovery worktree availability
-   - unresolved conflict markers in reported conflict files
-4. Preflight failures emit `RECOVERY_PREFLIGHT_FAILED`, set `recovery.status=preflight_failed`, and keep run paused.
-5. Successful resume emits `RECOVERY_RESUMED` and execution continues from checkpoint.
+- later blocks wait for earlier blocks
+- parallel block concurrency bounded by `constraints.max_parallel`
+- `fail_fast=true` blocks downstream tasks after failure
 
-## Git/Worktree Safety Policy
+## Validation Invariants
 
-- Worker tasks execute in managed worktrees under `.ralphite/worktrees/<run_id>/...`.
-- Integration preserves worker commits (no forced squash).
-- Merge conflict behavior is fail-closed; unresolved conflicts require explicit recovery action.
-- Cleanup is idempotent for already-removed worktrees/branches.
-- Stale managed artifacts are detected by run id and age threshold (default `24h`) and surfaced via doctor/reports.
+- plan version must be `4`
+- at least one worker agent
+- orchestrator agent references must exist when enabled
+- `parallel_group` monotonic by first appearance
+- `parallel_group` contiguous (no split/rejoin)
+- `deps` must reference existing earlier tasks
+- no dependency cycles
+
+## Recovery and Git Safety
+
+- worker tasks run in managed run-scoped worktrees
+- post-orchestrator integrates phase branch back to base branch
+- unresolved conflicts are fail-closed (`paused_recovery_required`)
+- recovery modes: `manual`, `agent_best_effort`, `abort_phase`
+- `recovery_preflight` checks mode/prompt/locks/worktree/conflict markers before resume
+- cleanup operations are idempotent
+- stale managed artifacts reported by doctor
+
+## Persistence
+
+Per-run state lives in `.ralphite/runs/<run_id>/`:
+
+- `run_state.json`
+- `checkpoint.json`
+- `event_log.ndjson`
+- `lock`
+
+Artifacts live in `.ralphite/artifacts/<run_id>/`.
+
+## TUI-First Boundary
+
+Run Setup edits only run controls and constraints from the same YAML plan. Task order semantics are task-list driven and not edited as separate lane selectors.

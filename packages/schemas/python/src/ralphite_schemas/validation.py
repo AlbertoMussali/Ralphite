@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict, deque
 from dataclasses import dataclass
 
-from .plan_v3 import PlanSpecV3
+from .plan_v4 import PlanSpecV4
 
 
 @dataclass(slots=True)
@@ -16,7 +16,7 @@ class ValidationIssue:
 
 @dataclass(slots=True)
 class CompiledPlan:
-    plan: PlanSpecV3
+    plan: PlanSpecV4
     node_levels: dict[str, int]
     outgoing: dict[str, list[str]]
     incoming: dict[str, list[str]]
@@ -29,82 +29,129 @@ class ValidationError(Exception):
         super().__init__("plan validation failed")
 
 
-def validate_plan(plan: PlanSpecV3) -> list[ValidationIssue]:
+def validate_plan(plan: PlanSpecV4) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
 
-    if plan.version != 3:
-        issues.append(ValidationIssue("version.invalid", "version must be 3", "version"))
+    if plan.version != 4:
+        issues.append(ValidationIssue("version.invalid", "version must be 4", "version"))
 
-    if plan.task_source.parser_version != 3:
-        issues.append(
-            ValidationIssue(
-                "task_source.parser_version_invalid",
-                "task_source.parser_version must be 3",
-                "task_source.parser_version",
-            )
-        )
+    if not plan.tasks:
+        issues.append(ValidationIssue("tasks.empty", "tasks must contain at least one item", "tasks"))
 
-    if not plan.execution_structure.phases:
-        issues.append(
-            ValidationIssue(
-                "execution_structure.empty",
-                "execution_structure.phases must contain at least one phase",
-                "execution_structure.phases",
-            )
-        )
-
-    profile_ids: set[str] = set()
+    agent_ids: set[str] = set()
     role_counts: dict[str, int] = defaultdict(int)
-    for idx, profile in enumerate(plan.agent_profiles):
-        if profile.id in profile_ids:
+    for idx, agent in enumerate(plan.agents):
+        if agent.id in agent_ids:
             issues.append(
                 ValidationIssue(
-                    "agent_profile.duplicate_id",
-                    f"duplicate agent profile id '{profile.id}'",
-                    f"agent_profiles[{idx}].id",
+                    "agent.duplicate_id",
+                    f"duplicate agent id '{agent.id}'",
+                    f"agents[{idx}].id",
                 )
             )
-        profile_ids.add(profile.id)
-        role_counts[profile.role.value] += 1
+        agent_ids.add(agent.id)
+        role_counts[agent.role.value] += 1
 
     if role_counts.get("worker", 0) == 0:
+        issues.append(ValidationIssue("agent.missing_worker", "at least one worker agent is required", "agents"))
+
+    if plan.run.pre_orchestrator.enabled and plan.run.pre_orchestrator.agent not in agent_ids:
         issues.append(
             ValidationIssue(
-                "agent_profile.missing_worker",
-                "at least one worker agent_profile is required",
-                "agent_profiles",
+                "run.pre_orchestrator.unknown_agent",
+                f"unknown pre orchestrator agent '{plan.run.pre_orchestrator.agent}'",
+                "run.pre_orchestrator.agent",
+            )
+        )
+    if plan.run.post_orchestrator.enabled and plan.run.post_orchestrator.agent not in agent_ids:
+        issues.append(
+            ValidationIssue(
+                "run.post_orchestrator.unknown_agent",
+                f"unknown post orchestrator agent '{plan.run.post_orchestrator.agent}'",
+                "run.post_orchestrator.agent",
             )
         )
 
-    seen_phases: set[str] = set()
-    for idx, phase in enumerate(plan.execution_structure.phases):
-        path_prefix = f"execution_structure.phases[{idx}]"
-        if phase.id in seen_phases:
-            issues.append(ValidationIssue("phase.duplicate_id", f"duplicate phase id '{phase.id}'", f"{path_prefix}.id"))
-        seen_phases.add(phase.id)
+    task_ids: set[str] = set()
+    first_seen_group_index: dict[int, int] = {}
+    last_group: int | None = None
+    closed_groups: set[int] = set()
 
-        if phase.pre_orchestrator.enabled and phase.pre_orchestrator.agent_profile_id not in profile_ids:
+    for idx, task in enumerate(plan.tasks):
+        path_prefix = f"tasks[{idx}]"
+        if task.id in task_ids:
+            issues.append(ValidationIssue("task.duplicate_id", f"duplicate task id '{task.id}'", f"{path_prefix}.id"))
+        task_ids.add(task.id)
+
+        if task.agent and task.agent not in agent_ids:
             issues.append(
                 ValidationIssue(
-                    "phase.pre_orchestrator.unknown_profile",
-                    f"unknown pre_orchestrator profile '{phase.pre_orchestrator.agent_profile_id}'",
-                    f"{path_prefix}.pre_orchestrator.agent_profile_id",
+                    "task.unknown_agent",
+                    f"task '{task.id}' references unknown agent '{task.agent}'",
+                    f"{path_prefix}.agent",
                 )
             )
 
-        if phase.post_orchestrator.enabled and phase.post_orchestrator.agent_profile_id not in profile_ids:
-            issues.append(
-                ValidationIssue(
-                    "phase.post_orchestrator.unknown_profile",
-                    f"unknown post_orchestrator profile '{phase.post_orchestrator.agent_profile_id}'",
-                    f"{path_prefix}.post_orchestrator.agent_profile_id",
+        for dep in task.deps:
+            if dep == task.id:
+                issues.append(ValidationIssue("task.self_dep", f"task '{task.id}' has self dependency", f"{path_prefix}.deps"))
+
+        group = int(task.parallel_group or 0)
+        if group > 0:
+            if last_group is None:
+                last_group = group
+                first_seen_group_index.setdefault(group, idx)
+            else:
+                if group < last_group and group not in closed_groups:
+                    issues.append(
+                        ValidationIssue(
+                            "tasks.parallel_group.non_monotonic",
+                            f"parallel_group {group} appears after group {last_group}; groups must be non-decreasing by first appearance",
+                            f"{path_prefix}.parallel_group",
+                        )
+                    )
+                if group != last_group:
+                    closed_groups.add(last_group)
+                    if group in closed_groups:
+                        issues.append(
+                            ValidationIssue(
+                                "tasks.parallel_group.non_contiguous",
+                                f"parallel_group {group} appears in non-contiguous blocks",
+                                f"{path_prefix}.parallel_group",
+                            )
+                        )
+                    last_group = group
+                    first_seen_group_index.setdefault(group, idx)
+        else:
+            if last_group is not None:
+                closed_groups.add(last_group)
+
+    ordered_ids = [task.id for task in plan.tasks]
+    position = {task_id: idx for idx, task_id in enumerate(ordered_ids)}
+    for idx, task in enumerate(plan.tasks):
+        for dep in task.deps:
+            if dep not in position:
+                issues.append(
+                    ValidationIssue(
+                        "task.dep_missing",
+                        f"task '{task.id}' depends on missing task '{dep}'",
+                        f"tasks[{idx}].deps",
+                    )
                 )
-            )
+                continue
+            if position[dep] >= idx:
+                issues.append(
+                    ValidationIssue(
+                        "task.dep_forward",
+                        f"task '{task.id}' has forward dependency '{dep}'",
+                        f"tasks[{idx}].deps",
+                    )
+                )
 
     return issues
 
 
-def _compile_plan(plan: PlanSpecV3) -> CompiledPlan:
+def _compile_plan(plan: PlanSpecV4) -> CompiledPlan:
     incoming: dict[str, list[str]] = defaultdict(list)
     outgoing: dict[str, list[str]] = defaultdict(list)
     groups: dict[str, list[str]] = defaultdict(list)
@@ -117,22 +164,26 @@ def _compile_plan(plan: PlanSpecV3) -> CompiledPlan:
         incoming.setdefault(node_id, incoming.get(node_id, []))
         outgoing.setdefault(node_id, outgoing.get(node_id, []))
 
-    previous_phase_terminal: list[str] = []
-    for phase in plan.execution_structure.phases:
-        current_anchor: list[str] = list(previous_phase_terminal)
+    anchor: list[str] = []
+    if plan.run.pre_orchestrator.enabled:
+        pre_id = "phase-1::orchestrator_pre"
+        add_node(pre_id, "phase-1", anchor)
+        anchor = [pre_id]
 
-        if phase.pre_orchestrator.enabled:
-            pre_id = f"{phase.id}::orchestrator_pre"
-            add_node(pre_id, phase.id, current_anchor)
-            current_anchor = [pre_id]
+    for task in plan.tasks:
+        if task.completed:
+            continue
+        task_node_id = f"phase-1::task::{task.id}"
+        add_node(task_node_id, "phase-1", list(anchor))
+        if int(task.parallel_group or 0) > 0:
+            # Parallel tasks in the same group share the same anchor.
+            pass
+        else:
+            anchor = [task_node_id]
 
-        if phase.post_orchestrator.enabled:
-            post_id = f"{phase.id}::orchestrator_post"
-            add_node(post_id, phase.id, list(current_anchor))
-            current_anchor = [post_id]
-
-        previous_phase_terminal = current_anchor
-        groups.setdefault(phase.id, groups.get(phase.id, []))
+    if plan.run.post_orchestrator.enabled:
+        post_id = "phase-1::orchestrator_post"
+        add_node(post_id, "phase-1", list(anchor))
 
     indegree = {node_id: len(parents) for node_id, parents in incoming.items()}
     q = deque([nid for nid, deg in indegree.items() if deg == 0])
@@ -146,15 +197,7 @@ def _compile_plan(plan: PlanSpecV3) -> CompiledPlan:
                 q.append(nxt)
 
     if len(topo) != len(indegree):
-        raise ValidationError(
-            [
-                ValidationIssue(
-                    "execution_structure.illegal_cycle",
-                    "execution_structure introduces a cycle",
-                    "execution_structure.phases",
-                )
-            ]
-        )
+        raise ValidationError([ValidationIssue("tasks.illegal_cycle", "tasks introduce a cycle", "tasks")])
 
     node_levels: dict[str, int] = {}
     for node_id in topo:
@@ -173,7 +216,7 @@ def _compile_plan(plan: PlanSpecV3) -> CompiledPlan:
     )
 
 
-def compile_plan(plan: PlanSpecV3) -> CompiledPlan:
+def compile_plan(plan: PlanSpecV4) -> CompiledPlan:
     issues = validate_plan(plan)
     errors = [issue for issue in issues if issue.level == "error"]
     if errors:

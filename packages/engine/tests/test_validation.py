@@ -1,53 +1,41 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from ralphite_engine.models import ValidationFix
 from ralphite_engine.validation import apply_fix, suggest_fixes, validate_plan_content
 
 
-def test_v1_plan_is_rejected_with_migration_guidance() -> None:
+def test_non_v4_plan_is_rejected_with_guidance() -> None:
     content = """
-version: 1
-plan_id: empty
-name: empty
+version: 3
+plan_id: old
+name: old
 """
     valid, issues, summary = validate_plan_content(content)
     assert not valid
-    assert summary.get("supported_versions") == [3]
+    assert summary.get("supported_versions") == [4]
     assert any(issue.get("code") == "version.unsupported" for issue in issues)
 
     fixes = suggest_fixes({}, issues)
     assert fixes == []
     noop = ValidationFix(code="noop", title="noop", description="noop", path="root")
-    assert apply_fix({"version": 3}, fix=noop) == {"version": 3}
+    assert apply_fix({"version": 4}, fix=noop) == {"version": 4}
 
 
-def test_validate_plan_v3_with_task_source(tmp_path: Path) -> None:
-    task_file = tmp_path / "RALPHEX_TASK.md"
-    task_file.write_text(
-        "\n".join(
-            [
-                "# Tasks",
-                "",
-                "- [ ] Plan work <!-- id:t1 phase:phase-1 lane:seq_pre agent_profile:worker_default -->",
-                "- [ ] Execute work <!-- id:t2 phase:phase-1 lane:parallel deps:t1 agent_profile:worker_default -->",
-                "- [ ] Verify work <!-- id:t3 phase:phase-1 lane:seq_post deps:t2 agent_profile:worker_default -->",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
+def test_validate_plan_v4_with_embedded_tasks() -> None:
     content = """
-version: 3
-plan_id: v3_sample
-name: v3_sample
-task_source:
-  kind: markdown_checklist
-  path: RALPHEX_TASK.md
-  parser_version: 3
-agent_profiles:
+version: 4
+plan_id: v4_sample
+name: v4_sample
+run:
+  pre_orchestrator:
+    enabled: false
+    agent: orchestrator_pre_default
+  post_orchestrator:
+    enabled: true
+    agent: orchestrator_post_default
+constraints:
+  max_parallel: 2
+agents:
   - id: worker_default
     role: worker
     provider: openai
@@ -61,21 +49,23 @@ agent_profiles:
     role: orchestrator_post
     provider: openai
     model: gpt-4.1-mini
-execution_structure:
-  phases:
-    - id: phase-1
-      pre_orchestrator:
-        enabled: false
-        agent_profile_id: orchestrator_pre_default
-      post_orchestrator:
-        enabled: true
-        agent_profile_id: orchestrator_post_default
-constraints:
-  max_parallel: 2
+tasks:
+  - id: t1
+    title: Plan work
+    completed: false
+  - id: t2
+    title: Execute work
+    completed: false
+    parallel_group: 1
+    deps: [t1]
+  - id: t3
+    title: Verify work
+    completed: false
+    deps: [t2]
 """
-    valid, issues, summary = validate_plan_content(content, workspace_root=tmp_path)
+    valid, issues, summary = validate_plan_content(content)
     assert valid is True, issues
-    assert summary.get("version") == 3
+    assert summary.get("version") == 4
     assert summary.get("phases") == 1
-    assert summary.get("task_source_status", {}).get("status") == "ok"
+    assert summary.get("tasks_status", {}).get("status") == "ok"
     assert summary.get("parallel_limit") == 2

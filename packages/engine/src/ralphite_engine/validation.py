@@ -10,17 +10,15 @@ from pydantic import ValidationError as PydanticValidationError
 
 from ralphite_engine.models import ValidationFix
 from ralphite_engine.structure_compiler import RuntimeExecutionPlan, compile_execution_structure
-from ralphite_engine.task_parser import ParsedTask, parse_task_file
-from ralphite_schemas.plan_v3 import PlanSpecV3
+from ralphite_engine.task_parser import ParsedTask, parse_plan_tasks
+from ralphite_schemas.plan_v4 import PlanSpecV4
 from ralphite_schemas.validation import ValidationError, compile_plan, validate_plan
 
 
-UNSUPPORTED_VERSION_MESSAGE = (
-    "PlanSpec versions 1 and 2 are no longer supported. Use version 3 with task-driven ordering in task_source."
-)
+UNSUPPORTED_VERSION_MESSAGE = "PlanSpec versions 1-3 are no longer supported. Use version 4 unified YAML (tasks + run + agents)."
 
 
-PlanDocument = PlanSpecV3
+PlanDocument = PlanSpecV4
 
 
 def parse_plan_yaml(content: str) -> PlanDocument:
@@ -28,25 +26,16 @@ def parse_plan_yaml(content: str) -> PlanDocument:
     if not isinstance(data, dict):
         raise ValueError("plan content must be a YAML object")
     version = int(data.get("version", 1))
-    if version != 3:
+    if version != 4:
         raise ValueError(UNSUPPORTED_VERSION_MESSAGE)
-    return PlanSpecV3.model_validate(data)
+    return PlanSpecV4.model_validate(data)
 
 
-def resolve_task_source_path(task_source_path: str, workspace_root: str | Path | None) -> Path:
-    candidate = Path(task_source_path).expanduser()
-    if candidate.is_absolute():
-        return candidate
-    if workspace_root is not None:
-        return (Path(workspace_root).expanduser().resolve() / candidate).resolve()
-    return candidate.resolve()
-
-
-def _collect_profile_tools(plan: PlanSpecV3) -> tuple[list[str], list[str]]:
+def _collect_profile_tools(plan: PlanSpecV4) -> tuple[list[str], list[str]]:
     tools = sorted(
         {
             entry
-            for profile in plan.agent_profiles
+            for profile in plan.agents
             for entry in profile.tools_allow
             if isinstance(entry, str) and entry.startswith("tool:")
         }
@@ -54,7 +43,7 @@ def _collect_profile_tools(plan: PlanSpecV3) -> tuple[list[str], list[str]]:
     mcps = sorted(
         {
             entry
-            for profile in plan.agent_profiles
+            for profile in plan.agents
             for entry in profile.tools_allow
             if isinstance(entry, str) and entry.startswith("mcp:")
         }
@@ -92,50 +81,32 @@ def _git_recovery_readiness(workspace_root: str | Path | None) -> dict[str, Any]
 
 def _append_task_diagnostics(
     *,
-    plan: PlanSpecV3,
-    workspace_root: str | Path | None,
+    plan: PlanSpecV4,
     issues: list[dict[str, Any]],
-) -> tuple[dict[str, Any], list[str], RuntimeExecutionPlan | None, list[ParsedTask]]:
-    task_file_path = resolve_task_source_path(plan.task_source.path, workspace_root)
-    if workspace_root is None:
-        return {"path": str(task_file_path), "status": "unresolved"}, [], None, []
-
-    tasks, parse_issues = parse_task_file(task_file_path)
-    status = "ok"
+) -> tuple[list[str], RuntimeExecutionPlan | None, list[ParsedTask]]:
+    tasks, parse_issues = parse_plan_tasks(plan)
     if parse_issues:
-        status = "issues"
         for issue in parse_issues:
             issues.append(
                 {
-                    "code": "task_source.parse_error",
+                    "code": "tasks.parse_error",
                     "message": issue,
-                    "path": "task_source.path",
+                    "path": "tasks",
                     "level": "error",
                 }
             )
-
-    if not task_file_path.exists():
-        status = "missing"
-        issues.append(
-            {
-                "code": "task_source.missing",
-                "message": f"task file not found: {task_file_path}",
-                "path": "task_source.path",
-                "level": "error",
-            }
-        )
 
     compiled_runtime, compile_issues = compile_execution_structure(plan, tasks, task_parse_issues=parse_issues)
     for issue in compile_issues:
         issues.append(
             {
-                "code": "execution_structure.invalid",
+                "code": "run.invalid",
                 "message": issue,
-                "path": "execution_structure",
+                "path": "tasks",
                 "level": "error",
             }
         )
-    return {"path": str(task_file_path), "status": status}, parse_issues, compiled_runtime, tasks
+    return parse_issues, compiled_runtime, tasks
 
 
 def validate_plan_content(
@@ -156,7 +127,7 @@ def validate_plan_content(
         )
 
     version = int(raw.get("version", 1))
-    if version != 3:
+    if version != 4:
         issues = [
             {
                 "code": "version.unsupported",
@@ -165,10 +136,10 @@ def validate_plan_content(
                 "level": "error",
             }
         ]
-        return False, issues, {"version": version, "supported_versions": [3]}
+        return False, issues, {"version": version, "supported_versions": [4]}
 
     try:
-        plan = PlanSpecV3.model_validate(raw)
+        plan = PlanSpecV4.model_validate(raw)
     except PydanticValidationError as exc:
         issues = [
             {
@@ -188,36 +159,44 @@ def validate_plan_content(
         issues.extend(asdict(issue) for issue in exc.issues)
         return False, issues, {}
 
-    task_source_status, parse_issues, runtime, tasks = _append_task_diagnostics(
+    parse_issues, runtime, tasks = _append_task_diagnostics(
         plan=plan,
-        workspace_root=workspace_root,
         issues=issues,
     )
+
     pending_tasks = [task for task in tasks if not task.completed]
-    lane_counts = {
-        "seq_pre": len([task for task in pending_tasks if task.lane == "seq_pre"]),
-        "parallel": len([task for task in pending_tasks if task.lane == "parallel"]),
-        "seq_post": len([task for task in pending_tasks if task.lane == "seq_post"]),
+    block_counts = {
+        "sequential": len([task for task in pending_tasks if int(task.parallel_group or 0) <= 0]),
+        "parallel": len([task for task in pending_tasks if int(task.parallel_group or 0) > 0]),
     }
-    phase_ids = sorted({task.phase for task in pending_tasks})
+
     group_issues: list[str] = []
-    for phase in phase_ids:
-        phase_parallel = [task for task in pending_tasks if task.phase == phase and task.lane == "parallel"]
-        with_group = [task for task in phase_parallel if task.parallel_group is not None]
-        if with_group and len(with_group) != len(phase_parallel):
-            group_issues.append(
-                f"phase '{phase}' has mixed parallel_group usage; all parallel tasks must set parallel_group"
-            )
+    seen: set[int] = set()
+    closed: set[int] = set()
+    last_group = 0
+    for task in pending_tasks:
+        grp = int(task.parallel_group or 0)
+        if grp > 0:
+            if grp < last_group:
+                group_issues.append(f"parallel_group {grp} appears after {last_group}; groups must be non-decreasing")
+            if grp in closed:
+                group_issues.append(f"parallel_group {grp} appears in non-contiguous blocks")
+            seen.add(grp)
+            last_group = grp
+        else:
+            if last_group > 0:
+                closed.add(last_group)
 
     for issue in group_issues:
         issues.append(
             {
-                "code": "task_source.parallel_group_mixed",
+                "code": "tasks.parallel_group_invalid",
                 "message": issue,
-                "path": "task_source.path",
+                "path": "tasks",
                 "level": "error",
             }
         )
+
     tools, mcps = _collect_profile_tools(plan)
     runtime_nodes = len(runtime.nodes) if runtime is not None else 0
     runtime_edges = (
@@ -227,7 +206,7 @@ def validate_plan_content(
     )
 
     summary = {
-        "version": 3,
+        "version": 4,
         "plan_id": plan.plan_id,
         "name": plan.name,
         "nodes": runtime_nodes,
@@ -236,14 +215,19 @@ def validate_plan_content(
         "groups": runtime.groups if runtime is not None else compiled.groups,
         "required_tools": tools,
         "required_mcps": mcps,
-        "phases": len(phase_ids or [phase.id for phase in plan.execution_structure.phases]),
+        "phases": 1,
         "parallel_limit": int(plan.constraints.max_parallel),
-        "lane_counts": lane_counts,
+        "task_counts": {
+            "total": len(tasks),
+            "pending": len(pending_tasks),
+            "completed": len([task for task in tasks if task.completed]),
+        },
+        "block_counts": block_counts,
         "orchestrator_defaults": {
             "pre_default_enabled": False,
             "post_default_enabled": True,
         },
-        "task_source_status": task_source_status,
+        "tasks_status": {"status": "ok" if not parse_issues else "issues"},
         "task_parse_issues": parse_issues,
         "task_group_issues": group_issues,
         "recovery_readiness": _git_recovery_readiness(workspace_root),

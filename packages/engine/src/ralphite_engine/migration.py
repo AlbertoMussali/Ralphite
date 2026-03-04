@@ -38,13 +38,14 @@ def _workspace_root_for_plan(path: Path) -> Path:
 
 
 def migrate_plan_file(path: Path, out_dir: Path) -> MigrationResult:
+    del out_dir
     source = path.resolve()
     raw = _load(source)
     if raw is None:
         return MigrationResult(source=source, destination=None, changed=False, warnings=["plan root is not a mapping"])
 
     version = int(raw.get("version", 1))
-    if version != 3:
+    if version != 4:
         return MigrationResult(
             source=source,
             destination=None,
@@ -52,7 +53,10 @@ def migrate_plan_file(path: Path, out_dir: Path) -> MigrationResult:
             warnings=[UNSUPPORTED_VERSION_MESSAGE, "automatic migration has been removed"],
         )
 
-    valid, issues, _summary = validate_plan_content(source.read_text(encoding="utf-8"), workspace_root=_workspace_root_for_plan(source))
+    valid, issues, _summary = validate_plan_content(
+        source.read_text(encoding="utf-8"),
+        workspace_root=_workspace_root_for_plan(source),
+    )
     warnings = [] if valid else [f"validation issue: {issue.get('code')} {issue.get('message')}" for issue in issues]
     return MigrationResult(source=source, destination=None, changed=False, warnings=warnings)
 
@@ -70,7 +74,7 @@ def migrate_plan_in_place(path: Path) -> StrictMigrationResult:
         )
 
     version = int(raw.get("version", 1))
-    if version != 3:
+    if version != 4:
         return StrictMigrationResult(
             source=source,
             changed=False,

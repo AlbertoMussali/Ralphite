@@ -80,24 +80,24 @@ def _doctor_report(orch: LocalOrchestrator) -> bool:
     if not valid_plans:
         ok = False
 
-    task_source_ok = True
+    tasks_ok = True
     task_group_ok = True
     git_ready_ok = True
     for plan in plans:
         valid, _issues, summary = validate_plan_content(plan.read_text(encoding="utf-8"), workspace_root=orch.workspace_root)
         if not valid:
             continue
-        task_status = str(summary.get("task_source_status", {}).get("status", "unknown"))
+        task_status = str(summary.get("tasks_status", {}).get("status", "unknown"))
         if task_status not in {"ok", "issues"}:
-            task_source_ok = False
+            tasks_ok = False
         if summary.get("task_group_issues"):
             task_group_ok = False
         readiness = summary.get("recovery_readiness", {})
         if str(readiness.get("status")) not in {"ready", "dirty", "degraded"}:
             git_ready_ok = False
 
-    table.add_row("task-source", "OK" if task_source_ok else "FAIL", "task_source paths parseable")
-    if not task_source_ok:
+    table.add_row("tasks", "OK" if tasks_ok else "FAIL", "embedded YAML tasks parseable")
+    if not tasks_ok:
         ok = False
 
     table.add_row("task-groups", "OK" if task_group_ok else "FAIL", "parallel_group definitions are consistent")
@@ -435,11 +435,11 @@ def migrate(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
     strict: Annotated[bool, typer.Option("--strict", help="Validate in place and block deprecated/invalid plans")] = False,
 ) -> None:
-    """Migration command is deprecated in v3-only mode."""
+    """Migration command is removed in v4-only mode."""
     del workspace
     del strict
-    console.print("[red]migrate is no longer supported in v3-only mode.[/red]")
-    console.print("Action: create/update plans with version: 3 and parser_version: 3.")
+    console.print("[red]migrate is no longer supported in v4-only mode.[/red]")
+    console.print("Action: create/update plans with version: 4 unified YAML schema.")
     raise typer.Exit(code=1)
 
 
@@ -497,7 +497,7 @@ def _run_release_gate(orch: LocalOrchestrator) -> bool:
 def check(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
     full: Annotated[bool, typer.Option("--full", help="Run full repo test suite")] = False,
-    release_gate: Annotated[bool, typer.Option("--release-gate", help="Run v3 stabilization release gate suites")] = False,
+    release_gate: Annotated[bool, typer.Option("--release-gate", help="Run v4 stabilization release gate suites")] = False,
 ) -> None:
     """Run baseline quality gates for local UX reliability."""
     orch = _orchestrator(workspace)

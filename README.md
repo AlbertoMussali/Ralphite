@@ -1,12 +1,6 @@
 # Ralphite
 
-Ralphite is a terminal-first local orchestration platform for solo builders.
-
-## Product Surface
-
-- `apps/tui`: `ralphite` CLI + multi-screen Textual shell (canonical UX)
-- `packages/engine`: in-process local orchestrator with durable checkpoints and recovery
-- `packages/schemas`: shared plan/event schemas
+Ralphite is a TUI-first local multi-agent runner using a single YAML plan file.
 
 ## Quick Start
 
@@ -14,20 +8,34 @@ Ralphite is a terminal-first local orchestration platform for solo builders.
 
 - Python 3.12+
 - `uv`
+- `git`
+- `rg`
 
-### Install
+### Install (placeholder)
 
 ```bash
 uv sync --all-packages
 ```
 
-### Initialize workspace
+### Initialize
 
 ```bash
 uv run ralphite init --workspace .
 ```
 
-### Run checks
+### Run
+
+```bash
+uv run ralphite run --workspace .
+```
+
+### Open TUI
+
+```bash
+uv run ralphite tui --workspace .
+```
+
+### Quality gates
 
 ```bash
 uv run ralphite doctor --workspace .
@@ -35,94 +43,100 @@ uv run ralphite check --workspace . --full
 uv run ralphite check --workspace . --release-gate
 ```
 
-### Start run
+## Canonical Plan (v4 Only)
 
-```bash
-uv run ralphite run --workspace .
+Ralphite accepts only `version: 4` plans.
+
+```yaml
+version: 4
+plan_id: calculator_cli
+name: Calculator CLI Build
+
+run:
+  pre_orchestrator:
+    enabled: false
+    agent: orchestrator_pre_default
+  post_orchestrator:
+    enabled: true
+    agent: orchestrator_post_default
+
+constraints:
+  max_parallel: 3
+  max_runtime_seconds: 5400
+  max_total_steps: 250
+  max_cost_usd: 25.0
+  fail_fast: true
+
+agents:
+  - id: worker_default
+    role: worker
+    provider: openai
+    model: gpt-4.1
+    tools_allow: [tool:*, mcp:*]
+  - id: orchestrator_pre_default
+    role: orchestrator_pre
+    provider: openai
+    model: gpt-4.1-mini
+  - id: orchestrator_post_default
+    role: orchestrator_post
+    provider: openai
+    model: gpt-4.1-mini
+
+tasks:
+  - id: t1
+    title: Define requirements
+    completed: false
+  - id: t2
+    title: Scaffold project
+    completed: false
+  - id: t3
+    title: Implement parser
+    completed: false
+    parallel_group: 1
+    deps: [t2]
 ```
 
-### Open TUI shell
+## Runtime Semantics
 
-```bash
-uv run ralphite tui --workspace .
-```
+Execution is single-phase and block-based from `tasks` list order:
 
-### Recovery, history, replay
+1. optional pre-orchestrator
+2. sequential block(s): tasks with `parallel_group` missing or `0`
+3. parallel block(s): consecutive tasks sharing same `parallel_group > 0`
+4. optional post-orchestrator
 
-```bash
-uv run ralphite recover --workspace .
-uv run ralphite recover --workspace . --run-id <RUN_ID> --mode manual --preflight-only --no-tui --json
-uv run ralphite recover --workspace . --run-id <RUN_ID> --mode agent_best_effort --prompt "resolve merge conflicts safely" --resume --no-tui --json
-uv run ralphite history --workspace .
-uv run ralphite replay <RUN_ID> --workspace .
-```
+Rules:
 
-### Migration
+- `parallel_group` must be integer `>= 1` when set.
+- group first appearance must be non-decreasing.
+- a group can appear in only one contiguous block.
+- `deps` must reference earlier tasks only.
 
-```bash
-uv run ralphite migrate --workspace . --strict
-```
+## Recovery Contract
 
-`migrate` is deprecated in v3-only mode and exits with guidance.
+`ralphite recover` supports automation:
 
-Ralphite accepts only `version: 3` plans and rejects older plan versions at validation/runtime boundaries.
+- `--preflight-only`
+- `--resume/--no-resume`
+- `--json`
 
-## V3 Execution Model
+Exit codes:
 
-- Task ordering is defined in `RALPHEX_TASK.md` via task metadata (`phase`, `lane`, `parallel_group`, `deps`).
-- Plan files configure phase-level controls only (pre/post orchestrator toggles + constraints).
-- Phase execution order is deterministic: optional pre-orchestrator -> `seq_pre` -> grouped `parallel` -> `seq_post` -> optional post-orchestrator.
-- After successful phase integration, completed tasks are written back to the task file as checked items.
-
-## Recovery Automation Contract
-
-`ralphite recover` supports machine-oriented workflows:
-
-- `--preflight-only`: run recovery readiness checks and exit.
-- `--resume/--no-resume`: explicitly control resume behavior after selecting a mode.
-- `--json`: emit structured JSON payloads for scripts/CI.
-
-Stable exit codes:
-
-- `0`: success
-- `10`: no recoverable run
-- `11`: run not found or unrecoverable
-- `12`: invalid recovery mode/input
-- `13`: recovery preflight failed
-- `14`: recovery still pending (for example `--no-resume` or resume rejected)
-- `15`: run reached terminal failed/cancelled state
-- `16`: internal error/unexpected state
-
-Preflight output includes `checks`, `blocking_reasons`, `conflict_files`, and suggested `next_commands`.
-
-## Release Gate
-
-`ralphite check --release-gate` runs the v3 stabilization suites and fails closed:
-
-- parser/compiler unit tests
-- orchestrator + git/worktree integration tests
-- TUI command/screen tests
-- e2e recovery scenario
-
-CI enforces this gate using the same command.
-
-## Doctor Stale Artifact Policy
-
-`ralphite doctor` reports managed stale artifacts under `.ralphite/worktrees` and managed `ralphite/*` branches by run id.
-
-- default stale threshold: `24` hours
-- stale entries are warnings, with actionable cleanup hints
-- cleanup paths/branches are idempotent and safe to re-run
+- `0` success
+- `10` no recoverable run
+- `11` run not found/unrecoverable
+- `12` invalid input/mode
+- `13` preflight failed
+- `14` recovery pending
+- `15` terminal failed/cancelled
+- `16` internal error
 
 ## Workspace Layout
 
-Ralphite stores local state in `.ralphite/`:
+- `.ralphite/config.toml`
+- `.ralphite/plans/*.yaml` (single source of truth)
+- `.ralphite/runs/<run_id>/`
+- `.ralphite/artifacts/<run_id>/`
+- `.ralphite/worktrees/<run_id>/`
 
-- `.ralphite/config.toml` local policy/profile
-- `.ralphite/plans/` canonical plan files
-- `RALPHEX_TASK.md` canonical task source for `version: 3` plans (or custom `task_source.path`)
-- `.ralphite/worktrees/` temporary worker/integration worktrees for phase execution
-- `.ralphite/runs/<run_id>/run_state.json` persisted run state
-- `.ralphite/runs/<run_id>/checkpoint.json` node-level resume checkpoint
-- `.ralphite/runs/<run_id>/event_log.ndjson` deterministic event journal
-- `.ralphite/artifacts/<run_id>/` output artifacts
+No task sidecar markdown file is required.

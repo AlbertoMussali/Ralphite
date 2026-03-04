@@ -5,10 +5,10 @@ from pathlib import Path
 import yaml
 
 from ralphite_engine import LocalOrchestrator, seed_starter_if_missing, validate_plan_content
-from ralphite_engine.templates import dump_yaml, make_starter_plan, make_starter_task_markdown
+from ralphite_engine.templates import dump_yaml, make_starter_plan
 
 
-def test_seed_starter_creates_v3_when_only_legacy_plan_exists(tmp_path: Path) -> None:
+def test_seed_starter_creates_v4_when_only_legacy_plan_exists(tmp_path: Path) -> None:
     plans_dir = tmp_path / ".ralphite" / "plans"
     plans_dir.mkdir(parents=True, exist_ok=True)
     legacy = {
@@ -22,17 +22,17 @@ def test_seed_starter_creates_v3_when_only_legacy_plan_exists(tmp_path: Path) ->
 
     assert seeded is not None
     assert seeded.exists()
-    valid, issues, _summary = validate_plan_content(seeded.read_text(encoding="utf-8"), workspace_root=tmp_path)
+    valid, issues, summary = validate_plan_content(seeded.read_text(encoding="utf-8"), workspace_root=tmp_path)
     assert valid is True, issues
+    assert summary.get("version") == 4
 
 
-def test_orchestrator_prefers_parseable_v3_default_plan(tmp_path: Path) -> None:
+def test_orchestrator_prefers_parseable_v4_default_plan(tmp_path: Path) -> None:
     plans_dir = tmp_path / ".ralphite" / "plans"
     plans_dir.mkdir(parents=True, exist_ok=True)
-    (tmp_path / "RALPHEX_TASK.md").write_text(make_starter_task_markdown(), encoding="utf-8")
 
-    v3_plan = make_starter_plan()
-    (plans_dir / "valid-v3.yaml").write_text(dump_yaml(v3_plan), encoding="utf-8")
+    v4_plan = make_starter_plan()
+    (plans_dir / "valid-v4.yaml").write_text(dump_yaml(v4_plan), encoding="utf-8")
     (plans_dir / "sample.yaml").write_text(
         yaml.safe_dump({"version": 1, "plan_id": "legacy", "name": "legacy"}, sort_keys=False),
         encoding="utf-8",

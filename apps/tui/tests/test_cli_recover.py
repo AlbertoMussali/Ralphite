@@ -15,14 +15,17 @@ from ralphite_tui.cli import (
 
 def _plan_content() -> str:
     return """
-version: 3
+version: 4
 plan_id: cli_recovery
 name: cli_recovery
-task_source:
-  kind: markdown_checklist
-  path: RALPHEX_TASK.md
-  parser_version: 3
-agent_profiles:
+run:
+  pre_orchestrator:
+    enabled: false
+    agent: orchestrator_pre_default
+  post_orchestrator:
+    enabled: true
+    agent: orchestrator_post_default
+agents:
   - id: worker_default
     role: worker
     provider: openai
@@ -36,15 +39,10 @@ agent_profiles:
     role: orchestrator_post
     provider: openai
     model: gpt-4.1-mini
-execution_structure:
-  phases:
-    - id: phase-1
-      pre_orchestrator:
-        enabled: false
-        agent_profile_id: orchestrator_pre_default
-      post_orchestrator:
-        enabled: true
-        agent_profile_id: orchestrator_post_default
+tasks:
+  - id: t1
+    title: Build
+    completed: false
 """
 
 
@@ -61,16 +59,6 @@ def test_cli_recover_returns_invalid_mode_code(tmp_path: Path) -> None:
 
 
 def test_cli_recover_preflight_only_success(tmp_path: Path) -> None:
-    (tmp_path / "RALPHEX_TASK.md").write_text(
-        "\n".join(
-            [
-                "# Tasks",
-                "- [ ] Build <!-- id:t1 phase:phase-1 lane:parallel agent_profile:worker_default -->",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
     orch = LocalOrchestrator(tmp_path)
     marker = tmp_path / ".ralphite" / "force_merge_conflict"
     marker.write_text("phase-1", encoding="utf-8")

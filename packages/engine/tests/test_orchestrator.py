@@ -5,6 +5,88 @@ from pathlib import Path
 from ralphite_engine import LocalOrchestrator
 
 
+def _plan_content() -> str:
+    return """
+version: 4
+plan_id: v4_orch
+name: v4_orch
+run:
+  pre_orchestrator:
+    enabled: false
+    agent: orchestrator_pre_default
+  post_orchestrator:
+    enabled: true
+    agent: orchestrator_post_default
+constraints:
+  max_parallel: 2
+agents:
+  - id: worker_default
+    role: worker
+    provider: openai
+    model: gpt-4.1-mini
+    tools_allow: [tool:*]
+  - id: orchestrator_pre_default
+    role: orchestrator_pre
+    provider: openai
+    model: gpt-4.1-mini
+  - id: orchestrator_post_default
+    role: orchestrator_post
+    provider: openai
+    model: gpt-4.1-mini
+tasks:
+  - id: t1
+    title: Plan
+    completed: false
+  - id: t2
+    title: Build A
+    completed: false
+    parallel_group: 1
+    deps: [t1]
+  - id: t3
+    title: Build B
+    completed: false
+    parallel_group: 1
+    deps: [t1]
+  - id: t4
+    title: Verify
+    completed: false
+    deps: [t2, t3]
+"""
+
+
+def _conflict_plan_content() -> str:
+    return """
+version: 4
+plan_id: v4_recovery
+name: v4_recovery
+run:
+  pre_orchestrator:
+    enabled: false
+    agent: orchestrator_pre_default
+  post_orchestrator:
+    enabled: true
+    agent: orchestrator_post_default
+agents:
+  - id: worker_default
+    role: worker
+    provider: openai
+    model: gpt-4.1-mini
+    tools_allow: [tool:*]
+  - id: orchestrator_pre_default
+    role: orchestrator_pre
+    provider: openai
+    model: gpt-4.1-mini
+  - id: orchestrator_post_default
+    role: orchestrator_post
+    provider: openai
+    model: gpt-4.1-mini
+tasks:
+  - id: t1
+    title: Build
+    completed: false
+"""
+
+
 def test_goal_plan_run_succeeds(tmp_path: Path) -> None:
     orch = LocalOrchestrator(tmp_path)
     plan_path = orch.goal_to_plan("Create a simple test artifact")
@@ -33,55 +115,9 @@ def test_cancel_run(tmp_path: Path) -> None:
     assert any(evt["event"] in {"RUN_CANCEL_REQUESTED", "RUN_DONE"} for evt in events)
 
 
-def test_v3_plan_executes_with_phase_events(tmp_path: Path) -> None:
-    (tmp_path / "RALPHEX_TASK.md").write_text(
-        "\n".join(
-            [
-                "# Tasks",
-                "- [ ] Plan <!-- id:t1 phase:phase-1 lane:seq_pre agent_profile:worker_default -->",
-                "- [ ] Build A <!-- id:t2 phase:phase-1 lane:parallel deps:t1 agent_profile:worker_default -->",
-                "- [ ] Build B <!-- id:t3 phase:phase-1 lane:parallel deps:t1 agent_profile:worker_default -->",
-                "- [ ] Verify <!-- id:t4 phase:phase-1 lane:seq_post deps:t2,t3 agent_profile:worker_default -->",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    plan_content = """
-version: 3
-plan_id: v3_orch
-name: v3_orch
-task_source:
-  kind: markdown_checklist
-  path: RALPHEX_TASK.md
-  parser_version: 3
-agent_profiles:
-  - id: worker_default
-    role: worker
-    provider: openai
-    model: gpt-4.1-mini
-    tools_allow: [tool:*]
-  - id: orchestrator_pre_default
-    role: orchestrator_pre
-    provider: openai
-    model: gpt-4.1-mini
-  - id: orchestrator_post_default
-    role: orchestrator_post
-    provider: openai
-    model: gpt-4.1-mini
-execution_structure:
-  phases:
-    - id: phase-1
-      pre_orchestrator:
-        enabled: false
-        agent_profile_id: orchestrator_pre_default
-      post_orchestrator:
-        enabled: true
-        agent_profile_id: orchestrator_post_default
-constraints:
-  max_parallel: 2
-"""
+def test_v4_plan_executes_with_phase_events(tmp_path: Path) -> None:
     orch = LocalOrchestrator(tmp_path)
-    run_id = orch.start_run(plan_content=plan_content)
+    run_id = orch.start_run(plan_content=_plan_content())
     events = list(orch.stream_events(run_id))
     names = [event["event"] for event in events]
 
@@ -95,50 +131,9 @@ constraints:
 
 
 def test_conflict_triggers_recovery_and_abort_mode(tmp_path: Path) -> None:
-    (tmp_path / "RALPHEX_TASK.md").write_text(
-        "\n".join(
-            [
-                "# Tasks",
-                "- [ ] Build <!-- id:t1 phase:phase-1 lane:parallel agent_profile:worker_default -->",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    plan_content = """
-version: 3
-plan_id: v3_recovery
-name: v3_recovery
-task_source:
-  kind: markdown_checklist
-  path: RALPHEX_TASK.md
-  parser_version: 3
-agent_profiles:
-  - id: worker_default
-    role: worker
-    provider: openai
-    model: gpt-4.1-mini
-    tools_allow: [tool:*]
-  - id: orchestrator_pre_default
-    role: orchestrator_pre
-    provider: openai
-    model: gpt-4.1-mini
-  - id: orchestrator_post_default
-    role: orchestrator_post
-    provider: openai
-    model: gpt-4.1-mini
-execution_structure:
-  phases:
-    - id: phase-1
-      pre_orchestrator:
-        enabled: false
-        agent_profile_id: orchestrator_pre_default
-      post_orchestrator:
-        enabled: true
-        agent_profile_id: orchestrator_post_default
-"""
     orch = LocalOrchestrator(tmp_path)
     (tmp_path / ".ralphite" / "force_merge_conflict").write_text("phase-1", encoding="utf-8")
-    run_id = orch.start_run(plan_content=plan_content)
+    run_id = orch.start_run(plan_content=_conflict_plan_content())
     assert orch.wait_for_run(run_id, timeout=8.0) is True
     run = orch.get_run(run_id)
     assert run is not None

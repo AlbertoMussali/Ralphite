@@ -17,7 +17,7 @@ def versioned_filename(plan_id: str, hint: str | None = None) -> str:
     return f"{_slug(hint or plan_id)}.{ts}.yaml"
 
 
-def make_starter_task_markdown(goal: str | None = None) -> str:
+def make_starter_plan(goal: str | None = None) -> dict:
     plan_task = "Decompose the objective into executable steps."
     execute_task = "Implement the planned tasks and update project artifacts."
     verify_task = "Validate outcomes and summarize decisions."
@@ -26,21 +26,8 @@ def make_starter_task_markdown(goal: str | None = None) -> str:
         execute_task = f"Execute objective: {goal}"
         verify_task = f"Verify objective outcome: {goal}"
 
-    return "\n".join(
-        [
-            "# Ralphite Tasks",
-            "",
-            f"- [ ] {plan_task} <!-- id:task_plan phase:phase-1 lane:seq_pre agent_profile:worker_default -->",
-            f"- [ ] {execute_task} <!-- id:task_execute phase:phase-1 lane:parallel deps:task_plan agent_profile:worker_default -->",
-            f"- [ ] {verify_task} <!-- id:task_verify phase:phase-1 lane:seq_post deps:task_execute agent_profile:worker_default -->",
-            "",
-        ]
-    )
-
-
-def make_starter_plan() -> dict:
     return {
-        "version": 3,
+        "version": 4,
         "plan_id": "starter_block",
         "name": "Starter Block",
         "materials": {
@@ -52,12 +39,18 @@ def make_starter_plan() -> dict:
             "includes": [],
             "uploads": [],
         },
-        "task_source": {
-            "kind": "markdown_checklist",
-            "path": "RALPHEX_TASK.md",
-            "parser_version": 3,
+        "run": {
+            "pre_orchestrator": {"enabled": False, "agent": "orchestrator_pre_default"},
+            "post_orchestrator": {"enabled": True, "agent": "orchestrator_post_default"},
         },
-        "agent_profiles": [
+        "constraints": {
+            "max_runtime_seconds": 3600,
+            "max_total_steps": 120,
+            "max_cost_usd": 10.0,
+            "fail_fast": True,
+            "max_parallel": 3,
+        },
+        "agents": [
             {
                 "id": "worker_default",
                 "role": "worker",
@@ -73,7 +66,7 @@ def make_starter_plan() -> dict:
                 "model": "gpt-4.1-mini",
                 "system_prompt": (
                     "You are the pre-orchestrator. Validate order/dependencies, workspace readiness, "
-                    "and how workers should execute in seq_pre -> parallel -> seq_post order."
+                    "and how workers should execute by source task order and parallel groups."
                 ),
                 "tools_allow": ["tool:*", "mcp:*"],
             },
@@ -89,29 +82,11 @@ def make_starter_plan() -> dict:
                 "tools_allow": ["tool:*", "mcp:*"],
             },
         ],
-        "execution_structure": {
-            "phases": [
-                {
-                    "id": "phase-1",
-                    "label": "Default Phase",
-                    "pre_orchestrator": {
-                        "enabled": False,
-                        "agent_profile_id": "orchestrator_pre_default",
-                    },
-                    "post_orchestrator": {
-                        "enabled": True,
-                        "agent_profile_id": "orchestrator_post_default",
-                    },
-                }
-            ]
-        },
-        "constraints": {
-            "max_runtime_seconds": 3600,
-            "max_total_steps": 120,
-            "max_cost_usd": 10.0,
-            "fail_fast": True,
-            "max_parallel": 3,
-        },
+        "tasks": [
+            {"id": "task_plan", "title": plan_task, "completed": False},
+            {"id": "task_execute", "title": execute_task, "completed": False, "deps": ["task_plan"], "parallel_group": 1},
+            {"id": "task_verify", "title": verify_task, "completed": False, "deps": ["task_execute"]},
+        ],
         "outputs": {
             "required_artifacts": [
                 {"id": "final_report", "format": "markdown"},
@@ -122,7 +97,7 @@ def make_starter_plan() -> dict:
 
 
 def make_goal_plan(goal: str) -> dict:
-    plan = make_starter_plan()
+    plan = make_starter_plan(goal)
     plan["plan_id"] = _slug(goal[:50], "goal-plan")
     plan["name"] = f"Goal Plan: {goal[:48]}"
     return plan
@@ -132,7 +107,7 @@ def dump_yaml(plan: dict) -> str:
     return yaml.safe_dump(plan, sort_keys=False, allow_unicode=False)
 
 
-def _is_v3_plan_file(path: Path) -> bool:
+def _is_v4_plan_file(path: Path) -> bool:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     except Exception:
@@ -140,7 +115,7 @@ def _is_v3_plan_file(path: Path) -> bool:
     if not isinstance(raw, dict):
         return False
     try:
-        return int(raw.get("version", 1)) == 3
+        return int(raw.get("version", 1)) == 4
     except (TypeError, ValueError):
         return False
 
@@ -149,19 +124,14 @@ def _starter_target_path(plans_dir: Path) -> Path:
     default = plans_dir / "starter_block.yaml"
     if not default.exists():
         return default
-    return plans_dir / "starter_block.v3.yaml"
+    return plans_dir / "starter_block.v4.yaml"
 
 
 def seed_starter_if_missing(plans_dir: Path) -> Path | None:
     plans_dir.mkdir(parents=True, exist_ok=True)
     existing = [p for p in plans_dir.iterdir() if p.is_file() and p.suffix.lower() in {".yaml", ".yml"}]
-    workspace_root = plans_dir.parent.parent
-    task_file = workspace_root / "RALPHEX_TASK.md"
-    if not task_file.exists():
-        task_file.write_text(make_starter_task_markdown(), encoding="utf-8")
 
-    # Keep user-provided plans, but ensure at least one v3 starter exists.
-    if existing and any(_is_v3_plan_file(path) for path in existing):
+    if existing and any(_is_v4_plan_file(path) for path in existing):
         return None
 
     path = _starter_target_path(plans_dir)

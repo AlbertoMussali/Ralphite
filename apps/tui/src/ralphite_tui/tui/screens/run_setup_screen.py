@@ -8,9 +8,9 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, DataTable, Static
 import yaml
 
-from ralphite_engine.task_parser import ParsedTask, parse_task_file
+from ralphite_engine.task_parser import ParsedTask, parse_plan_tasks
 from ralphite_engine.templates import versioned_filename
-from ralphite_engine.validation import parse_plan_yaml, resolve_task_source_path, validate_plan_content
+from ralphite_engine.validation import parse_plan_yaml, validate_plan_content
 
 if TYPE_CHECKING:
     from ralphite_tui.tui.app_shell import AppShell
@@ -35,12 +35,12 @@ class RunSetupScreen(Vertical):
       height: 8;
       margin-bottom: 1;
     }
-    #setup-phases {
-      height: 8;
+    #setup-run {
+      height: 6;
       margin-bottom: 1;
     }
     #setup-tasks {
-      height: 12;
+      height: 14;
       margin-bottom: 1;
     }
     #setup-validation {
@@ -57,40 +57,37 @@ class RunSetupScreen(Vertical):
         self._loaded_plan_data: dict[str, Any] | None = None
         self._tasks: list[ParsedTask] = []
         self._task_parse_issues: list[str] = []
-        self._task_source_path: Path | None = None
 
     @property
     def shell(self) -> "AppShell":
         return self.app  # type: ignore[return-value]
 
     def compose(self) -> ComposeResult:
-        yield Static("Run Setup (Task-Driven)", id="setup-status")
+        yield Static("Run Setup (Unified YAML v4)", id="setup-status")
         with Horizontal(id="setup-controls"):
             yield Button("Refresh", id="refresh")
             yield Button("Load Selected", id="load-selected", variant="primary")
-            yield Button("Add Phase", id="add-phase")
             yield Button("Toggle Pre", id="toggle-pre")
             yield Button("Toggle Post", id="toggle-post")
             yield Button("MaxParallel -", id="max-parallel-dec")
             yield Button("MaxParallel +", id="max-parallel-inc")
-            yield Button("Task File Hint", id="task-file-hint")
             yield Button("Validate", id="validate")
             yield Button("Save Revision", id="save-revision", variant="success")
             yield Button("Start", id="start-selected", variant="success")
 
         plans = DataTable(id="setup-plans")
-        plans.add_columns("Plan", "Valid", "Phases", "Task Source", "MaxParallel")
+        plans.add_columns("Plan", "Valid", "Tasks", "Pending", "Parallel", "MaxParallel")
         yield plans
 
-        phases = DataTable(id="setup-phases")
-        phases.add_columns("Phase", "Pre", "Post")
-        yield phases
+        run_table = DataTable(id="setup-run")
+        run_table.add_columns("Control", "Value")
+        yield run_table
 
         tasks = DataTable(id="setup-tasks")
-        tasks.add_columns("Task", "Phase", "Lane", "Group", "Deps", "Profile", "Done", "Line")
+        tasks.add_columns("Task", "Done", "Parallel Group", "Deps", "Agent", "Order")
         yield tasks
 
-        yield Static("Load a plan to preview task-driven execution and controls.", id="setup-validation")
+        yield Static("Load a plan to edit run controls and preview task blocks.", id="setup-validation")
 
     def on_mount(self) -> None:
         self._refresh_plans()
@@ -101,8 +98,8 @@ class RunSetupScreen(Vertical):
     def _plans_table(self) -> DataTable:
         return self.query_one("#setup-plans", DataTable)
 
-    def _phases_table(self) -> DataTable:
-        return self.query_one("#setup-phases", DataTable)
+    def _run_table(self) -> DataTable:
+        return self.query_one("#setup-run", DataTable)
 
     def _tasks_table(self) -> DataTable:
         return self.query_one("#setup-tasks", DataTable)
@@ -116,61 +113,6 @@ class RunSetupScreen(Vertical):
         if row_index is None or row_index < 0 or row_index >= len(self._plans):
             return None
         return self._plans[row_index]
-
-    def _selected_phase_index(self) -> int | None:
-        table = self._phases_table()
-        row = table.cursor_row
-        if row is None or row < 0:
-            return None
-        return row
-
-    def _current_phase_rows(self) -> list[dict[str, Any]]:
-        if not self._loaded_plan_data:
-            return []
-        structure = self._loaded_plan_data.get("execution_structure", {})
-        if not isinstance(structure, dict):
-            return []
-        phases = structure.get("phases", [])
-        if not isinstance(phases, list):
-            return []
-        out: list[dict[str, Any]] = []
-        for phase in phases:
-            if isinstance(phase, dict):
-                out.append(phase)
-        return out
-
-    def _render_editor_tables(self) -> None:
-        phases_table = self._phases_table()
-        tasks_table = self._tasks_table()
-        phases_table.clear()
-        tasks_table.clear()
-
-        phase_rows = self._current_phase_rows()
-        for phase in phase_rows:
-            pre = phase.get("pre_orchestrator", {}) if isinstance(phase.get("pre_orchestrator"), dict) else {}
-            post = phase.get("post_orchestrator", {}) if isinstance(phase.get("post_orchestrator"), dict) else {}
-            phases_table.add_row(
-                str(phase.get("id", "")),
-                "on" if bool(pre.get("enabled", False)) else "off",
-                "on" if bool(post.get("enabled", False)) else "off",
-            )
-
-        for task in sorted(self._tasks, key=lambda row: row.line_no):
-            tasks_table.add_row(
-                task.id,
-                task.phase,
-                task.lane,
-                str(task.parallel_group or "-"),
-                ",".join(task.depends_on) or "-",
-                task.agent_profile,
-                "yes" if task.completed else "no",
-                str(task.line_no),
-            )
-
-        if phase_rows:
-            phases_table.move_cursor(row=min(self._selected_phase_index() or 0, len(phase_rows) - 1), column=0)
-        if self._tasks:
-            tasks_table.move_cursor(row=0, column=0)
 
     def _refresh_plans(self) -> None:
         self._plans = self.shell.orchestrator.list_plans()
@@ -186,40 +128,75 @@ class RunSetupScreen(Vertical):
                 plan_path.read_text(encoding="utf-8"),
                 workspace_root=self.shell.orchestrator.workspace_root,
             )
-            task_source = str(summary.get("task_source_status", {}).get("path", "-"))
+            task_counts = summary.get("task_counts", {})
+            block_counts = summary.get("block_counts", {})
             table.add_row(
                 plan_path.name,
                 "yes" if valid else "no",
-                str(summary.get("phases", "-")),
-                task_source,
+                str(task_counts.get("total", "-")),
+                str(task_counts.get("pending", "-")),
+                str(block_counts.get("parallel", "-")),
                 str(summary.get("parallel_limit", "-")),
             )
 
         table.move_cursor(row=0, column=0)
-        self._status().update(f"{len(self._plans)} plan(s) discovered. Load one to configure phase controls.")
+        self._status().update(f"{len(self._plans)} plan(s) discovered. Load one to configure run controls.")
+
+    def _render_editor_tables(self) -> None:
+        run_table = self._run_table()
+        tasks_table = self._tasks_table()
+        run_table.clear()
+        tasks_table.clear()
+
+        if not self._loaded_plan_data:
+            return
+
+        run_cfg = self._loaded_plan_data.get("run") if isinstance(self._loaded_plan_data.get("run"), dict) else {}
+        constraints = (
+            self._loaded_plan_data.get("constraints") if isinstance(self._loaded_plan_data.get("constraints"), dict) else {}
+        )
+
+        pre = run_cfg.get("pre_orchestrator") if isinstance(run_cfg.get("pre_orchestrator"), dict) else {}
+        post = run_cfg.get("post_orchestrator") if isinstance(run_cfg.get("post_orchestrator"), dict) else {}
+
+        run_table.add_row("Pre orchestrator", "on" if bool(pre.get("enabled", False)) else "off")
+        run_table.add_row("Pre agent", str(pre.get("agent", "-")))
+        run_table.add_row("Post orchestrator", "on" if bool(post.get("enabled", True)) else "off")
+        run_table.add_row("Post agent", str(post.get("agent", "-")))
+        run_table.add_row("Max parallel", str(constraints.get("max_parallel", 1)))
+
+        for idx, task in enumerate(self._tasks, start=1):
+            tasks_table.add_row(
+                task.id,
+                "yes" if task.completed else "no",
+                str(task.parallel_group),
+                ",".join(task.depends_on) or "-",
+                task.agent_profile,
+                str(idx),
+            )
+
+        if self._tasks:
+            tasks_table.move_cursor(row=0, column=0)
+        run_table.move_cursor(row=0, column=0)
 
     def _refresh_validation(self) -> None:
         if not self._loaded_plan_data:
-            self._validation().update("Load a plan to validate task source and execution structure.")
+            self._validation().update("Load a plan to validate unified YAML tasks/run/agents.")
             return
 
         content = yaml.safe_dump(self._loaded_plan_data, sort_keys=False, allow_unicode=False)
         valid, issues, summary = validate_plan_content(content, workspace_root=self.shell.orchestrator.workspace_root)
-        max_parallel = (
-            self._loaded_plan_data.get("constraints", {}).get("max_parallel", "-")
-            if isinstance(self._loaded_plan_data.get("constraints"), dict)
-            else "-"
-        )
+        task_counts = summary.get("task_counts", {})
+        block_counts = summary.get("block_counts", {})
+
         lines = [
             f"Plan: {summary.get('plan_id', '-')}",
             f"Valid: {'yes' if valid else 'no'}",
-            f"Phases: {summary.get('phases', '-')}",
-            f"MaxParallel: {max_parallel}",
-            f"Task source: {summary.get('task_source_status', {})}",
-            f"Lane counts: {summary.get('lane_counts', {})}",
+            f"Tasks: total={task_counts.get('total', '-')} pending={task_counts.get('pending', '-')}",
+            f"Blocks: sequential={block_counts.get('sequential', '-')} parallel={block_counts.get('parallel', '-')}",
+            f"MaxParallel: {summary.get('parallel_limit', '-')}",
+            f"Task status: {summary.get('tasks_status', {})}",
         ]
-        if self._task_source_path:
-            lines.append(f"Task file: {self._task_source_path}")
         if self._task_parse_issues:
             lines.append("Task parse issues:")
             lines.extend([f"- {item}" for item in self._task_parse_issues])
@@ -234,44 +211,25 @@ class RunSetupScreen(Vertical):
         self._loaded_plan_data = plan_model.model_dump(mode="json")
         self._loaded_plan_path = path
 
-        task_path = resolve_task_source_path(plan_model.task_source.path, self.shell.orchestrator.workspace_root)
-        tasks, parse_issues = parse_task_file(task_path)
-        self._task_source_path = task_path
+        tasks, parse_issues = parse_plan_tasks(plan_model)
         self._tasks = tasks
         self._task_parse_issues = parse_issues
 
         self._render_editor_tables()
         self._refresh_validation()
-        self._status().update(f"Loaded plan {path.name}. Edit phase controls only; tasks are file-defined.")
+        self._status().update(f"Loaded plan {path.name}. Task order is read-only and defined in tasks list.")
 
     def _toggle_orchestrator(self, key: str) -> None:
-        phases = self._current_phase_rows()
-        idx = self._selected_phase_index()
-        if idx is None or idx >= len(phases):
+        if not self._loaded_plan_data:
             return
-        block = phases[idx].get(key)
+        run_cfg = self._loaded_plan_data.get("run")
+        if not isinstance(run_cfg, dict):
+            run_cfg = {}
+            self._loaded_plan_data["run"] = run_cfg
+        block = run_cfg.get(key)
         if not isinstance(block, dict):
             return
         block["enabled"] = not bool(block.get("enabled", False))
-        self._render_editor_tables()
-        self._refresh_validation()
-
-    def _add_phase(self) -> None:
-        if not self._loaded_plan_data:
-            return
-        phases = self._current_phase_rows()
-        existing = {str(phase.get("id", "")) for phase in phases}
-        candidate = 1
-        while f"phase-{candidate}" in existing:
-            candidate += 1
-        phases.append(
-            {
-                "id": f"phase-{candidate}",
-                "label": f"Phase {candidate}",
-                "pre_orchestrator": {"enabled": False, "agent_profile_id": "orchestrator_pre_default"},
-                "post_orchestrator": {"enabled": True, "agent_profile_id": "orchestrator_post_default"},
-            }
-        )
         self._render_editor_tables()
         self._refresh_validation()
 
@@ -284,6 +242,7 @@ class RunSetupScreen(Vertical):
             self._loaded_plan_data["constraints"] = constraints
         current = int(constraints.get("max_parallel", 3) or 3)
         constraints["max_parallel"] = max(1, current + delta)
+        self._render_editor_tables()
         self._refresh_validation()
 
     def _save_revision(self) -> Path | None:
@@ -318,9 +277,6 @@ class RunSetupScreen(Vertical):
                 return
             self._load_plan(selected)
             return
-        if button == "add-phase":
-            self._add_phase()
-            return
         if button == "toggle-pre":
             self._toggle_orchestrator("pre_orchestrator")
             return
@@ -332,12 +288,6 @@ class RunSetupScreen(Vertical):
             return
         if button == "max-parallel-inc":
             self._change_max_parallel(1)
-            return
-        if button == "task-file-hint":
-            if self._task_source_path:
-                self._status().update(f"Edit task file directly: {self._task_source_path}")
-            else:
-                self._status().update("Load a plan first to view task file path.")
             return
         if button == "validate":
             self._refresh_validation()

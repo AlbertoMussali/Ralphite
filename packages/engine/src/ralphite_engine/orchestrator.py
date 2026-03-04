@@ -20,21 +20,21 @@ from ralphite_engine.recovery import recoverable_run_ids, to_paused_for_recovery
 from ralphite_engine.run_store import RunStore
 from ralphite_engine.store import HistoryStore
 from ralphite_engine.structure_compiler import RuntimeExecutionPlan, RuntimeNodeSpec, compile_execution_structure
-from ralphite_engine.task_parser import parse_task_file
+from ralphite_engine.task_parser import parse_plan_tasks
 from ralphite_engine.task_writer import mark_tasks_completed
 from ralphite_engine.taxonomy import classify_failure
 from ralphite_engine.templates import make_goal_plan, seed_starter_if_missing
-from ralphite_engine.validation import parse_plan_yaml, resolve_task_source_path, validate_plan_content
-from ralphite_schemas.plan_v3 import AgentProfileSpec, PlanSpecV3
+from ralphite_engine.validation import parse_plan_yaml, validate_plan_content
+from ralphite_schemas.plan_v4 import AgentSpec, PlanSpecV4
 from ralphite_schemas.validation import compile_plan
 
 
 @dataclass
 class RuntimeHandle:
     run: RunViewState
-    plan: PlanSpecV3
+    plan: PlanSpecV4
     runtime: RuntimeExecutionPlan
-    profile_map: dict[str, AgentProfileSpec]
+    profile_map: dict[str, AgentSpec]
     permission_snapshot: dict[str, list[str]]
     event_queue: Queue[dict[str, Any]] = field(default_factory=Queue)
     pause_event: threading.Event = field(default_factory=threading.Event)
@@ -116,7 +116,7 @@ class LocalOrchestrator:
         if not plans:
             raise FileNotFoundError("no plans found in .ralphite/plans")
 
-        # Prefer a parseable v3 plan, so legacy files don't break default runs.
+        # Prefer the newest parseable v4 plan.
         for candidate in plans:
             try:
                 parse_plan_yaml(candidate.read_text(encoding="utf-8"))
@@ -127,13 +127,9 @@ class LocalOrchestrator:
 
     def goal_to_plan(self, goal: str, filename_hint: str = "goal") -> Path:
         plan = make_goal_plan(goal)
-        from ralphite_engine.templates import dump_yaml, make_starter_task_markdown, versioned_filename
+        from ralphite_engine.templates import dump_yaml, versioned_filename
 
         filename = versioned_filename(plan["plan_id"], filename_hint)
-        task_filename = f"{Path(filename).stem}.tasks.md"
-        task_path = self.paths["plans"] / task_filename
-        task_path.write_text(make_starter_task_markdown(goal), encoding="utf-8")
-        plan["task_source"]["path"] = str(task_path.relative_to(self.workspace_root)).replace("\\", "/")
         path = self.paths["plans"] / filename
         path.write_text(dump_yaml(plan), encoding="utf-8")
         return path
@@ -154,20 +150,24 @@ class LocalOrchestrator:
                 parallel_group_map[node.id] = int(node.parallel_group)
 
         return {
-            "plan_version": 3,
+            "plan_version": 4,
             "lane_map": lane_map,
             "phase_map": phase_map,
             "role_map": role_map,
             "phase_nodes": dict(phase_nodes),
             "parallel_limit": int(runtime.parallel_limit),
             "parallel_group_map": parallel_group_map,
-            "phase_parallel_groups": {
-                phase.phase_id: [
-                    {"group_id": group.group_id, "node_ids": list(group.node_ids), "task_ids": list(group.task_ids)}
-                    for group in phase.parallel_groups
-                ]
-                for phase in runtime.phase_plans
-            },
+            "task_blocks": [
+                {
+                    "index": block.index,
+                    "kind": block.kind,
+                    "parallel_group": block.parallel_group,
+                    "node_ids": list(block.node_ids),
+                    "task_ids": list(block.task_ids),
+                }
+                for block in runtime.blocks
+            ],
+            "task_order_map": {node.id: node.block_index for node in runtime.nodes},
             "task_parse_issues": list(runtime.task_parse_issues),
             "recovery": {
                 "status": "none",
@@ -178,13 +178,12 @@ class LocalOrchestrator:
             },
         }
 
-    def _materialize_runtime_plan(self, plan: PlanSpecV3) -> tuple[RuntimeExecutionPlan, dict[str, Any]]:
-        task_file = resolve_task_source_path(plan.task_source.path, self.workspace_root)
-        tasks, parse_issues = parse_task_file(task_file)
+    def _materialize_runtime_plan(self, plan: PlanSpecV4) -> tuple[RuntimeExecutionPlan, dict[str, Any]]:
+        tasks, parse_issues = parse_plan_tasks(plan)
         runtime, compile_issues = compile_execution_structure(plan, tasks, task_parse_issues=parse_issues)
         if runtime is None or compile_issues:
             details = [
-                {"code": "execution_structure.invalid", "message": issue, "path": "execution_structure"}
+                {"code": "tasks.block_model.invalid", "message": issue, "path": "tasks"}
                 for issue in compile_issues
             ]
             raise ValueError(f"validation_error: {json.dumps(details)}")
@@ -195,8 +194,8 @@ class LocalOrchestrator:
             path = self._resolve_plan_path(plan_ref)
             plan_content = path.read_text(encoding="utf-8")
         plan = parse_plan_yaml(plan_content)
-        tools = sorted({item for profile in plan.agent_profiles for item in profile.tools_allow if item.startswith("tool:")})
-        mcps = sorted({item for profile in plan.agent_profiles for item in profile.tools_allow if item.startswith("mcp:")})
+        tools = sorted({item for profile in plan.agents for item in profile.tools_allow if item.startswith("tool:")})
+        mcps = sorted({item for profile in plan.agents for item in profile.tools_allow if item.startswith("mcp:")})
         return {"tools": tools, "mcps": mcps}
 
     def _persist_runtime_state(self, handle: RuntimeHandle, status: str) -> None:
@@ -251,7 +250,7 @@ class LocalOrchestrator:
         compile_plan(plan_document)
         runtime, runtime_meta = self._materialize_runtime_plan(plan_document)
 
-        profile_map = {profile.id: profile for profile in plan_document.agent_profiles}
+        profile_map = {profile.id: profile for profile in plan_document.agents}
         nodes = {
             node.id: NodeRuntimeState(
                 node_id=node.id,
@@ -396,19 +395,7 @@ class LocalOrchestrator:
         compile_plan(plan_document)
         runtime, runtime_meta = self._materialize_runtime_plan(plan_document)
 
-        run.metadata.setdefault("plan_version", runtime_meta.get("plan_version", 3))
-        if "parallel_limit" not in run.metadata and "v2_parallel_limit" in run.metadata:
-            run.metadata["parallel_limit"] = run.metadata.get("v2_parallel_limit")
-        if "lane_map" not in run.metadata and "v2_lane_map" in run.metadata:
-            run.metadata["lane_map"] = run.metadata.get("v2_lane_map")
-        if "phase_map" not in run.metadata and "v2_phase_map" in run.metadata:
-            run.metadata["phase_map"] = run.metadata.get("v2_phase_map")
-        if "role_map" not in run.metadata and "v2_role_map" in run.metadata:
-            run.metadata["role_map"] = run.metadata.get("v2_role_map")
-        if "phase_nodes" not in run.metadata and "v2_phase_nodes" in run.metadata:
-            run.metadata["phase_nodes"] = run.metadata.get("v2_phase_nodes")
-        if "phase_done" not in run.metadata and "v2_phase_done" in run.metadata:
-            run.metadata["phase_done"] = run.metadata.get("v2_phase_done")
+        run.metadata.setdefault("plan_version", runtime_meta.get("plan_version", 4))
 
         run.metadata.setdefault("parallel_limit", runtime_meta.get("parallel_limit", 1))
         run.metadata.setdefault("lane_map", runtime_meta.get("lane_map", {}))
@@ -416,7 +403,8 @@ class LocalOrchestrator:
         run.metadata.setdefault("role_map", runtime_meta.get("role_map", {}))
         run.metadata.setdefault("phase_nodes", runtime_meta.get("phase_nodes", {}))
         run.metadata.setdefault("parallel_group_map", runtime_meta.get("parallel_group_map", {}))
-        run.metadata.setdefault("phase_parallel_groups", runtime_meta.get("phase_parallel_groups", {}))
+        run.metadata.setdefault("task_blocks", runtime_meta.get("task_blocks", []))
+        run.metadata.setdefault("task_order_map", runtime_meta.get("task_order_map", {}))
         run.metadata.setdefault("task_parse_issues", runtime_meta.get("task_parse_issues", []))
         run.metadata.setdefault(
             "recovery",
@@ -434,7 +422,7 @@ class LocalOrchestrator:
         if not isinstance(snapshot, dict):
             snapshot = self.default_permission_snapshot()
 
-        profile_map = {profile.id: profile for profile in plan_document.agent_profiles}
+        profile_map = {profile.id: profile for profile in plan_document.agents}
         handle = RuntimeHandle(
             run=run,
             plan=plan_document,
@@ -733,7 +721,7 @@ class LocalOrchestrator:
     def _execute_agent(
         self,
         node: RuntimeNodeSpec,
-        profile: AgentProfileSpec,
+        profile: AgentSpec,
         snapshot: dict[str, list[str]],
     ) -> tuple[bool, dict[str, Any]]:
         requested = list(profile.tools_allow or [])
@@ -754,7 +742,7 @@ class LocalOrchestrator:
         time.sleep(float(os.getenv("RALPHITE_RUNNER_SIMULATED_TASK_SECONDS", "0.2")))
         return True, {
             "summary": f"Executed task: {task[:120]}",
-            "agent_profile_id": profile.id,
+            "agent_id": profile.id,
             "model": profile.model,
             "role": node.role,
             "phase": node.phase,
@@ -1062,22 +1050,23 @@ class LocalOrchestrator:
         if not ready_nodes:
             return []
 
-        phase_order = {phase.phase_id: idx for idx, phase in enumerate(handle.runtime.phase_plans)}
-        ready_nodes = sorted(ready_nodes, key=lambda node: (phase_order.get(node.phase, 10_000), node.id))
-        first_phase = ready_nodes[0].phase
-        same_phase = [node for node in ready_nodes if node.phase == first_phase]
+        ready_nodes = sorted(ready_nodes, key=lambda node: (node.block_index, node.id))
+        first_block = ready_nodes[0].block_index
+        same_block = [node for node in ready_nodes if node.block_index == first_block]
+        if not same_block:
+            return []
 
         parallel_limit = max(1, int(handle.runtime.parallel_limit or 1))
-        parallel_ready = [node for node in same_phase if node.lane == "parallel"]
+        parallel_ready = [node for node in same_block if node.lane == "parallel"]
         if parallel_ready:
             return parallel_ready[:parallel_limit]
 
-        return [same_phase[0]]
+        return [same_block[0]]
 
-    def _successful_phase_task_ids(self, handle: RuntimeHandle, phase_id: str) -> list[str]:
+    def _successful_task_ids(self, handle: RuntimeHandle) -> list[str]:
         task_ids: list[str] = []
         for node in handle.runtime.nodes:
-            if node.phase != phase_id or node.role != "worker" or not node.source_task_id:
+            if node.role != "worker" or not node.source_task_id:
                 continue
             node_state = handle.run.nodes.get(node.id)
             if node_state and node_state.status == "succeeded":
@@ -1092,7 +1081,7 @@ class LocalOrchestrator:
     ) -> tuple[str, dict[str, Any]]:
         profile = handle.profile_map.get(node.agent_profile_id)
         if not profile:
-            return "failure", {"reason": "runtime_error", "error": f"unknown agent_profile_id {node.agent_profile_id}"}
+            return "failure", {"reason": "runtime_error", "error": f"unknown agent_id {node.agent_profile_id}"}
 
         if node.role == "orchestrator_post":
             agent_ok, agent_result = self._execute_agent(node, profile, handle.permission_snapshot)
@@ -1138,8 +1127,8 @@ class LocalOrchestrator:
             if status == "failed":
                 return "failure", {"reason": "runtime_error", **merge_meta}
 
-            task_file = resolve_task_source_path(handle.plan.task_source.path, self.workspace_root)
-            task_ids = self._successful_phase_task_ids(handle, node.phase)
+            task_file = Path(handle.run.plan_path)
+            task_ids = self._successful_task_ids(handle)
             task_writeback = mark_tasks_completed(task_file, task_ids)
             if not bool(task_writeback.get("ok")):
                 return "failure", {"reason": "task_writeback_failed", "details": task_writeback}
@@ -1147,7 +1136,7 @@ class LocalOrchestrator:
             task_writeback_commit: dict[str, Any] = {"mode": "noop", "message": "no task updates"}
             if int(task_writeback.get("updated") or 0) > 0:
                 committed, commit_meta = git_manager.commit_workspace_changes(
-                    f"chore(tasks): mark completed for {node.phase}",
+                    "chore(tasks): mark completed for run",
                     paths=[str(task_file)],
                 )
                 if not committed:
