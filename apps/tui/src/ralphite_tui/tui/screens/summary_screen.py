@@ -6,6 +6,9 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import DataTable, Static
 
+from ralphite_engine.presentation import present_run_status
+from ralphite_engine.taxonomy import classify_failure
+
 if TYPE_CHECKING:
     from ralphite_tui.tui.app_shell import AppShell
 
@@ -50,6 +53,16 @@ class SummaryScreen(Vertical):
         git_state = run.metadata.get("git_state", {}) if isinstance(run.metadata.get("git_state"), dict) else {}
         phase_states = git_state.get("phases", {}) if isinstance(git_state.get("phases"), dict) else {}
         recovery = run.metadata.get("recovery", {}) if isinstance(run.metadata.get("recovery"), dict) else {}
+        status = present_run_status(run.status)
+
+        failed_nodes = []
+        for node_id, node in run.nodes.items():
+            if node.status != "failed":
+                continue
+            result = node.result or {}
+            reason = str(result.get("reason", "runtime_error")) if isinstance(result, dict) else "runtime_error"
+            advice = classify_failure(reason)
+            failed_nodes.append(f"- {node_id}: {advice.title} ({reason}) -> {advice.next_action}")
 
         integration_lines = []
         for phase, data in phase_states.items():
@@ -80,16 +93,25 @@ class SummaryScreen(Vertical):
         ]
 
         lines = [
-            "Integration Results:",
+            "What happened:",
+            f"- Final status: {status.label}",
+            f"- Nodes: total={len(run.nodes)} succeeded={len([n for n in run.nodes.values() if n.status == 'succeeded'])} "
+            f"failed={len([n for n in run.nodes.values() if n.status == 'failed'])} blocked={len([n for n in run.nodes.values() if n.status == 'blocked'])}",
+            f"- Next action: {status.next_action}",
+            "",
+            "What failed and why:",
+            *(failed_nodes or ["- none"]),
+            "",
+            "What changed in git:",
             *(integration_lines or ["- none"]),
             "",
-            "Cleanup Results:",
+            "Cleanup results:",
             *([f"- {item}" for item in cleanup_items] or ["- none"]),
             "",
-            "Unresolved Warnings:",
+            "Unresolved warnings:",
             *([f"- {item}" for item in warnings] or ["- none"]),
             "",
-            "Recovery History:",
+            "Recovery history:",
             *(recovery_history or ["- none"]),
         ]
         return "\n".join(lines)
@@ -112,8 +134,10 @@ class SummaryScreen(Vertical):
 
         done_phases = run.metadata.get("phase_done", run.metadata.get("v2_phase_done", []))
         cleanup = [evt for evt in run.events if evt.get("event") == "CLEANUP_DONE"]
+        run_status = present_run_status(run.status)
         status.update(
-            f"Run {run.id} | status={run.status} | phases_done={len(done_phases)} | cleanup_events={len(cleanup)}"
+            f"Run {run.id} | status={run_status.label} | phases_done={len(done_phases)} | cleanup_events={len(cleanup)}\n"
+            f"Next: {run_status.next_action}"
         )
         sections.update(self._build_sections(run))
         for artifact in run.artifacts:

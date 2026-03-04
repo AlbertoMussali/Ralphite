@@ -6,7 +6,7 @@ from typing import Any
 import yaml
 
 
-def mark_tasks_completed(path: Path, task_ids: list[str]) -> dict[str, Any]:
+def mark_tasks_completed(path: Path, task_ids: list[str], *, output_path: Path | None = None) -> dict[str, Any]:
     if not path.exists() or not path.is_file():
         return {
             "ok": False,
@@ -56,13 +56,16 @@ def mark_tasks_completed(path: Path, task_ids: list[str]) -> dict[str, Any]:
             task["completed"] = True
             updated += 1
 
+    destination = output_path or path
     if updated > 0:
-        path.write_text(yaml.safe_dump(raw, sort_keys=False, allow_unicode=False), encoding="utf-8")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(yaml.safe_dump(raw, sort_keys=False, allow_unicode=False), encoding="utf-8")
 
     missing = sorted(target - matched)
     return {
         "ok": True,
-        "path": str(path),
+        "path": str(destination),
+        "source_path": str(path),
         "updated": updated,
         "requested": len(target),
         "missing": missing,

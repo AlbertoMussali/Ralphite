@@ -6,6 +6,8 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import DataTable, Input
 
+from ralphite_engine.presentation import present_run_status
+
 if TYPE_CHECKING:
     from ralphite_tui.tui.app_shell import AppShell
 
@@ -31,7 +33,7 @@ class HistoryScreen(Vertical):
     def compose(self) -> ComposeResult:
         yield Input(placeholder="Filter run history", id="history-query")
         table = DataTable(id="history-table")
-        table.add_columns("Run ID", "Status", "Plan", "Created", "Completed")
+        table.add_columns("Run ID", "Status", "Next Action", "Plan", "Created", "Completed")
         yield table
 
     def on_mount(self) -> None:
@@ -46,4 +48,5 @@ class HistoryScreen(Vertical):
         table.clear()
         rows = self.shell.orchestrator.list_history(limit=50, query=query or None)
         for run in rows:
-            table.add_row(run.id, run.status, run.plan_path, run.created_at, run.completed_at or "-")
+            status = present_run_status(run.status)
+            table.add_row(run.id, status.label, status.next_action, run.plan_path, run.created_at, run.completed_at or "-")

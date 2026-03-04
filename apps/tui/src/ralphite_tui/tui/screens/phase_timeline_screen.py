@@ -3,8 +3,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
-from textual.containers import Vertical
-from textual.widgets import DataTable, Static
+from textual.containers import Horizontal, Vertical
+from textual.widgets import Button, DataTable, Input, Static
+
+from ralphite_engine.presentation import present_event, present_run_status
 
 if TYPE_CHECKING:
     from ralphite_tui.tui.app_shell import AppShell
@@ -36,11 +38,22 @@ class PhaseTimelineScreen(Vertical):
     #phase-events {
       height: 1fr;
     }
+    #phase-controls {
+      height: auto;
+      margin-bottom: 1;
+    }
+    .phase-filter {
+      width: 1fr;
+    }
     """
 
     def __init__(self) -> None:
         super().__init__()
         self._seen_ids: set[int] = set()
+        self._event_rows: list[dict[str, str]] = []
+        self._errors_only = False
+        self._autoscroll = True
+        self._compact = False
 
     @property
     def shell(self) -> "AppShell":
@@ -50,6 +63,13 @@ class PhaseTimelineScreen(Vertical):
         yield Static("No active run selected.", id="phase-summary")
         yield Static("No phase progress yet.", id="phase-progress")
         yield Static("No failures.", id="phase-failures")
+        with Horizontal(id="phase-controls"):
+            yield Button("Errors: Off", id="toggle-errors")
+            yield Button("Autoscroll: On", id="toggle-autoscroll")
+            yield Button("Compact: Off", id="toggle-compact")
+            yield Input(placeholder="phase filter", id="filter-phase", classes="phase-filter")
+            yield Input(placeholder="lane filter", id="filter-lane", classes="phase-filter")
+            yield Input(placeholder="task filter", id="filter-task", classes="phase-filter")
         events = DataTable(id="phase-events")
         events.add_columns("#", "Event", "Phase", "Lane", "Level", "Message")
         yield events
@@ -68,6 +88,43 @@ class PhaseTimelineScreen(Vertical):
 
     def _events(self) -> DataTable:
         return self.query_one("#phase-events", DataTable)
+
+    def _filter_value(self, widget_id: str) -> str:
+        return self.query_one(f"#{widget_id}", Input).value.strip().lower()
+
+    def _refresh_event_table(self) -> None:
+        table = self._events()
+        table.clear()
+        phase_filter = self._filter_value("filter-phase")
+        lane_filter = self._filter_value("filter-lane")
+        task_filter = self._filter_value("filter-task")
+
+        for row in self._event_rows:
+            phase = row.get("phase", "").lower()
+            lane = row.get("lane", "").lower()
+            event_name = row.get("event", "").lower()
+            task_id = row.get("task_id", "").lower()
+            level = row.get("level", "").lower()
+            message = row.get("message", "")
+            if self._errors_only and level not in {"error", "warn"}:
+                continue
+            if phase_filter and phase_filter not in phase:
+                continue
+            if lane_filter and lane_filter not in lane:
+                continue
+            if task_filter and task_filter not in event_name and task_filter not in task_id and task_filter not in message.lower():
+                continue
+            display_message = message if not self._compact else (message[:72] + "..." if len(message) > 75 else message)
+            table.add_row(
+                row.get("id", ""),
+                row.get("event", ""),
+                row.get("phase", ""),
+                row.get("lane", ""),
+                row.get("level", ""),
+                display_message,
+            )
+        if self._autoscroll and table.row_count > 0:
+            table.move_cursor(row=table.row_count - 1, column=0)
 
     def _build_phase_progress(self, run) -> str:
         phase_nodes = (
@@ -131,6 +188,24 @@ class PhaseTimelineScreen(Vertical):
             return "No failures."
         return "Failure Summary:\n" + "\n".join(failures[:8])
 
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id or ""
+        if button_id == "toggle-errors":
+            self._errors_only = not self._errors_only
+            event.button.label = f"Errors: {'On' if self._errors_only else 'Off'}"
+            self._refresh_event_table()
+        elif button_id == "toggle-autoscroll":
+            self._autoscroll = not self._autoscroll
+            event.button.label = f"Autoscroll: {'On' if self._autoscroll else 'Off'}"
+        elif button_id == "toggle-compact":
+            self._compact = not self._compact
+            event.button.label = f"Compact: {'On' if self._compact else 'Off'}"
+            self._refresh_event_table()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id in {"filter-phase", "filter-lane", "filter-task"}:
+            self._refresh_event_table()
+
     def _tick(self) -> None:
         run_id = self.shell.current_run_id
         if not run_id:
@@ -144,14 +219,22 @@ class PhaseTimelineScreen(Vertical):
 
         done_phases = run.metadata.get("phase_done", run.metadata.get("v2_phase_done", []))
         recovery = run.metadata.get("recovery", {})
+        status = present_run_status(run.status)
+        nodes = list(run.nodes.values())
+        total = len(nodes)
+        succeeded = len([node for node in nodes if node.status == "succeeded"])
+        failed = len([node for node in nodes if node.status == "failed"])
+        blocked = len([node for node in nodes if node.status == "blocked"])
+        success_pct = int((succeeded / total) * 100) if total else 0
         self._summary().update(
-            f"Run {run.id} | status={run.status} | active={run.active_node_id or '-'} | "
-            f"phase_done={len(done_phases)} | recovery={recovery.get('status', 'none')}"
+            f"Run {run.id} | status={status.label} | active={run.active_node_id or '-'} | "
+            f"phase_done={len(done_phases)} | recovery={recovery.get('status', 'none')}\n"
+            f"Health: success={success_pct}% ({succeeded}/{total}) failed={failed} blocked={blocked}\n"
+            f"Next: {status.next_action}"
         )
         self._progress().update(self._build_phase_progress(run))
         self._failures().update(self._build_failure_summary(run))
 
-        table = self._events()
         for event in self.shell.orchestrator.poll_events(run_id):
             event_id = int(event.get("id", 0))
             if event_id in self._seen_ids:
@@ -159,16 +242,22 @@ class PhaseTimelineScreen(Vertical):
             self._seen_ids.add(event_id)
             meta = event.get("meta") or {}
             lane = meta.get("lane") if isinstance(meta, dict) else ""
-            table.add_row(
-                str(event_id),
-                event.get("event", ""),
-                event.get("group", "") or "",
-                str(lane or ""),
-                event.get("level", ""),
-                event.get("message", ""),
+            info = present_event(str(event.get("event", "")))
+            self._event_rows.append(
+                {
+                    "id": str(event_id),
+                    "event": info.title,
+                    "phase": str(event.get("group", "") or ""),
+                    "lane": str(lane or ""),
+                    "level": str(event.get("level", "")),
+                    "message": str(event.get("message", "")),
+                    "task_id": str(event.get("task_id", "")),
+                }
             )
+            if len(self._event_rows) > 1000:
+                self._event_rows = self._event_rows[-1000:]
 
-        if not table.row_count:
+        if not self._event_rows:
             for event in self.shell.orchestrator.stream_events(run_id):
                 event_id = int(event.get("id", 0))
                 if event_id in self._seen_ids:
@@ -176,11 +265,18 @@ class PhaseTimelineScreen(Vertical):
                 self._seen_ids.add(event_id)
                 meta = event.get("meta") or {}
                 lane = meta.get("lane") if isinstance(meta, dict) else ""
-                table.add_row(
-                    str(event_id),
-                    event.get("event", ""),
-                    event.get("group", "") or "",
-                    str(lane or ""),
-                    event.get("level", ""),
-                    event.get("message", ""),
+                info = present_event(str(event.get("event", "")))
+                self._event_rows.append(
+                    {
+                        "id": str(event_id),
+                        "event": info.title,
+                        "phase": str(event.get("group", "") or ""),
+                        "lane": str(lane or ""),
+                        "level": str(event.get("level", "")),
+                        "message": str(event.get("message", "")),
+                        "task_id": str(event.get("task_id", "")),
+                    }
                 )
+                if len(self._event_rows) > 1000:
+                    self._event_rows = self._event_rows[-1000:]
+        self._refresh_event_table()

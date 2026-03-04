@@ -23,10 +23,16 @@ uv sync --all-packages
 uv run ralphite init --workspace .
 ```
 
+### Guided first run
+
+```bash
+uv run ralphite quickstart --workspace . --no-tui --yes --output stream
+```
+
 ### Run
 
 ```bash
-uv run ralphite run --workspace .
+uv run ralphite run --workspace . --output stream
 ```
 
 ### Open TUI
@@ -38,7 +44,8 @@ uv run ralphite tui --workspace .
 ### Quality gates
 
 ```bash
-uv run ralphite doctor --workspace .
+uv run ralphite doctor --workspace . --output table --fix-suggestions
+uv run ralphite validate --workspace . --json
 uv run ralphite check --workspace . --full
 uv run ralphite check --workspace . --release-gate
 ```
@@ -118,7 +125,7 @@ Rules:
 
 - `--preflight-only`
 - `--resume/--no-resume`
-- `--json`
+- `--json` or `--output json|table|stream`
 
 Exit codes:
 
@@ -140,3 +147,11 @@ Exit codes:
 - `.ralphite/worktrees/<run_id>/`
 
 No task sidecar markdown file is required.
+
+## Config Notes
+
+`[run].task_writeback_mode` controls how task completion write-back is handled:
+
+- `revision_only` (default): write a completed-task revision under `.ralphite/plans`, no commit required.
+- `in_place`: update and commit the active plan path.
+- `disabled`: skip task completion write-back.

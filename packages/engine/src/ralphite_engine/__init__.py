@@ -10,6 +10,7 @@ from ralphite_engine.models import (
     ValidationFix,
 )
 from ralphite_engine.orchestrator import LocalOrchestrator
+from ralphite_engine.presentation import present_event, present_recovery_mode, present_run_status
 from ralphite_engine.templates import make_goal_plan, make_starter_plan, seed_starter_if_missing
 from ralphite_engine.validation import apply_fix, parse_plan_yaml, suggest_fixes, validate_plan_content
 
@@ -32,6 +33,9 @@ __all__ = [
     "make_goal_plan",
     "make_starter_plan",
     "parse_plan_yaml",
+    "present_event",
+    "present_recovery_mode",
+    "present_run_status",
     "save_config",
     "save_draft",
     "seed_starter_if_missing",

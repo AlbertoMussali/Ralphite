@@ -21,6 +21,12 @@ uv run ralphite init --workspace .
 
 This creates `.ralphite/` folders and seeds a starter v4 YAML plan.
 
+Quick onboarding path:
+
+```bash
+uv run ralphite quickstart --workspace . --no-tui --yes --output stream
+```
+
 ## 3) Write a Plan
 
 Create or edit `.ralphite/plans/<name>.yaml` using `version: 4`.
@@ -119,7 +125,7 @@ Flow:
 Run:
 
 ```bash
-uv run ralphite run --workspace . --no-tui
+uv run ralphite run --workspace . --no-tui --output stream
 ```
 
 Recovery:
@@ -127,6 +133,13 @@ Recovery:
 ```bash
 uv run ralphite recover --workspace . --run-id <RUN_ID> --mode manual --preflight-only --no-tui --json
 uv run ralphite recover --workspace . --run-id <RUN_ID> --mode agent_best_effort --prompt "resolve conflicts" --resume --no-tui --json
+```
+
+Validation with fix suggestions:
+
+```bash
+uv run ralphite validate --workspace . --json
+uv run ralphite validate --workspace . --apply-safe-fixes
 ```
 
 Recover exit codes:
@@ -142,7 +155,13 @@ Recover exit codes:
 
 ## 7) Completion Write-Back
 
-After successful post-orchestrator integration, Ralphite marks successful worker tasks in the same YAML plan:
+After successful post-orchestrator integration, Ralphite handles task completion write-back using `[run].task_writeback_mode`:
+
+- `revision_only` (default): writes a completed-task revision under `.ralphite/plans` and avoids commit failures on ignored paths
+- `in_place`: updates and commits the active plan path
+- `disabled`: skips task completion write-back
+
+When write-back applies, successful worker tasks are marked with:
 
 - `completed: true`
 
@@ -153,7 +172,7 @@ Write-back commit message:
 ## 8) Checks
 
 ```bash
-uv run ralphite doctor --workspace .
+uv run ralphite doctor --workspace . --output table --fix-suggestions
 uv run ralphite check --workspace . --full
 uv run ralphite check --workspace . --release-gate
 ```

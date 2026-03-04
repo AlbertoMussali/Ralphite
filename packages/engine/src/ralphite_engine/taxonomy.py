@@ -42,6 +42,24 @@ FAILURE_MAP: dict[str, FailureAdvice] = {
         message="Unexpected execution error occurred.",
         next_action="Inspect event timeline and rerun failed nodes.",
     ),
+    "git_add_failed": FailureAdvice(
+        code="git_add_failed",
+        title="Plan Write-Back Blocked",
+        message="Git could not stage plan updates, usually because the plan path is ignored.",
+        next_action="Use a tracked plan path or set task_writeback_mode to 'revision_only' or 'disabled'.",
+    ),
+    "task_writeback_failed": FailureAdvice(
+        code="task_writeback_failed",
+        title="Task Write-Back Failed",
+        message="Ralphite could not update completed task flags in the plan.",
+        next_action="Validate plan YAML structure and rerun, or disable write-back in config.",
+    ),
+    "task_writeback_commit_failed": FailureAdvice(
+        code="task_writeback_commit_failed",
+        title="Write-Back Commit Failed",
+        message="Task write-back succeeded, but commit creation failed.",
+        next_action="Inspect git status/config and rerun with task_writeback_mode='revision_only' if needed.",
+    ),
 }
 
 

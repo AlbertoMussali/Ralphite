@@ -6,6 +6,8 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, DataTable, Static
 
+from ralphite_engine.presentation import present_run_status
+
 if TYPE_CHECKING:
     from ralphite_tui.tui.app_shell import AppShell
 
@@ -38,7 +40,7 @@ class RunsScreen(Vertical):
             yield Button("Resume", id="resume")
             yield Button("Cancel", id="cancel", variant="warning")
         history = DataTable(id="runs-history")
-        history.add_columns("Run ID", "Status", "Plan", "Completed")
+        history.add_columns("Run ID", "Status", "Next Action", "Plan", "Completed")
         yield history
 
     @property
@@ -65,16 +67,18 @@ class RunsScreen(Vertical):
         if not run:
             self._status_widget().update(f"Run {run_id} not found")
             return
+        status = present_run_status(run.status)
         active = run.active_node_id or "-"
         self._status_widget().update(
-            f"Run {run.id} | status={run.status} | active={active} | retries={run.retry_count}"
+            f"Run {run.id} | status={status.label} | active={active} | retries={run.retry_count}\nNext: {status.next_action}"
         )
 
     def _refresh_history(self) -> None:
         table = self._history_table()
         table.clear()
         for run in self.shell.orchestrator.list_history(limit=25):
-            table.add_row(run.id[:8], run.status, run.plan_path, run.completed_at or "-")
+            status = present_run_status(run.status)
+            table.add_row(run.id[:8], status.label, status.next_action, run.plan_path, run.completed_at or "-")
 
     def _tick(self) -> None:
         self._refresh_status()

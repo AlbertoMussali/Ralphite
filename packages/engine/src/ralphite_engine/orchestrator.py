@@ -23,7 +23,7 @@ from ralphite_engine.structure_compiler import RuntimeExecutionPlan, RuntimeNode
 from ralphite_engine.task_parser import parse_plan_tasks
 from ralphite_engine.task_writer import mark_tasks_completed
 from ralphite_engine.taxonomy import classify_failure
-from ralphite_engine.templates import make_goal_plan, seed_starter_if_missing
+from ralphite_engine.templates import make_goal_plan, seed_starter_if_missing, versioned_filename
 from ralphite_engine.validation import parse_plan_yaml, validate_plan_content
 from ralphite_schemas.plan_v4 import AgentSpec, PlanSpecV4
 from ralphite_schemas.validation import compile_plan
@@ -189,6 +189,15 @@ class LocalOrchestrator:
             raise ValueError(f"validation_error: {json.dumps(details)}")
         return runtime, self._runtime_metadata(runtime)
 
+    def _writeback_target(self, source: Path, plan: PlanSpecV4) -> tuple[str, Path | None]:
+        mode = str(self.config.task_writeback_mode or "revision_only")
+        if mode == "disabled":
+            return mode, None
+        if mode == "in_place":
+            return mode, source
+        filename = versioned_filename(plan.plan_id, "completed")
+        return "revision_only", self.paths["plans"] / filename
+
     def collect_requirements(self, plan_ref: str | None = None, plan_content: str | None = None) -> dict[str, list[str]]:
         if plan_content is None:
             path = self._resolve_plan_path(plan_ref)
@@ -275,6 +284,7 @@ class LocalOrchestrator:
             metadata={
                 "plan": summary,
                 "permission_snapshot": snapshot,
+                "task_writeback_mode": self.config.task_writeback_mode,
                 **runtime_meta,
                 "git_state": git_manager.bootstrap_state(),
                 **(metadata or {}),
@@ -1129,19 +1139,46 @@ class LocalOrchestrator:
 
             task_file = Path(handle.run.plan_path)
             task_ids = self._successful_task_ids(handle)
-            task_writeback = mark_tasks_completed(task_file, task_ids)
-            if not bool(task_writeback.get("ok")):
-                return "failure", {"reason": "task_writeback_failed", "details": task_writeback}
+            writeback_mode, writeback_target = self._writeback_target(task_file, handle.plan)
 
-            task_writeback_commit: dict[str, Any] = {"mode": "noop", "message": "no task updates"}
-            if int(task_writeback.get("updated") or 0) > 0:
-                committed, commit_meta = git_manager.commit_workspace_changes(
-                    "chore(tasks): mark completed for run",
-                    paths=[str(task_file)],
+            if writeback_mode == "disabled":
+                task_writeback = {
+                    "ok": True,
+                    "mode": "disabled",
+                    "path": str(task_file),
+                    "updated": 0,
+                    "requested": len(task_ids),
+                    "missing": [],
+                }
+                task_writeback_commit: dict[str, Any] = {
+                    "mode": "disabled",
+                    "message": "task write-back disabled by configuration",
+                }
+            else:
+                task_writeback = mark_tasks_completed(
+                    task_file,
+                    task_ids,
+                    output_path=None if writeback_mode == "in_place" else writeback_target,
                 )
-                if not committed:
-                    return "failure", {"reason": "task_writeback_commit_failed", **commit_meta}
-                task_writeback_commit = commit_meta
+                task_writeback["mode"] = writeback_mode
+                if not bool(task_writeback.get("ok")):
+                    return "failure", {"reason": "task_writeback_failed", "details": task_writeback}
+
+                task_writeback_commit = {"mode": "noop", "message": "no task updates"}
+                if int(task_writeback.get("updated") or 0) > 0 and writeback_mode == "in_place":
+                    committed, commit_meta = git_manager.commit_workspace_changes(
+                        "chore(tasks): mark completed for run",
+                        paths=[str(task_file)],
+                    )
+                    if not committed:
+                        return "failure", {"reason": "task_writeback_commit_failed", **commit_meta}
+                    task_writeback_commit = commit_meta
+                elif int(task_writeback.get("updated") or 0) > 0 and writeback_mode == "revision_only":
+                    task_writeback_commit = {
+                        "mode": "revision_only",
+                        "message": "wrote completed-task revision without committing",
+                        "paths": [str(writeback_target)] if writeback_target else [],
+                    }
 
             cleanup = git_manager.cleanup_phase(handle.run.metadata.setdefault("git_state", {}), node.phase)
             return "success", {

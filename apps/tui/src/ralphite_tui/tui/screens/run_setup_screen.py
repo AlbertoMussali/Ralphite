@@ -5,12 +5,12 @@ from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, DataTable, Static
+from textual.widgets import Button, DataTable, Input, Static
 import yaml
 
 from ralphite_engine.task_parser import ParsedTask, parse_plan_tasks
 from ralphite_engine.templates import versioned_filename
-from ralphite_engine.validation import parse_plan_yaml, validate_plan_content
+from ralphite_engine.validation import apply_fix, parse_plan_yaml, suggest_fixes, validate_plan_content
 
 if TYPE_CHECKING:
     from ralphite_tui.tui.app_shell import AppShell
@@ -48,6 +48,19 @@ class RunSetupScreen(Vertical):
       padding: 1;
       height: 1fr;
     }
+    #setup-task-editor {
+      height: auto;
+      margin-bottom: 1;
+    }
+    #setup-structure {
+      border: round $surface;
+      padding: 1;
+      margin-bottom: 1;
+      height: auto;
+    }
+    .setup-edit-input {
+      width: 1fr;
+    }
     """
 
     def __init__(self) -> None:
@@ -72,6 +85,7 @@ class RunSetupScreen(Vertical):
             yield Button("MaxParallel -", id="max-parallel-dec")
             yield Button("MaxParallel +", id="max-parallel-inc")
             yield Button("Validate", id="validate")
+            yield Button("Apply Safe Fixes", id="apply-safe-fixes")
             yield Button("Save Revision", id="save-revision", variant="success")
             yield Button("Start", id="start-selected", variant="success")
 
@@ -87,6 +101,15 @@ class RunSetupScreen(Vertical):
         tasks.add_columns("Task", "Done", "Parallel Group", "Deps", "Agent", "Order")
         yield tasks
 
+        with Horizontal(id="setup-task-editor"):
+            yield Input(placeholder="title", id="edit-task-title", classes="setup-edit-input")
+            yield Input(placeholder="deps (comma-separated ids)", id="edit-task-deps", classes="setup-edit-input")
+            yield Input(placeholder="parallel_group", id="edit-task-group", classes="setup-edit-input")
+            yield Input(placeholder="agent id (optional)", id="edit-task-agent", classes="setup-edit-input")
+            yield Input(placeholder="completed true|false", id="edit-task-completed", classes="setup-edit-input")
+            yield Button("Apply Task Edit", id="apply-task-edit", variant="primary")
+
+        yield Static("No structure preview yet.", id="setup-structure")
         yield Static("Load a plan to edit run controls and preview task blocks.", id="setup-validation")
 
     def on_mount(self) -> None:
@@ -106,6 +129,32 @@ class RunSetupScreen(Vertical):
 
     def _validation(self) -> Static:
         return self.query_one("#setup-validation", Static)
+
+    def _structure(self) -> Static:
+        return self.query_one("#setup-structure", Static)
+
+    def _selected_task_index(self) -> int | None:
+        table = self._tasks_table()
+        row_index = table.cursor_row
+        if row_index is None:
+            return None
+        if row_index < 0 or row_index >= len(self._tasks):
+            return None
+        return row_index
+
+    def _set_edit_field(self, field_id: str, value: str) -> None:
+        self.query_one(f"#{field_id}", Input).value = value
+
+    def _populate_task_editor(self) -> None:
+        idx = self._selected_task_index()
+        if idx is None:
+            return
+        task = self._tasks[idx]
+        self._set_edit_field("edit-task-title", task.title)
+        self._set_edit_field("edit-task-deps", ",".join(task.depends_on))
+        self._set_edit_field("edit-task-group", str(task.parallel_group))
+        self._set_edit_field("edit-task-agent", task.agent or "")
+        self._set_edit_field("edit-task-completed", "true" if task.completed else "false")
 
     def _selected_plan_path(self) -> Path | None:
         table = self._plans_table()
@@ -171,17 +220,19 @@ class RunSetupScreen(Vertical):
                 "yes" if task.completed else "no",
                 str(task.parallel_group),
                 ",".join(task.depends_on) or "-",
-                task.agent_profile,
+                task.agent or "worker_default",
                 str(idx),
             )
 
         if self._tasks:
             tasks_table.move_cursor(row=0, column=0)
+            self._populate_task_editor()
         run_table.move_cursor(row=0, column=0)
 
     def _refresh_validation(self) -> None:
         if not self._loaded_plan_data:
             self._validation().update("Load a plan to validate unified YAML tasks/run/agents.")
+            self._structure().update("No structure preview yet.")
             return
 
         content = yaml.safe_dump(self._loaded_plan_data, sort_keys=False, allow_unicode=False)
@@ -204,6 +255,19 @@ class RunSetupScreen(Vertical):
             lines.append("Validation issues:")
             lines.extend([f"- {issue.get('code')}: {issue.get('message')} ({issue.get('path')})" for issue in issues])
         self._validation().update("\n".join(lines))
+        groups = summary.get("groups", {})
+        blocks = summary.get("block_counts", {})
+        structure_lines = [
+            "Structure Preview:",
+            f"- Sequential blocks: {blocks.get('sequential', '-')}",
+            f"- Parallel blocks: {blocks.get('parallel', '-')}",
+            f"- Max parallel: {summary.get('parallel_limit', '-')}",
+        ]
+        if isinstance(groups, dict):
+            for name, node_ids in groups.items():
+                if isinstance(node_ids, list):
+                    structure_lines.append(f"- {name}: {len(node_ids)} node(s)")
+        self._structure().update("\n".join(structure_lines))
 
     def _load_plan(self, path: Path) -> None:
         raw = path.read_text(encoding="utf-8")
@@ -217,7 +281,7 @@ class RunSetupScreen(Vertical):
 
         self._render_editor_tables()
         self._refresh_validation()
-        self._status().update(f"Loaded plan {path.name}. Task order is read-only and defined in tasks list.")
+        self._status().update(f"Loaded plan {path.name}. You can edit task fields safely and save a validated revision.")
 
     def _toggle_orchestrator(self, key: str) -> None:
         if not self._loaded_plan_data:
@@ -244,6 +308,69 @@ class RunSetupScreen(Vertical):
         constraints["max_parallel"] = max(1, current + delta)
         self._render_editor_tables()
         self._refresh_validation()
+
+    def _apply_task_edit(self) -> None:
+        if not self._loaded_plan_data:
+            self._status().update("Load a plan before editing tasks.")
+            return
+        idx = self._selected_task_index()
+        if idx is None:
+            self._status().update("Select a task row to edit.")
+            return
+        tasks = self._loaded_plan_data.get("tasks")
+        if not isinstance(tasks, list) or idx >= len(tasks):
+            return
+        row = tasks[idx]
+        if not isinstance(row, dict):
+            return
+
+        title = self.query_one("#edit-task-title", Input).value.strip()
+        deps_raw = self.query_one("#edit-task-deps", Input).value.strip()
+        group_raw = self.query_one("#edit-task-group", Input).value.strip()
+        agent_raw = self.query_one("#edit-task-agent", Input).value.strip()
+        completed_raw = self.query_one("#edit-task-completed", Input).value.strip().lower()
+
+        if title:
+            row["title"] = title
+        row["deps"] = [item.strip() for item in deps_raw.split(",") if item.strip()] if deps_raw else []
+        try:
+            row["parallel_group"] = max(0, int(group_raw or "0"))
+        except ValueError:
+            self._status().update("parallel_group must be an integer.")
+            return
+        row["agent"] = agent_raw or None
+        row["completed"] = completed_raw in {"1", "true", "yes", "y"}
+
+        try:
+            model = parse_plan_yaml(yaml.safe_dump(self._loaded_plan_data, sort_keys=False, allow_unicode=False))
+            self._tasks, self._task_parse_issues = parse_plan_tasks(model)
+        except Exception:
+            pass
+        self._render_editor_tables()
+        self._refresh_validation()
+        self._status().update(f"Applied edit to task row {idx + 1}.")
+
+    def _apply_safe_fixes(self) -> None:
+        if not self._loaded_plan_data:
+            return
+        content = yaml.safe_dump(self._loaded_plan_data, sort_keys=False, allow_unicode=False)
+        _valid, issues, _summary = validate_plan_content(content, workspace_root=self.shell.orchestrator.workspace_root)
+        fixes = suggest_fixes(self._loaded_plan_data, issues)
+        if not fixes:
+            self._status().update("No safe fixes available.")
+            return
+        updated = dict(self._loaded_plan_data)
+        for fix in fixes:
+            updated = apply_fix(updated, fix)
+        self._loaded_plan_data = updated
+        try:
+            model = parse_plan_yaml(yaml.safe_dump(self._loaded_plan_data, sort_keys=False, allow_unicode=False))
+            self._tasks, self._task_parse_issues = parse_plan_tasks(model)
+        except Exception:
+            pass
+        self._render_editor_tables()
+        self._refresh_validation()
+        self._status().update(f"Applied {len(fixes)} safe fix(es). Review and save revision.")
 
     def _save_revision(self) -> Path | None:
         if not self._loaded_plan_data:
@@ -292,6 +419,12 @@ class RunSetupScreen(Vertical):
         if button == "validate":
             self._refresh_validation()
             return
+        if button == "apply-safe-fixes":
+            self._apply_safe_fixes()
+            return
+        if button == "apply-task-edit":
+            self._apply_task_edit()
+            return
         if button == "save-revision":
             self._save_revision()
             return
@@ -316,3 +449,7 @@ class RunSetupScreen(Vertical):
                 return
             self._status().update(f"Started run {run_id}")
             self.shell.show_screen("phase_timeline")
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.data_table.id == "setup-tasks":
+            self._populate_task_editor()

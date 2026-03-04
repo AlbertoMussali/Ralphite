@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tomllib
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -16,6 +17,7 @@ class LocalConfig(BaseModel):
     deny_mcps: list[str] = Field(default_factory=list)
     compact_timeline: bool = False
     default_plan: str | None = None
+    task_writeback_mode: Literal["in_place", "revision_only", "disabled"] = "revision_only"
 
 
 def ensure_workspace_layout(workspace_root: Path) -> dict[str, Path]:
@@ -49,6 +51,10 @@ def load_config(workspace_root: Path) -> LocalConfig:
     policy = raw.get("policy", {})
     ui = raw.get("ui", {})
     run = raw.get("run", {})
+    writeback_mode = str(run.get("task_writeback_mode") or "revision_only")
+    if writeback_mode not in {"in_place", "revision_only", "disabled"}:
+        writeback_mode = "revision_only"
+
     return LocalConfig(
         workspace_root=str(paths["root"]),
         profile_name=profile.get("name", "default"),
@@ -58,6 +64,7 @@ def load_config(workspace_root: Path) -> LocalConfig:
         deny_mcps=list(policy.get("deny_mcps", [])),
         compact_timeline=bool(ui.get("compact_timeline", False)),
         default_plan=run.get("default_plan") or None,
+        task_writeback_mode=writeback_mode,
     )
 
 
@@ -85,6 +92,7 @@ def save_config(workspace_root: Path, config: LocalConfig) -> Path:
             "",
             "[run]",
             f"default_plan = {json.dumps(config.default_plan or '')}",
+            f"task_writeback_mode = {json.dumps(config.task_writeback_mode)}",
             "",
         ]
     )
