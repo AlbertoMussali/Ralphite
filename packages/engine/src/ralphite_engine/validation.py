@@ -202,3 +202,11 @@ def apply_fix(plan_data: dict[str, Any], fix: ValidationFix) -> dict[str, Any]:
             )
 
     return plan_data
+
+
+def issues_by_path(issues: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    index: dict[str, list[dict[str, Any]]] = {}
+    for issue in issues:
+        key = str(issue.get("path") or "root")
+        index.setdefault(key, []).append(issue)
+    return index

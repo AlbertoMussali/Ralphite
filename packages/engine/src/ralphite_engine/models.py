@@ -35,6 +35,36 @@ class RunViewState(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class RunPersistenceState(BaseModel):
+    run_id: str
+    status: str
+    plan_path: str
+    run: RunViewState
+    loop_counts: dict[str, int] = Field(default_factory=dict)
+    last_seq: int = 0
+    updated_at: str = Field(default_factory=utc_now_iso)
+
+
+class EventJournalRecord(BaseModel):
+    seq: int
+    ts: str
+    run_id: str
+    payload: dict[str, Any]
+
+
+class RunCheckpoint(BaseModel):
+    run_id: str
+    status: str
+    plan_path: str
+    last_seq: int
+    loop_counts: dict[str, int] = Field(default_factory=dict)
+    retry_count: int = 0
+    node_attempts: dict[str, int] = Field(default_factory=dict)
+    node_statuses: dict[str, str] = Field(default_factory=dict)
+    active_node_id: str | None = None
+    updated_at: str = Field(default_factory=utc_now_iso)
+
+
 class PlanDraftState(BaseModel):
     id: str
     path: str
@@ -42,6 +72,42 @@ class PlanDraftState(BaseModel):
     title: str = "Untitled Draft"
     content: str
     autosave: bool = True
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class StepRowState(BaseModel):
+    id: str
+    kind: str
+    group: str = "default"
+    depends_on: list[str] = Field(default_factory=list)
+    agent_id: str | None = None
+    task: str | None = None
+    gate_mode: str | None = None
+    gate_pass_if: str | None = None
+
+
+class EdgeRowState(BaseModel):
+    from_node: str
+    to: str
+    when: str = "success"
+    loop_id: str | None = None
+
+
+class AgentRowState(BaseModel):
+    id: str
+    provider: str
+    model: str
+    system_prompt: str = ""
+    tools_allow: list[str] = Field(default_factory=list)
+
+
+class EditorSessionState(BaseModel):
+    draft_id: str
+    plan_path: str
+    dirty: bool = False
+    selected_panel: str = "steps"
+    selected_index: int = 0
+    last_saved_at: str | None = None
 
 
 class ValidationFix(BaseModel):
@@ -60,3 +126,11 @@ class ArtifactIndex(BaseModel):
 
 class HistoryIndex(BaseModel):
     runs: list[RunViewState] = Field(default_factory=list)
+
+
+class PaletteCommand(BaseModel):
+    id: str
+    title: str
+    scope: str = "global"
+    description: str = ""
+    shortcut: str | None = None

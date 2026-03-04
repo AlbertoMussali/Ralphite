@@ -1,20 +1,18 @@
 # Ralphite Architecture
 
-## Primary Architecture (TUI-First)
+## Canonical Architecture
 
-- `apps/tui`: terminal UX (`ralphite` CLI + Textual dashboard)
-- `packages/engine`: local in-process orchestrator
-- `packages/schemas`: shared plan/event contracts
+- `apps/tui`: terminal app shell with global command palette and multi-screen navigation
+- `packages/engine`: local orchestrator, validation/autofix, migration, durable run persistence
+- `packages/schemas`: plan contracts and validation rules
 
 ## Local Runtime Flow
 
-1. `ralphite init` creates `.ralphite` layout and seeds starter plan if needed.
-2. `ralphite doctor` validates environment, config, and plan health.
-3. `ralphite run` resolves a plan (or generates from `--goal`) and starts a local run.
-4. Engine validates plan, builds node runtime state, and executes locally.
-5. Dashboard streams ordered run events and exposes pause/resume/cancel controls.
-6. Engine writes artifacts and run history under `.ralphite/`.
-7. `ralphite history` and `ralphite replay` support iteration and reruns.
+1. `ralphite init` creates `.ralphite` layout and runs strict migration gate.
+2. `ralphite run` runs strict migration preflight, resolves/creates plan, and starts a local run.
+3. Orchestrator writes event journal, run state, and checkpoints under `.ralphite/runs/<run_id>/`.
+4. TUI shell displays run board, timeline, artifacts, history, and editor in one keyboard-first surface.
+5. On interruption, `ralphite recover` rehydrates from checkpoint and resumes node-level execution.
 
 ## Engine Interface
 
@@ -24,23 +22,22 @@
 - `resume_run(run_id)`
 - `cancel_run(run_id)`
 - `rerun_failed(run_id)`
+- `recover_run(run_id)`
+- `resume_from_checkpoint(run_id)`
+- `list_recoverable_runs()`
+- `load_run_state(run_id)`
 
-## Event Shape
+## Persistence Contracts
 
-Every event follows:
+Per run directory `.ralphite/runs/<run_id>/`:
 
-- `id`, `ts`, `run_id`, `group`, `task_id`, `stage`, `event`, `level`, `message`, `meta`
+- `run_state.json` (`RunPersistenceState`)
+- `checkpoint.json` (`RunCheckpoint`)
+- `event_log.ndjson` (`EventJournalRecord`)
+- `lock` (single-writer run lock)
 
-Primary events:
+## TUI Navigation Contracts
 
-- `RUN_STARTED`, `NODE_STARTED`, `NODE_RESULT`
-- `GATE_PASS`, `GATE_RETRY`, `GATE_FAIL`
-- `RUN_SUMMARY`, `RUN_DONE`
-
-## Legacy Surfaces (Deprecated)
-
-- `apps/web` (React control plane)
-- `apps/api` (FastAPI orchestration API)
-- `apps/runner` (daemon)
-
-These remain for migration compatibility only.
+- App shell uses a screen stack with top navigation.
+- Global command palette (`ctrl+p` / `:`) is authoritative for discoverability.
+- Editor is form-first and only exposes supported plan primitives (`agent`, `gate`, retry loops).

@@ -15,12 +15,13 @@ from ralphite_engine import (
     LocalConfig,
     LocalOrchestrator,
     migrate_plan_file,
+    migrate_plan_in_place,
     save_config,
     seed_starter_if_missing,
     suggest_fixes,
     validate_plan_content,
 )
-from ralphite_tui.tui.dashboard import DashboardApp
+from ralphite_tui.tui.app_shell import AppShell
 
 app = typer.Typer(help="Ralphite terminal-first orchestrator", no_args_is_help=True, add_completion=False)
 console = Console()
@@ -49,6 +50,22 @@ def _validate_all_plans(orch: LocalOrchestrator) -> tuple[bool, list[tuple[Path,
     return len(failures) == 0, failures
 
 
+def _strict_migration_preflight(orch: LocalOrchestrator) -> tuple[bool, list[str]]:
+    messages: list[str] = []
+    blocked = False
+    for plan_path in orch.list_plans():
+        result = migrate_plan_in_place(plan_path)
+        changed_label = "migrated" if result.changed else "checked"
+        messages.append(f"{changed_label} {plan_path.name}")
+        for warning in result.warnings:
+            messages.append(f"  - {warning}")
+        if not result.valid:
+            blocked = True
+            for issue in result.issues:
+                messages.append(f"  - BLOCK {issue.get('code')}: {issue.get('message')} ({issue.get('path')})")
+    return (not blocked), messages
+
+
 def _doctor_report(orch: LocalOrchestrator) -> bool:
     table = Table(title="Ralphite Doctor")
     table.add_column("Check")
@@ -57,7 +74,7 @@ def _doctor_report(orch: LocalOrchestrator) -> bool:
 
     ok = True
 
-    required_cmds = ["python3", "uv", "pnpm", "git", "rg"]
+    required_cmds = ["python3", "uv", "git", "rg"]
     for cmd in required_cmds:
         found = shutil.which(cmd)
         status = "OK" if found else "MISSING"
@@ -80,6 +97,9 @@ def _doctor_report(orch: LocalOrchestrator) -> bool:
     table.add_row("plan-validation", "OK" if valid_plans else "FAIL", "all plans valid" if valid_plans else f"{len(failures)} invalid")
     if not valid_plans:
         ok = False
+
+    recoverable = orch.list_recoverable_runs()
+    table.add_row("recoverable-runs", "OK", str(len(recoverable)))
 
     console.print(table)
 
@@ -146,6 +166,12 @@ def init(
     else:
         console.print("Starter plan already present.")
 
+    strict_ok, strict_messages = _strict_migration_preflight(orch)
+    for line in strict_messages:
+        console.print(line)
+    if not strict_ok:
+        raise typer.Exit(code=1)
+
 
 @app.command()
 def doctor(
@@ -163,11 +189,19 @@ def run(
     workspace: Annotated[Path, typer.Option(help="Workspace root")]=Path.cwd(),
     plan: Annotated[str | None, typer.Option(help="Plan file path or name")]=None,
     goal: Annotated[str | None, typer.Option(help="Goal text to generate a plan")]=None,
-    no_tui: Annotated[bool, typer.Option("--no-tui", help="Print streaming logs instead of opening dashboard")]=False,
+    no_tui: Annotated[bool, typer.Option("--no-tui", help="Print streaming logs instead of opening TUI")]=False,
     yes: Annotated[bool, typer.Option("--yes", help="Auto-approve requirements")]=False,
+    attach_run_detail: Annotated[bool, typer.Option("--attach-run-detail", help="Open run detail screen after start")]=False,
 ) -> None:
     """Run a plan immediately with optional TUI monitoring."""
     orch = _orchestrator(workspace)
+
+    strict_ok, strict_messages = _strict_migration_preflight(orch)
+    for line in strict_messages:
+        console.print(line)
+    if not strict_ok:
+        console.print("[red]Strict migration preflight failed; run blocked.[/red]")
+        raise typer.Exit(code=1)
 
     plan_ref = plan
     if goal:
@@ -191,7 +225,39 @@ def run(
     if no_tui:
         _print_run_stream(orch, run_id)
     else:
-        DashboardApp(orchestrator=orch, run_id=run_id).run()
+        initial_screen = "run_detail" if attach_run_detail else "runs"
+        AppShell(orchestrator=orch, run_id=run_id, initial_screen=initial_screen).run()
+
+
+@app.command()
+def recover(
+    workspace: Annotated[Path, typer.Option(help="Workspace root")]=Path.cwd(),
+    run_id: Annotated[str | None, typer.Option(help="Run id to recover")]=None,
+    no_tui: Annotated[bool, typer.Option("--no-tui", help="Print stream after recover")]=False,
+) -> None:
+    """Recover and resume a checkpointed run."""
+    orch = _orchestrator(workspace)
+    target = run_id
+    if target is None:
+        recoverable = orch.list_recoverable_runs()
+        if not recoverable:
+            console.print("No recoverable runs found.")
+            raise typer.Exit(code=1)
+        target = recoverable[-1]
+
+    if not orch.recover_run(target):
+        console.print(f"Unable to recover run {target}")
+        raise typer.Exit(code=1)
+
+    if not orch.resume_from_checkpoint(target):
+        console.print(f"Recovered {target}, but resume failed.")
+        raise typer.Exit(code=1)
+
+    console.print(f"Recovered and resumed run: [bold]{target}[/bold]")
+    if no_tui:
+        _print_run_stream(orch, target)
+    else:
+        AppShell(orchestrator=orch, run_id=target, initial_screen="run_detail").run()
 
 
 @app.command()
@@ -219,7 +285,7 @@ def history(
 def replay(
     run_id: Annotated[str, typer.Argument(help="Existing run id")],
     workspace: Annotated[Path, typer.Option(help="Workspace root")]=Path.cwd(),
-    no_tui: Annotated[bool, typer.Option("--no-tui", help="Print streaming logs instead of opening dashboard")]=False,
+    no_tui: Annotated[bool, typer.Option("--no-tui", help="Print streaming logs instead of opening TUI")]=False,
 ) -> None:
     """Replay a previous run in rerun-failed mode."""
     orch = _orchestrator(workspace)
@@ -228,17 +294,27 @@ def replay(
     if no_tui:
         _print_run_stream(orch, new_run_id)
     else:
-        DashboardApp(orchestrator=orch, run_id=new_run_id).run()
+        AppShell(orchestrator=orch, run_id=new_run_id, initial_screen="run_detail").run()
 
 
 @app.command()
 def migrate(
     workspace: Annotated[Path, typer.Option(help="Workspace root")]=Path.cwd(),
+    strict: Annotated[bool, typer.Option("--strict", help="Migrate in place and block invalid plans")]=False,
 ) -> None:
     """Migrate legacy plans into schema-safe local-first variants."""
     orch = _orchestrator(workspace)
-    out_dir = orch.paths["plans"] / "migrated"
 
+    if strict:
+        strict_ok, strict_messages = _strict_migration_preflight(orch)
+        for line in strict_messages:
+            console.print(line)
+        if not strict_ok:
+            raise typer.Exit(code=1)
+        console.print("[green]Strict migration completed[/green]")
+        return
+
+    out_dir = orch.paths["plans"] / "migrated"
     changed = 0
     total = 0
     for plan_path in orch.list_plans():
@@ -258,7 +334,7 @@ def migrate(
 @app.command()
 def check(
     workspace: Annotated[Path, typer.Option(help="Workspace root")]=Path.cwd(),
-    full: Annotated[bool, typer.Option("--full", help="Run full repo build/test suite")]=False,
+    full: Annotated[bool, typer.Option("--full", help="Run full repo test suite")]=False,
 ) -> None:
     """Run baseline quality gates for local UX reliability."""
     orch = _orchestrator(workspace)
@@ -276,29 +352,13 @@ def check(
         compile_result = subprocess.run(compile_cmd, cwd=orch.workspace_root, check=False)
         if compile_result.returncode != 0:
             raise typer.Exit(code=1)
-    else:
-        console.print("[yellow]Skipping compileall: package sources not found under workspace.[/yellow]")
 
     if full:
-        commands = [
-            ["pnpm", "--filter", "@ralphite/web", "build"],
-            [
-                "uv",
-                "run",
-                "--with",
-                "pytest",
-                "--with",
-                "httpx",
-                "pytest",
-                "apps/api/tests",
-                "-q",
-            ],
-        ]
-        for cmd in commands:
-            console.print(f"Running: {' '.join(cmd)}")
-            result = subprocess.run(cmd, cwd=orch.workspace_root, check=False)
-            if result.returncode != 0:
-                raise typer.Exit(code=1)
+        command = ["uv", "run", "--with", "pytest", "pytest", "packages/engine/tests", "apps/tui/tests", "-q"]
+        console.print(f"Running: {' '.join(command)}")
+        result = subprocess.run(command, cwd=orch.workspace_root, check=False)
+        if result.returncode != 0:
+            raise typer.Exit(code=1)
 
     console.print("[green]ralphite check passed[/green]")
 
@@ -306,10 +366,12 @@ def check(
 @app.command()
 def tui(
     workspace: Annotated[Path, typer.Option(help="Workspace root")]=Path.cwd(),
+    screen: Annotated[str, typer.Option(help="Initial screen")]="home",
+    run_id: Annotated[str | None, typer.Option(help="Current run id")]=None,
 ) -> None:
-    """Open the Ralphite terminal dashboard."""
+    """Open the Ralphite terminal shell."""
     orch = _orchestrator(workspace)
-    DashboardApp(orchestrator=orch).run()
+    AppShell(orchestrator=orch, run_id=run_id, initial_screen=screen).run()
 
 
 if __name__ == "__main__":

@@ -25,7 +25,7 @@ Below is an **implementation-ready, multi-phase plan** that turns the updated BR
 
 ### 0.1 Architecture
 
-* **Monorepo**: `apps/web` (React), `apps/api` (FastAPI), `infra/` (docker/compose), `docs/`.
+* **Monorepo (historical snapshot)**: legacy web/api/infra surfaces were removed after TUI pivot; see current `apps/tui`, `packages/engine`, and `docs/`.
 * **Backend is a single service** (monolith) with:
 
   * Postgres for relational + full-text search (FTS)
@@ -376,7 +376,7 @@ Create a stable dev environment and shared conventions so feature work doesn’t
 
 1. [INF] (SEQ) Create repo structure
 
-   * `/apps/web`, `/apps/api`, `/infra`, `/docs`
+   * `/apps/tui`, `/packages/engine`, `/docs`
 2. [INF] (SEQ) Docker Compose dev stack
 
    * Postgres + Redis + API + Worker + Web

@@ -1,15 +1,11 @@
 [tool.uv.workspace]
 members = [
-  "apps/api",
   "apps/tui",
-  "apps/runner",
   "packages/engine",
   "packages/schemas/python"
 ]
 
 [tool.uv.sources]
-ralphite-api = { workspace = true }
 ralphite-tui = { workspace = true }
-ralphite-runner = { workspace = true }
 ralphite-engine = { workspace = true }
 ralphite-schemas = { workspace = true }

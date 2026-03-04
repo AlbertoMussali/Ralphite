@@ -18,6 +18,15 @@ class MigrationResult:
     warnings: list[str]
 
 
+@dataclass
+class StrictMigrationResult:
+    source: Path
+    changed: bool
+    valid: bool
+    warnings: list[str]
+    issues: list[dict[str, Any]]
+
+
 def _normalize_plan(data: dict[str, Any]) -> tuple[dict[str, Any], list[str], bool]:
     warnings: list[str] = []
     changed = False
@@ -90,15 +99,26 @@ def _normalize_plan(data: dict[str, Any]) -> tuple[dict[str, Any], list[str], bo
     return data, warnings, changed
 
 
+def _load(path: Path) -> dict[str, Any] | None:
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        return None
+    return raw
+
+
+def _dump(content: dict[str, Any]) -> str:
+    return yaml.safe_dump(content, sort_keys=False, allow_unicode=False)
+
+
 def migrate_plan_file(path: Path, out_dir: Path) -> MigrationResult:
     source = path.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    raw = yaml.safe_load(source.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
+    raw = _load(source)
+    if raw is None:
         return MigrationResult(source=source, destination=None, changed=False, warnings=["plan root is not a mapping"])
 
     normalized, warnings, changed = _normalize_plan(raw)
-    content = yaml.safe_dump(normalized, sort_keys=False, allow_unicode=False)
+    content = _dump(normalized)
     valid, issues, _summary = validate_plan_content(content)
     if not valid:
         warnings.extend([f"post-migration issue: {issue.get('code')} {issue.get('message')}" for issue in issues])
@@ -110,3 +130,31 @@ def migrate_plan_file(path: Path, out_dir: Path) -> MigrationResult:
     destination = out_dir / versioned_filename(plan_id, f"migrated-{source.stem}")
     destination.write_text(content, encoding="utf-8")
     return MigrationResult(source=source, destination=destination, changed=True, warnings=warnings)
+
+
+def migrate_plan_in_place(path: Path) -> StrictMigrationResult:
+    source = path.resolve()
+    raw = _load(source)
+    if raw is None:
+        return StrictMigrationResult(
+            source=source,
+            changed=False,
+            valid=False,
+            warnings=["plan root is not a mapping"],
+            issues=[{"code": "yaml.invalid", "message": "plan root is not a mapping", "path": "root"}],
+        )
+
+    normalized, warnings, changed = _normalize_plan(raw)
+    content = _dump(normalized)
+    valid, issues, _summary = validate_plan_content(content)
+
+    if changed and valid:
+        source.write_text(content, encoding="utf-8")
+
+    return StrictMigrationResult(
+        source=source,
+        changed=changed,
+        valid=valid,
+        warnings=warnings,
+        issues=issues,
+    )
