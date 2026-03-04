@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ralphite_engine.config import LocalConfig, resolve_default_plan_path, save_config, validate_local_config
+from ralphite_engine.config import LocalConfig, load_config, resolve_default_plan_path, save_config, validate_local_config
 
 
 def _config(tmp_path: Path) -> LocalConfig:
@@ -50,3 +50,65 @@ def test_resolve_default_plan_path_finds_plan_in_workspace(tmp_path: Path) -> No
     plan.write_text("version: 4\nplan_id: demo\nname: demo\n", encoding="utf-8")
     resolved = resolve_default_plan_path(tmp_path, "demo.yaml")
     assert resolved == plan.resolve()
+
+
+def test_load_config_treats_string_policy_entries_as_single_values(tmp_path: Path) -> None:
+    cfg_path = tmp_path / ".ralphite" / "config.toml"
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(
+        """
+[profile]
+name = "default"
+
+[policy]
+allow_tools = "tool:*"
+deny_tools = "tool:danger"
+allow_mcps = "mcp:*"
+deny_mcps = ""
+
+[ui]
+compact_timeline = false
+
+[run]
+default_plan = ""
+task_writeback_mode = "revision_only"
+""",
+        encoding="utf-8",
+    )
+    loaded = load_config(tmp_path)
+    assert loaded.allow_tools == ["tool:*"]
+    assert loaded.deny_tools == ["tool:danger"]
+    assert loaded.allow_mcps == ["mcp:*"]
+    assert loaded.deny_mcps == []
+
+
+def test_load_config_sanitizes_invalid_policy_and_default_plan(tmp_path: Path) -> None:
+    cfg_path = tmp_path / ".ralphite" / "config.toml"
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(
+        """
+[profile]
+name = "default"
+
+[policy]
+allow_tools = ["tool:*", "tool:*", "bad"]
+deny_tools = ["tool:ok", "oops"]
+allow_mcps = ["mcp:*", "mcp:*", "bad"]
+deny_mcps = ["mcp:local", "bad"]
+
+[ui]
+compact_timeline = true
+
+[run]
+default_plan = "missing.yaml"
+task_writeback_mode = "bad"
+""",
+        encoding="utf-8",
+    )
+    loaded = load_config(tmp_path)
+    assert loaded.allow_tools == ["tool:*"]
+    assert loaded.deny_tools == ["tool:ok"]
+    assert loaded.allow_mcps == ["mcp:*"]
+    assert loaded.deny_mcps == ["mcp:local"]
+    assert loaded.default_plan is None
+    assert loaded.task_writeback_mode == "revision_only"

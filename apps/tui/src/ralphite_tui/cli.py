@@ -975,6 +975,7 @@ def _run_release_gate(
         ],
     ]
     results: list[dict[str, Any]] = []
+    capture_subprocess_output = machine_mode or quiet
     for command in suites:
         if not quiet and not machine_mode:
             console.print(f"Running release gate suite: {' '.join(command)}")
@@ -982,15 +983,15 @@ def _run_release_gate(
             command,
             cwd=orch.workspace_root,
             check=False,
-            capture_output=machine_mode,
+            capture_output=capture_subprocess_output,
             text=True,
         )
         results.append(
             {
                 "command": " ".join(command),
                 "exit_code": result.returncode,
-                "stdout": result.stdout if machine_mode and verbose else "",
-                "stderr": result.stderr if machine_mode and verbose else "",
+                "stdout": result.stdout if capture_subprocess_output and verbose else "",
+                "stderr": result.stderr if capture_subprocess_output and verbose else "",
             }
         )
         if result.returncode != 0:
@@ -1011,6 +1012,7 @@ def check(
     orch = _orchestrator(workspace)
     mode = _normalize_output(output)
     machine_mode = mode == "json"
+    capture_subprocess_output = machine_mode or quiet
 
     snapshot = _doctor_snapshot(orch, include_fix_suggestions=False)
     if not machine_mode and not quiet:
@@ -1040,15 +1042,15 @@ def check(
             compile_cmd,
             cwd=orch.workspace_root,
             check=False,
-            capture_output=machine_mode,
+            capture_output=capture_subprocess_output,
             text=True,
         )
         command_results.append(
             {
                 "command": " ".join(compile_cmd),
                 "exit_code": compile_result.returncode,
-                "stdout": compile_result.stdout if machine_mode and verbose else "",
-                "stderr": compile_result.stderr if machine_mode and verbose else "",
+                "stdout": compile_result.stdout if capture_subprocess_output and verbose else "",
+                "stderr": compile_result.stderr if capture_subprocess_output and verbose else "",
             }
         )
         if compile_result.returncode != 0:
@@ -1072,15 +1074,15 @@ def check(
             command,
             cwd=orch.workspace_root,
             check=False,
-            capture_output=machine_mode,
+            capture_output=capture_subprocess_output,
             text=True,
         )
         command_results.append(
             {
                 "command": " ".join(command),
                 "exit_code": result.returncode,
-                "stdout": result.stdout if machine_mode and verbose else "",
-                "stderr": result.stderr if machine_mode and verbose else "",
+                "stdout": result.stdout if capture_subprocess_output and verbose else "",
+                "stderr": result.stderr if capture_subprocess_output and verbose else "",
             }
         )
         if result.returncode != 0:

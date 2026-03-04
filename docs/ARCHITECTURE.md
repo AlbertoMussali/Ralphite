@@ -70,7 +70,7 @@ Artifacts live in `.ralphite/artifacts/<run_id>/`.
 
 ## TUI-First Boundary
 
-Run Setup edits only run controls and constraints from the same YAML plan. Task order semantics are task-list driven and not edited as separate lane selectors.
+Run Setup edits run controls plus task-level fields (`title`, `deps`, `agent`, `parallel_group`, `completed`) from the same YAML plan, with per-row validation badges and safe-fix diff preview (`Apply` -> `Accept/Reject`). Task order semantics remain task-list driven and are not edited as separate lane selectors.
 
 ## Operator Playbook
 

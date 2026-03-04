@@ -113,12 +113,15 @@ Flow:
 1. open `Run Setup`
 2. load a plan
 3. review task block preview
-4. toggle pre/post orchestrators and adjust constraints
-5. validate and save a revision
-6. start run
-7. monitor `Phase Timeline`
-8. use `Recovery` if needed
-9. review `Summary`
+4. edit task rows (`title`, `deps`, `parallel_group`, `agent`, `completed`) as needed
+5. use validation badges (`Title`, `Deps`, `Agent`, `Group`) to locate row-level issues
+6. run `Apply Safe Fixes`, review the diff preview, then `Accept` or `Reject`
+7. toggle pre/post orchestrators and adjust constraints
+8. validate and save a revision
+9. start run
+10. monitor `Phase Timeline` with retention (`200/500/1000`), paging, and event-type/failure filters
+11. use `Recovery` if needed (`Show Worktree`, `Show Commands`)
+12. review `Summary`
 
 ## 6) CLI (Automation)
 
@@ -141,6 +144,11 @@ Validation with fix suggestions:
 uv run ralphite validate --workspace . --json
 uv run ralphite validate --workspace . --apply-safe-fixes
 ```
+
+Machine-readable JSON envelopes (`schema_version: cli-output.v1`) are available for:
+
+- `quickstart`, `validate`, `doctor`, `run`, `recover`, `history`, `replay`, `check`
+- `tui` supports JSON only with `--dry-run`
 
 Recover exit codes:
 
