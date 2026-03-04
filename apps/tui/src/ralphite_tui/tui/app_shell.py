@@ -22,8 +22,16 @@ from ralphite_tui.tui.screens.summary_screen import SummaryScreen
 class AppShell(App[None]):
     BINDINGS = [
         ("q", "quit", "Quit"),
-        ("ctrl+p", "open_palette", "Palette"),
-        (":", "open_palette", "Palette"),
+        ("ctrl+p", "command_palette", "Palette"),
+        (":", "command_palette", "Palette"),
+        ("1", "nav_home", "Home"),
+        ("2", "nav_run_setup", "Run Setup"),
+        ("3", "nav_runs", "Runs"),
+        ("4", "nav_phase_timeline", "Phase Timeline"),
+        ("5", "nav_recovery", "Recovery"),
+        ("6", "nav_summary", "Summary"),
+        ("7", "nav_history", "History"),
+        ("8", "nav_settings", "Settings"),
         ("s", "start_run", "Start Run"),
         ("p", "pause_run", "Pause"),
         ("r", "resume_run", "Resume"),
@@ -61,7 +69,7 @@ class AppShell(App[None]):
         self.initial_screen = initial_screen
         self.nav_stack: list[str] = []
         self._current_widget: Any = None
-        self._registry: dict[str, Callable[[], None]] = {}
+        self._palette_handlers: dict[str, Callable[[], None]] = {}
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -140,18 +148,45 @@ class AppShell(App[None]):
         }
         return commands, handlers
 
-    def action_open_palette(self) -> None:
+    def action_command_palette(self) -> None:
         commands, handlers = self._command_map()
-        self._registry = handlers
+        self._palette_handlers = handlers
 
         def _on_selected(command_id: str | None) -> None:
             if not command_id:
                 return
-            handler = self._registry.get(command_id)
+            handler = self._palette_handlers.get(command_id)
             if handler:
                 handler()
 
         self.push_screen(CommandPaletteScreen(commands), _on_selected)
+
+    def action_open_palette(self) -> None:
+        self.action_command_palette()
+
+    def action_nav_home(self) -> None:
+        self.show_screen("home")
+
+    def action_nav_run_setup(self) -> None:
+        self.show_screen("run_setup")
+
+    def action_nav_runs(self) -> None:
+        self.show_screen("runs")
+
+    def action_nav_phase_timeline(self) -> None:
+        self.show_screen("phase_timeline")
+
+    def action_nav_recovery(self) -> None:
+        self.show_screen("recovery")
+
+    def action_nav_summary(self) -> None:
+        self.show_screen("summary")
+
+    def action_nav_history(self) -> None:
+        self.show_screen("history")
+
+    def action_nav_settings(self) -> None:
+        self.show_screen("settings")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""

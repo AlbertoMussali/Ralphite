@@ -76,6 +76,9 @@ class CommandPaletteScreen(ModalScreen[str | None]):
             ]
         self._refresh_table()
 
+    def on_input_submitted(self, _: Input.Submitted) -> None:
+        self.action_select()
+
     def action_cursor_down(self) -> None:
         table = self.query_one("#palette-table", DataTable)
         table.action_cursor_down()
@@ -100,3 +103,10 @@ class CommandPaletteScreen(ModalScreen[str | None]):
 
     def action_dismiss_none(self) -> None:
         self.dismiss(None)
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        row_index = event.cursor_row
+        if row_index is None or row_index < 0 or row_index >= len(self._filtered):
+            self.dismiss(None)
+            return
+        self.dismiss(self._filtered[row_index].id)
