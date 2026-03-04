@@ -56,6 +56,16 @@ uv run ralphite check --workspace . --full
 uv run ralphite check --workspace . --release-gate
 ```
 
+Fixture confidence suite (included in `--release-gate`):
+
+```bash
+uv run --with pytest pytest \
+  packages/engine/tests/test_fixture_plan_matrix.py \
+  packages/engine/tests/test_dispatched_plan_consistency.py \
+  apps/tui/tests/test_bootstrap_e2e.py \
+  apps/tui/tests/test_run_setup_resolved_preview_contract.py -q
+```
+
 ## Canonical Plan (v5)
 
 Ralphite runtime requires `version: 5`.
@@ -172,6 +182,10 @@ outputs:
 - `data.recommended_commands` for one-step remediation (for example `migrate` on v4)
 
 Run Setup in TUI shows the same resolved run preview before execution.
+
+Dispatch consistency guarantee:
+
+- confidence tests assert that `validate --json` resolved nodes/cells/task assignment match runtime dispatched metadata for canonical fixtures.
 
 ## Migration
 

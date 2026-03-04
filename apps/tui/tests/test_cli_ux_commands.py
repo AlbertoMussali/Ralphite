@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from ralphite_engine import LocalOrchestrator
 import ralphite_tui.cli as cli_mod
 from ralphite_tui.cli import app
 
@@ -318,3 +319,26 @@ def test_quickstart_strict_doctor_blocks_warning(tmp_path: Path, monkeypatch: py
     payload = json.loads(result.stdout)
     assert payload["status"] == "failed"
     assert any(item.get("code") == "doctor.failed" for item in payload.get("issues", []))
+
+
+def test_release_gate_includes_fixture_confidence_suites(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    orch = LocalOrchestrator(tmp_path)
+    seen: list[list[str]] = []
+
+    class _Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command, cwd, check, capture_output, text):  # noqa: ANN001
+        seen.append(list(command))
+        return _Result()
+
+    monkeypatch.setattr(cli_mod.subprocess, "run", fake_run)
+    ok, _results = cli_mod._run_release_gate(orch, quiet=True, machine_mode=True, verbose=False)
+    assert ok is True
+    commands = [" ".join(row) for row in seen]
+    assert any("packages/engine/tests/test_fixture_plan_matrix.py" in row for row in commands)
+    assert any("packages/engine/tests/test_dispatched_plan_consistency.py" in row for row in commands)
+    assert any("apps/tui/tests/test_bootstrap_e2e.py" in row for row in commands)
+    assert any("apps/tui/tests/test_run_setup_resolved_preview_contract.py" in row for row in commands)

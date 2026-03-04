@@ -126,6 +126,16 @@ Validate with resolved execution payload:
 uv run ralphite validate --workspace . --json
 ```
 
+Run fixture confidence suite locally:
+
+```bash
+uv run --with pytest pytest \
+  packages/engine/tests/test_fixture_plan_matrix.py \
+  packages/engine/tests/test_dispatched_plan_consistency.py \
+  apps/tui/tests/test_bootstrap_e2e.py \
+  apps/tui/tests/test_run_setup_resolved_preview_contract.py -q
+```
+
 Migrate legacy plan:
 
 ```bash
@@ -165,6 +175,7 @@ Recover exit codes:
 - `summary.resolved_execution` with resolved cells/nodes/assignment/warnings
 - `data.recommended_commands` with direct fix commands (for example migrate v4 -> v5)
 - `summary.cell_counts` and compatibility alias `summary.block_counts`
+- dispatched-plan consistency is covered in fixture E2E tests (validation graph == runtime metadata graph)
 
 ## 8) Completion Write-Back
 

@@ -1253,6 +1253,18 @@ def _run_release_gate(
             "packages/engine/tests/test_e2e_recovery.py",
             "-q",
         ],
+        [
+            "uv",
+            "run",
+            "--with",
+            "pytest",
+            "pytest",
+            "packages/engine/tests/test_fixture_plan_matrix.py",
+            "packages/engine/tests/test_dispatched_plan_consistency.py",
+            "apps/tui/tests/test_bootstrap_e2e.py",
+            "apps/tui/tests/test_run_setup_resolved_preview_contract.py",
+            "-q",
+        ],
     ]
     results: list[dict[str, Any]] = []
     capture_subprocess_output = machine_mode or quiet

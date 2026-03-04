@@ -84,6 +84,12 @@ Failures are typed runtime failures and participate in fail-fast/recovery behavi
 - `cell_counts` (canonical summary metric) with `block_counts` alias retained in v5 cycle
 - `recommended_commands` for direct remediation actions
 
+Fixture confidence matrix:
+
+- canonical fixture plans live under `packages/engine/tests/fixtures/plans`
+- confidence suites assert validation/compile/runtime dispatch consistency for all built-in templates
+- release-gate runs this matrix to ensure install-to-run behavior stays stable
+
 Run Setup is v5-native:
 
 - template/config summary

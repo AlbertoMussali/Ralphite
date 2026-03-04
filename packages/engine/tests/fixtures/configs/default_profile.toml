@@ -1,0 +1,16 @@
+# Canonical default local profile fixture used by confidence tests.
+[profile]
+name = "default"
+
+[policy]
+allow_tools = ["tool:*"]
+deny_tools = []
+allow_mcps = ["mcp:*"]
+deny_mcps = []
+
+[ui]
+compact_timeline = false
+
+[run]
+default_plan = ""
+task_writeback_mode = "revision_only"
