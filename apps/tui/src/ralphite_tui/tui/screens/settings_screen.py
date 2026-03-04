@@ -1,15 +1,42 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Input, Static
 
-from ralphite_engine.config import LocalConfig, save_config
+from ralphite_engine.config import LocalConfig, load_config, save_config, validate_local_config
 
 if TYPE_CHECKING:
     from ralphite_tui.tui.app_shell import AppShell
+
+
+def save_settings_with_rollback(workspace_root: Path, config: LocalConfig) -> tuple[bool, list[str], str]:
+    root = workspace_root.expanduser().resolve()
+    cfg_path = root / ".ralphite" / "config.toml"
+    backup = cfg_path.read_text(encoding="utf-8") if cfg_path.exists() else None
+
+    issues = validate_local_config(config, workspace_root=root)
+    if issues:
+        return False, issues, "validation_failed"
+
+    try:
+        save_config(root, config)
+        loaded = load_config(root)
+        verify_issues = validate_local_config(loaded, workspace_root=root)
+        if verify_issues:
+            raise ValueError("; ".join(verify_issues))
+    except Exception as exc:  # noqa: BLE001
+        if backup is None:
+            if cfg_path.exists():
+                cfg_path.unlink()
+        else:
+            cfg_path.write_text(backup, encoding="utf-8")
+        return False, [str(exc)], "rollback_applied"
+
+    return True, [], str(cfg_path)
 
 
 class SettingsScreen(Vertical):
@@ -118,6 +145,11 @@ class SettingsScreen(Vertical):
             default_plan=self.query_one("#cfg-default-plan", Input).value.strip() or None,
             task_writeback_mode=writeback_mode,  # type: ignore[arg-type]
         )
-        save_config(self.shell.orchestrator.workspace_root, updated)
-        self.shell.orchestrator.config = updated
-        self._status().update("Settings saved.")
+        ok, issues, detail = save_settings_with_rollback(self.shell.orchestrator.workspace_root, updated)
+        if not ok:
+            self.shell.orchestrator.config = load_config(self.shell.orchestrator.workspace_root)
+            preview = issues[0] if issues else "unknown error"
+            self._status().update(f"Settings not saved ({detail}): {preview}")
+            return
+        self.shell.orchestrator.config = load_config(self.shell.orchestrator.workspace_root)
+        self._status().update(f"Settings saved: {detail}")

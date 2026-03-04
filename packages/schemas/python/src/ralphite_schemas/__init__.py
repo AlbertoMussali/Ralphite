@@ -1,3 +1,4 @@
+from .cli_output import CliOutputEnvelopeV1
 from .events import EventEnvelope
 from .plan_common import MaterialsSpec, OutputsSpec, WorkspaceSpec
 from .plan_v4 import PlanSpecV4
@@ -11,5 +12,6 @@ __all__ = [
     "ValidationIssue",
     "WorkspaceSpec",
     "compile_plan",
+    "CliOutputEnvelopeV1",
     "validate_plan",
 ]

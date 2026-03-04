@@ -85,3 +85,18 @@ def test_in_place_writeback_fails_when_plan_path_is_ignored(tmp_path: Path) -> N
     assert failed_node is not None
     assert isinstance(failed_node.result, dict)
     assert failed_node.result.get("reason") == "git_add_failed"
+
+
+def test_disabled_writeback_skips_task_updates(tmp_path: Path) -> None:
+    _prepare_repo(tmp_path)
+    orch = LocalOrchestrator(tmp_path)
+    orch.config.task_writeback_mode = "disabled"
+
+    run_id = orch.start_run(plan_content=_plan_content())
+    assert orch.wait_for_run(run_id, timeout=12.0)
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "succeeded"
+
+    revisions = sorted((tmp_path / ".ralphite" / "plans").glob("completed.*.yaml"))
+    assert revisions == []

@@ -1,4 +1,11 @@
-from ralphite_engine.config import LocalConfig, ensure_workspace_layout, load_config, save_config
+from ralphite_engine.config import (
+    LocalConfig,
+    ensure_workspace_layout,
+    load_config,
+    resolve_default_plan_path,
+    save_config,
+    validate_local_config,
+)
 from ralphite_engine.drafts import autosave_snapshot, latest_snapshot, load_drafts, save_draft
 from ralphite_engine.git_worktree import GitWorktreeManager
 from ralphite_engine.models import (
@@ -37,6 +44,8 @@ __all__ = [
     "present_recovery_mode",
     "present_run_status",
     "save_config",
+    "resolve_default_plan_path",
+    "validate_local_config",
     "save_draft",
     "seed_starter_if_missing",
     "suggest_fixes",

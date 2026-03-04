@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.table import Table
 import typer
 import yaml
+from ralphite_schemas import CliOutputEnvelopeV1
 
 from ralphite_engine import (
     LocalConfig,
@@ -36,6 +37,7 @@ RECOVER_EXIT_PREFLIGHT_FAILED = 13
 RECOVER_EXIT_PENDING = 14
 RECOVER_EXIT_TERMINAL_FAILURE = 15
 RECOVER_EXIT_INTERNAL_ERROR = 16
+CLI_OUTPUT_SCHEMA_VERSION = "cli-output.v1"
 
 
 def _orchestrator(workspace: Path) -> LocalOrchestrator:
@@ -71,25 +73,27 @@ def _validate_all_plans(orch: LocalOrchestrator) -> tuple[bool, list[tuple[Path,
 
 def _result_payload(
     *,
+    command: str,
     ok: bool,
     status: str,
     run_id: str | None = None,
     exit_code: int = 0,
     issues: list[dict[str, Any]] | None = None,
     next_actions: list[str] | None = None,
-    extra: dict[str, Any] | None = None,
+    data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "ok": ok,
-        "status": status,
-        "run_id": run_id,
-        "exit_code": exit_code,
-        "issues": issues or [],
-        "next_actions": next_actions or [],
-    }
-    if extra:
-        payload.update(extra)
-    return payload
+    envelope = CliOutputEnvelopeV1(
+        schema_version=CLI_OUTPUT_SCHEMA_VERSION,
+        command=command,
+        ok=ok,
+        status=status,
+        run_id=run_id,
+        exit_code=exit_code,
+        issues=issues or [],
+        next_actions=next_actions or [],
+        data=data or {},
+    )
+    return envelope.model_dump(mode="json")
 
 
 def _normalize_output(output: str, json_mode: bool = False) -> str:
@@ -282,7 +286,9 @@ def _print_run_stream(orch: LocalOrchestrator, run_id: str, *, verbose: bool = F
 
 def _emit_payload(output: str, payload: dict[str, Any], *, title: str | None = None) -> None:
     if output == "json":
-        console.print(json.dumps(payload, indent=2, sort_keys=True))
+        # JSON mode must remain machine-parseable with no Rich wrapping or formatting.
+        sys.stdout.write(json.dumps(payload, sort_keys=True) + "\n")
+        sys.stdout.flush()
         return
     if title:
         console.print(f"[bold]{title}[/bold]")
@@ -344,10 +350,24 @@ def quickstart(
     no_tui: Annotated[bool, typer.Option("--no-tui", help="Stream in terminal instead of opening TUI")] = False,
     yes: Annotated[bool, typer.Option("--yes", help="Auto-approve capabilities")] = False,
     output: Annotated[str, typer.Option("--output", help="Output mode: table | stream | json")] = "table",
+    quiet: Annotated[bool, typer.Option("--quiet", help="Suppress non-critical output")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", help="Show extra event guidance")] = False,
 ) -> None:
     """Run guided first-run flow: doctor -> plan -> run."""
     orch = _orchestrator(workspace)
     mode = _normalize_output(output)
+    if mode == "json" and not no_tui:
+        payload = _result_payload(
+            command="quickstart",
+            ok=False,
+            status="failed",
+            run_id=None,
+            exit_code=RECOVER_EXIT_INVALID_INPUT,
+            issues=[{"code": "quickstart.no_tui_required", "message": "use --no-tui for JSON output"}],
+            next_actions=["Re-run with --no-tui --output json."],
+        )
+        _emit_payload(mode, payload, title="Quickstart")
+        raise typer.Exit(code=RECOVER_EXIT_INVALID_INPUT)
 
     snapshot = _doctor_snapshot(orch, include_fix_suggestions=False)
     if not bool(snapshot.get("ok")):
@@ -355,13 +375,14 @@ def quickstart(
             _emit_payload(
                 mode,
                 _result_payload(
+                    command="quickstart",
                     ok=False,
                     status="failed",
                     run_id=None,
                     exit_code=1,
                     issues=[{"code": "doctor.failed", "message": "workspace checks failed"}],
                     next_actions=["Run `ralphite doctor --output table` to inspect failures."],
-                    extra={"doctor": snapshot},
+                    data={"doctor": snapshot},
                 ),
                 title="Quickstart",
             )
@@ -372,15 +393,15 @@ def quickstart(
     plan_ref: str | None = None
     if goal:
         plan_ref = str(orch.goal_to_plan(goal))
-        if mode != "json":
+        if not quiet and mode != "json":
             console.print(f"Generated plan from goal: {plan_ref}")
     else:
         plan_ref = str(_resolve_plan_ref(orch, None))
-        if mode != "json":
+        if not quiet and mode != "json":
             console.print(f"Using plan: {plan_ref}")
 
     requirements = orch.collect_requirements(plan_ref=plan_ref)
-    if mode != "json":
+    if not quiet and mode != "json":
         console.print(f"Required tools: {requirements['tools'] or ['none']}")
         console.print(f"Required mcps: {requirements['mcps'] or ['none']}")
 
@@ -388,6 +409,7 @@ def quickstart(
         approved = typer.confirm("Approve these capabilities for this run?", default=True)
         if not approved:
             payload = _result_payload(
+                command="quickstart",
                 ok=False,
                 status="cancelled",
                 run_id=None,
@@ -400,20 +422,27 @@ def quickstart(
     run_id = orch.start_run(plan_ref=plan_ref, metadata={"source": "cli.quickstart", "goal": goal})
     if no_tui:
         if mode == "stream":
-            _print_run_stream(orch, run_id, verbose=False)
+            _print_run_stream(orch, run_id, verbose=verbose)
         else:
             orch.wait_for_run(run_id, timeout=60.0)
             run = orch.get_run(run_id)
             status = run.status if run else "unknown"
             payload = _result_payload(
+                command="quickstart",
                 ok=status == "succeeded",
                 status=status,
                 run_id=run_id,
                 exit_code=0 if status == "succeeded" else 1,
                 next_actions=[present_run_status(status).next_action],
-                extra={"artifacts": run.artifacts if run else []},
+                data={
+                    "artifacts": run.artifacts if run else [],
+                    "required_tools": requirements["tools"],
+                    "required_mcps": requirements["mcps"],
+                },
             )
             _emit_payload(mode, payload, title="Quickstart")
+            if status != "succeeded":
+                raise typer.Exit(code=1)
         return
 
     AppShell(orchestrator=orch, run_id=run_id, initial_screen="run_setup").run()
@@ -425,9 +454,13 @@ def validate(
     plan: Annotated[str | None, typer.Option(help="Plan file path or name")] = None,
     json_mode: Annotated[bool, typer.Option("--json", help="Emit machine-readable output")] = False,
     apply_safe_fixes: Annotated[bool, typer.Option("--apply-safe-fixes", help="Write an auto-fixed revision")] = False,
+    output: Annotated[str, typer.Option("--output", help="Output mode: table | json")] = "table",
+    quiet: Annotated[bool, typer.Option("--quiet", help="Suppress non-critical output")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", help="Show extra details")] = False,
 ) -> None:
     """Validate a plan and suggest safe fixes."""
     orch = _orchestrator(workspace)
+    mode = _normalize_output(output, json_mode=json_mode)
     path = _resolve_plan_ref(orch, plan)
     content = path.read_text(encoding="utf-8")
     valid, issues, summary = validate_plan_content(content, workspace_root=orch.workspace_root)
@@ -457,16 +490,27 @@ def validate(
         payload["fixed_valid"] = fixed_valid
         payload["fixed_issues"] = fixed_issues
 
-    if json_mode:
-        console.print(json.dumps(payload, indent=2, sort_keys=True))
+    envelope = _result_payload(
+        command="validate",
+        ok=bool(payload.get("ok")),
+        status=str(payload.get("status", "unknown")),
+        run_id=None,
+        exit_code=0 if valid else 1,
+        issues=issues,
+        next_actions=["Review suggested safe fixes and rerun validate."] if not valid else ["Validation passed."],
+        data=payload,
+    )
+    if mode == "json":
+        _emit_payload(mode, envelope)
     else:
-        console.print(f"Plan: {path}")
-        console.print(f"Valid: {'yes' if valid else 'no'}")
+        if not quiet:
+            console.print(f"Plan: {path}")
+            console.print(f"Valid: {'yes' if valid else 'no'}")
         if issues:
             console.print("Issues:")
             for issue in issues:
                 console.print(f"- {issue.get('code')}: {issue.get('message')} ({issue.get('path')})")
-        if fixes:
+        if fixes and (verbose or not quiet):
             console.print("Suggested safe fixes:")
             for fix in fixes:
                 console.print(f"- {fix.title}: {fix.description} ({fix.path})")
@@ -481,15 +525,28 @@ def doctor(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
     output: Annotated[str, typer.Option("--output", help="Output mode: table | json")] = "table",
     fix_suggestions: Annotated[bool, typer.Option("--fix-suggestions", help="Include auto-fix suggestions")] = False,
+    quiet: Annotated[bool, typer.Option("--quiet", help="Suppress non-critical output")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", help="Show extra details")] = False,
 ) -> None:
     """Check local environment, plans, and runtime readiness."""
     orch = _orchestrator(workspace)
     mode = _normalize_output(output)
     snapshot = _doctor_snapshot(orch, include_fix_suggestions=fix_suggestions)
+    envelope = _result_payload(
+        command="doctor",
+        ok=bool(snapshot.get("ok")),
+        status="succeeded" if bool(snapshot.get("ok")) else "failed",
+        run_id=None,
+        exit_code=0 if bool(snapshot.get("ok")) else 1,
+        issues=[{"code": "doctor.failed", "message": "one or more checks failed"}] if not bool(snapshot.get("ok")) else [],
+        next_actions=["Run with --fix-suggestions to view suggested plan repairs."] if fix_suggestions else [],
+        data=snapshot,
+    )
     if mode == "json":
-        console.print(json.dumps(snapshot, indent=2, sort_keys=True))
+        _emit_payload(mode, envelope)
     else:
-        _render_doctor_table(snapshot)
+        if not quiet:
+            _render_doctor_table(snapshot)
         if fix_suggestions and snapshot.get("fix_suggestions"):
             console.print("\nSuggested fixes:")
             for row in snapshot.get("fix_suggestions", []):
@@ -500,6 +557,8 @@ def doctor(
                 for fix in fixes:
                     if isinstance(fix, dict):
                         console.print(f"  * {fix.get('title')}: {fix.get('description')}")
+        elif verbose and not quiet:
+            console.print("No fix suggestions available.")
     if not bool(snapshot.get("ok")):
         raise typer.Exit(code=1)
 
@@ -519,6 +578,18 @@ def run(
     """Run a plan immediately with optional TUI monitoring."""
     orch = _orchestrator(workspace)
     output_mode = _normalize_output(output)
+    if output_mode == "json" and not no_tui:
+        payload = _result_payload(
+            command="run",
+            ok=False,
+            status="failed",
+            run_id=None,
+            exit_code=RECOVER_EXIT_INVALID_INPUT,
+            issues=[{"code": "run.no_tui_required", "message": "use --no-tui for JSON output"}],
+            next_actions=["Re-run with --no-tui --output json."],
+        )
+        _emit_payload(output_mode, payload, title="Run")
+        raise typer.Exit(code=RECOVER_EXIT_INVALID_INPUT)
 
     plan_ref = plan
     if goal:
@@ -551,12 +622,13 @@ def run(
             run_state = orch.get_run(run_id)
             status = run_state.status if run_state else "unknown"
             payload = _result_payload(
+                command="run",
                 ok=status == "succeeded",
                 status=status,
                 run_id=run_id,
                 exit_code=0 if status == "succeeded" else 1,
                 next_actions=[present_run_status(status).next_action],
-                extra={
+                data={
                     "artifacts": run_state.artifacts if run_state else [],
                     "required_tools": requirements["tools"],
                     "required_mcps": requirements["mcps"],
@@ -587,10 +659,23 @@ def recover(
     """Recover and resume a checkpointed run with explicit recovery mode and automation semantics."""
     orch = _orchestrator(workspace)
     output_mode = _normalize_output(output, json_mode=json_mode)
+    if output_mode == "json" and not no_tui and not preflight_only:
+        payload = _result_payload(
+            command="recover",
+            ok=False,
+            status="failed",
+            run_id=run_id,
+            exit_code=RECOVER_EXIT_INVALID_INPUT,
+            issues=[{"code": "recover.no_tui_required", "message": "use --no-tui for JSON output"}],
+            next_actions=["Re-run with --no-tui --output json, or use --preflight-only."],
+        )
+        _emit_payload(output_mode, payload, title="Recovery")
+        raise typer.Exit(code=RECOVER_EXIT_INVALID_INPUT)
 
     allowed_modes = {"manual", "agent_best_effort", "abort_phase"}
     if mode not in allowed_modes:
         payload = _result_payload(
+            command="recover",
             ok=False,
             status="failed",
             run_id=run_id,
@@ -606,6 +691,7 @@ def recover(
         recoverable = orch.list_recoverable_runs()
         if not recoverable:
             payload = _result_payload(
+                command="recover",
                 ok=False,
                 status="failed",
                 run_id=None,
@@ -619,6 +705,7 @@ def recover(
 
     if not orch.recover_run(target):
         payload = _result_payload(
+            command="recover",
             ok=False,
             status="failed",
             run_id=target,
@@ -630,6 +717,7 @@ def recover(
 
     if not orch.set_recovery_mode(target, mode, prompt=prompt):
         payload = _result_payload(
+            command="recover",
             ok=False,
             status="failed",
             run_id=target,
@@ -644,38 +732,41 @@ def recover(
         exit_code = RECOVER_EXIT_SUCCESS if preflight.get("ok") else RECOVER_EXIT_PREFLIGHT_FAILED
         issues = [] if preflight.get("ok") else [{"code": "recover.preflight_failed", "message": "preflight failed"}]
         payload = _result_payload(
+            command="recover",
             ok=bool(preflight.get("ok")),
             status="succeeded" if preflight.get("ok") else "failed",
             run_id=target,
             exit_code=exit_code,
             issues=issues,
             next_actions=list(preflight.get("blocking_reasons", [])) if isinstance(preflight, dict) else [],
-            extra={"preflight": preflight},
+            data={"preflight": preflight},
         )
         _emit_payload(output_mode, payload, title="Recovery Preflight")
         raise typer.Exit(code=exit_code)
 
     if not preflight.get("ok"):
         payload = _result_payload(
+            command="recover",
             ok=False,
             status="failed",
             run_id=target,
             exit_code=RECOVER_EXIT_PREFLIGHT_FAILED,
             issues=[{"code": "recover.preflight_failed", "message": "recovery preflight failed"}],
             next_actions=list(preflight.get("blocking_reasons", [])) if isinstance(preflight, dict) else [],
-            extra={"preflight": preflight},
+            data={"preflight": preflight},
         )
         _emit_payload(output_mode, payload, title="Recovery")
         raise typer.Exit(code=RECOVER_EXIT_PREFLIGHT_FAILED)
 
     if not resume:
         payload = _result_payload(
+            command="recover",
             ok=True,
             status="paused",
             run_id=target,
             exit_code=RECOVER_EXIT_PENDING,
             next_actions=["Run `ralphite recover --resume` to continue."],
-            extra={"preflight": preflight},
+            data={"preflight": preflight},
         )
         _emit_payload(output_mode, payload, title="Recovery")
         raise typer.Exit(code=RECOVER_EXIT_PENDING)
@@ -684,6 +775,7 @@ def recover(
     if not resumed:
         latest_preflight = orch.recovery_preflight(target)
         payload = _result_payload(
+            command="recover",
             ok=False,
             status="paused_recovery_required",
             run_id=target,
@@ -692,7 +784,7 @@ def recover(
             next_actions=list(latest_preflight.get("blocking_reasons", []))
             if isinstance(latest_preflight, dict)
             else [],
-            extra={"preflight": latest_preflight},
+            data={"preflight": latest_preflight},
         )
         _emit_payload(output_mode, payload, title="Recovery")
         raise typer.Exit(code=RECOVER_EXIT_PENDING)
@@ -713,12 +805,13 @@ def recover(
         else:
             exit_code = RECOVER_EXIT_INTERNAL_ERROR
         payload = _result_payload(
+            command="recover",
             ok=exit_code == RECOVER_EXIT_SUCCESS,
             status=status,
             run_id=target,
             exit_code=exit_code,
             next_actions=[present_run_status(status).next_action],
-            extra={"artifacts": run.artifacts if run else []},
+            data={"artifacts": run.artifacts if run else []},
         )
         _emit_payload(output_mode, payload, title="Recovery Result")
         raise typer.Exit(code=exit_code)
@@ -734,14 +827,15 @@ def history(
     query: Annotated[str | None, typer.Option(help="Search by id/status/path")] = None,
     limit: Annotated[int, typer.Option(help="Max rows")] = 20,
     output: Annotated[str, typer.Option("--output", help="Output mode: table | json")] = "table",
+    quiet: Annotated[bool, typer.Option("--quiet", help="Suppress non-critical output")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", help="Show extra details")] = False,
 ) -> None:
     """Show local run history."""
     orch = _orchestrator(workspace)
     rows = orch.list_history(limit=limit, query=query)
     mode = _normalize_output(output)
 
-    if mode == "json":
-        payload = [
+    rows_payload = [
             {
                 "run_id": run.id,
                 "status": run.status,
@@ -753,8 +847,20 @@ def history(
             }
             for run in rows
         ]
-        console.print(json.dumps(payload, indent=2, sort_keys=True))
+    envelope = _result_payload(
+        command="history",
+        ok=True,
+        status="succeeded",
+        run_id=None,
+        exit_code=0,
+        data={"rows": rows_payload, "query": query, "limit": limit},
+    )
+    if mode == "json":
+        _emit_payload(mode, envelope)
         return
+
+    if verbose and not quiet:
+        console.print(f"Rows returned: {len(rows_payload)}")
 
     table = Table(title="Run History")
     table.add_column("Run ID")
@@ -774,18 +880,59 @@ def replay(
     run_id: Annotated[str, typer.Argument(help="Existing run id")],
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
     no_tui: Annotated[bool, typer.Option("--no-tui", help="Print streaming logs instead of opening TUI")] = False,
+    output: Annotated[str, typer.Option("--output", help="Output mode: stream | table | json")] = "stream",
+    quiet: Annotated[bool, typer.Option("--quiet", help="Suppress non-critical output")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", help="Show extra event guidance")] = False,
 ) -> None:
     """Replay a previous run in rerun-failed mode."""
     orch = _orchestrator(workspace)
+    mode = _normalize_output(output)
+    if mode == "json" and not no_tui:
+        payload = _result_payload(
+            command="replay",
+            ok=False,
+            status="failed",
+            run_id=None,
+            exit_code=RECOVER_EXIT_INVALID_INPUT,
+            issues=[{"code": "replay.no_tui_required", "message": "use --no-tui for JSON output"}],
+            next_actions=["Re-run with --no-tui --output json."],
+        )
+        _emit_payload(mode, payload, title="Replay")
+        raise typer.Exit(code=RECOVER_EXIT_INVALID_INPUT)
+
     new_run_id = orch.rerun_failed(run_id)
-    console.print(f"Replay started: {new_run_id} (from {run_id})")
+    if not quiet and mode != "json":
+        console.print(f"Replay started: {new_run_id} (from {run_id})")
     if no_tui:
-        _print_run_stream(orch, new_run_id)
+        if mode == "stream":
+            _print_run_stream(orch, new_run_id, verbose=verbose)
+            return
+        orch.wait_for_run(new_run_id, timeout=60.0)
+        run = orch.get_run(new_run_id)
+        status = run.status if run else "unknown"
+        payload = _result_payload(
+            command="replay",
+            ok=status == "succeeded",
+            status=status,
+            run_id=new_run_id,
+            exit_code=0 if status == "succeeded" else 1,
+            next_actions=[present_run_status(status).next_action],
+            data={"source_run_id": run_id, "artifacts": run.artifacts if run else []},
+        )
+        _emit_payload(mode, payload, title="Replay")
+        if status != "succeeded":
+            raise typer.Exit(code=1)
     else:
         AppShell(orchestrator=orch, run_id=new_run_id, initial_screen="phase_timeline").run()
 
 
-def _run_release_gate(orch: LocalOrchestrator) -> bool:
+def _run_release_gate(
+    orch: LocalOrchestrator,
+    *,
+    quiet: bool = False,
+    machine_mode: bool = False,
+    verbose: bool = False,
+) -> tuple[bool, list[dict[str, Any]]]:
     suites = [
         [
             "uv",
@@ -827,12 +974,28 @@ def _run_release_gate(orch: LocalOrchestrator) -> bool:
             "-q",
         ],
     ]
+    results: list[dict[str, Any]] = []
     for command in suites:
-        console.print(f"Running release gate suite: {' '.join(command)}")
-        result = subprocess.run(command, cwd=orch.workspace_root, check=False)
+        if not quiet and not machine_mode:
+            console.print(f"Running release gate suite: {' '.join(command)}")
+        result = subprocess.run(
+            command,
+            cwd=orch.workspace_root,
+            check=False,
+            capture_output=machine_mode,
+            text=True,
+        )
+        results.append(
+            {
+                "command": " ".join(command),
+                "exit_code": result.returncode,
+                "stdout": result.stdout if machine_mode and verbose else "",
+                "stderr": result.stderr if machine_mode and verbose else "",
+            }
+        )
         if result.returncode != 0:
-            return False
-    return True
+            return False, results
+    return True, results
 
 
 @app.command()
@@ -840,12 +1003,30 @@ def check(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
     full: Annotated[bool, typer.Option("--full", help="Run full repo test suite")] = False,
     release_gate: Annotated[bool, typer.Option("--release-gate", help="Run v4 stabilization release gate suites")] = False,
+    output: Annotated[str, typer.Option("--output", help="Output mode: table | json")] = "table",
+    quiet: Annotated[bool, typer.Option("--quiet", help="Suppress non-critical output")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", help="Show extra details")] = False,
 ) -> None:
     """Run baseline quality gates for local UX reliability."""
     orch = _orchestrator(workspace)
+    mode = _normalize_output(output)
+    machine_mode = mode == "json"
+
     snapshot = _doctor_snapshot(orch, include_fix_suggestions=False)
-    _render_doctor_table(snapshot)
+    if not machine_mode and not quiet:
+        _render_doctor_table(snapshot)
+    command_results: list[dict[str, Any]] = []
     if not bool(snapshot.get("ok")):
+        envelope = _result_payload(
+            command="check",
+            ok=False,
+            status="failed",
+            run_id=None,
+            exit_code=1,
+            issues=[{"code": "check.doctor_failed", "message": "doctor checks failed"}],
+            data={"doctor": snapshot, "commands": command_results},
+        )
+        _emit_payload(mode, envelope, title="Check")
         raise typer.Exit(code=1)
 
     compile_targets = []
@@ -855,22 +1036,94 @@ def check(
             compile_targets.append(relative)
     if compile_targets:
         compile_cmd = [sys.executable, "-m", "compileall", *compile_targets]
-        compile_result = subprocess.run(compile_cmd, cwd=orch.workspace_root, check=False)
+        compile_result = subprocess.run(
+            compile_cmd,
+            cwd=orch.workspace_root,
+            check=False,
+            capture_output=machine_mode,
+            text=True,
+        )
+        command_results.append(
+            {
+                "command": " ".join(compile_cmd),
+                "exit_code": compile_result.returncode,
+                "stdout": compile_result.stdout if machine_mode and verbose else "",
+                "stderr": compile_result.stderr if machine_mode and verbose else "",
+            }
+        )
         if compile_result.returncode != 0:
+            envelope = _result_payload(
+                command="check",
+                ok=False,
+                status="failed",
+                run_id=None,
+                exit_code=1,
+                issues=[{"code": "check.compile_failed", "message": "compileall failed"}],
+                data={"doctor": snapshot, "commands": command_results},
+            )
+            _emit_payload(mode, envelope, title="Check")
             raise typer.Exit(code=1)
 
     if full:
         command = ["uv", "run", "--with", "pytest", "pytest", "packages/engine/tests", "apps/tui/tests", "-q"]
-        console.print(f"Running: {' '.join(command)}")
-        result = subprocess.run(command, cwd=orch.workspace_root, check=False)
+        if not quiet and not machine_mode:
+            console.print(f"Running: {' '.join(command)}")
+        result = subprocess.run(
+            command,
+            cwd=orch.workspace_root,
+            check=False,
+            capture_output=machine_mode,
+            text=True,
+        )
+        command_results.append(
+            {
+                "command": " ".join(command),
+                "exit_code": result.returncode,
+                "stdout": result.stdout if machine_mode and verbose else "",
+                "stderr": result.stderr if machine_mode and verbose else "",
+            }
+        )
         if result.returncode != 0:
+            envelope = _result_payload(
+                command="check",
+                ok=False,
+                status="failed",
+                run_id=None,
+                exit_code=1,
+                issues=[{"code": "check.pytest_failed", "message": "full test suite failed"}],
+                data={"doctor": snapshot, "commands": command_results},
+            )
+            _emit_payload(mode, envelope, title="Check")
             raise typer.Exit(code=1)
 
     if release_gate:
-        if not _run_release_gate(orch):
+        gate_ok, gate_results = _run_release_gate(orch, quiet=quiet, machine_mode=machine_mode, verbose=verbose)
+        command_results.extend(gate_results)
+        if not gate_ok:
+            envelope = _result_payload(
+                command="check",
+                ok=False,
+                status="failed",
+                run_id=None,
+                exit_code=1,
+                issues=[{"code": "check.release_gate_failed", "message": "release gate suite failed"}],
+                data={"doctor": snapshot, "commands": command_results},
+            )
+            _emit_payload(mode, envelope, title="Check")
             raise typer.Exit(code=1)
 
-    console.print("[green]ralphite check passed[/green]")
+    envelope = _result_payload(
+        command="check",
+        ok=True,
+        status="succeeded",
+        run_id=None,
+        exit_code=0,
+        data={"doctor": snapshot, "commands": command_results},
+    )
+    if machine_mode:
+        _emit_payload(mode, envelope)
+    elif not quiet:
+        console.print("[green]ralphite check passed[/green]")
 
 
 @app.command()
@@ -878,9 +1131,44 @@ def tui(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
     screen: Annotated[str, typer.Option(help="Initial screen")] = "home",
     run_id: Annotated[str | None, typer.Option(help="Current run id")] = None,
+    output: Annotated[str, typer.Option("--output", help="Output mode: table | json")] = "table",
+    quiet: Annotated[bool, typer.Option("--quiet", help="Suppress non-critical output")] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", help="Show extra details")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Validate launch parameters without opening TUI")] = False,
 ) -> None:
     """Open the Ralphite terminal shell."""
     orch = _orchestrator(workspace)
+    mode = _normalize_output(output)
+    if mode == "json":
+        if not dry_run:
+            payload = _result_payload(
+                command="tui",
+                ok=False,
+                status="failed",
+                run_id=run_id,
+                exit_code=RECOVER_EXIT_INVALID_INPUT,
+                issues=[{"code": "tui.dry_run_required", "message": "--output json requires --dry-run"}],
+                next_actions=["Re-run with --dry-run for machine-readable launch metadata."],
+                data={"workspace": str(orch.workspace_root), "screen": screen},
+            )
+            _emit_payload(mode, payload, title="TUI")
+            raise typer.Exit(code=RECOVER_EXIT_INVALID_INPUT)
+        payload = _result_payload(
+            command="tui",
+            ok=True,
+            status="succeeded",
+            run_id=run_id,
+            exit_code=0,
+            data={"workspace": str(orch.workspace_root), "screen": screen, "dry_run": True},
+        )
+        _emit_payload(mode, payload, title="TUI")
+        return
+    if dry_run:
+        if not quiet:
+            console.print(f"TUI launch dry-run OK: workspace={orch.workspace_root} screen={screen} run_id={run_id or '-'}")
+        if verbose and not quiet:
+            console.print("Use `ralphite tui` without --dry-run to open the interactive shell.")
+        return
     AppShell(orchestrator=orch, run_id=run_id, initial_screen=screen).run()
 
 

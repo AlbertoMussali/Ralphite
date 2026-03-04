@@ -138,6 +138,10 @@ Exit codes:
 - `15` terminal failed/cancelled
 - `16` internal error
 
+## Playbook
+
+- User-centered operational guide: `docs/USER_CENTERED_PLAYBOOK.md`
+
 ## Workspace Layout
 
 - `.ralphite/config.toml`

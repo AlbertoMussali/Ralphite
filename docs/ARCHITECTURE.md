@@ -71,3 +71,7 @@ Artifacts live in `.ralphite/artifacts/<run_id>/`.
 ## TUI-First Boundary
 
 Run Setup edits only run controls and constraints from the same YAML plan. Task order semantics are task-list driven and not edited as separate lane selectors.
+
+## Operator Playbook
+
+User-facing operational workflows are documented in `docs/USER_CENTERED_PLAYBOOK.md`.

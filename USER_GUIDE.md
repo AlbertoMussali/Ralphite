@@ -192,3 +192,7 @@ Recovery blocked:
 Validation failures:
 
 - run `doctor` or use the Run Setup validation panel.
+
+## 10) User-Centered Playbook
+
+- See `docs/USER_CENTERED_PLAYBOOK.md` for canonical user flows, automation examples, and troubleshooting mapped to status language.

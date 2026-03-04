@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import difflib
 from pathlib import Path
+import re
 from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
@@ -58,6 +60,12 @@ class RunSetupScreen(Vertical):
       margin-bottom: 1;
       height: auto;
     }
+    #setup-fix-preview {
+      border: round $accent;
+      padding: 1;
+      margin-bottom: 1;
+      height: auto;
+    }
     .setup-edit-input {
       width: 1fr;
     }
@@ -70,6 +78,11 @@ class RunSetupScreen(Vertical):
         self._loaded_plan_data: dict[str, Any] | None = None
         self._tasks: list[ParsedTask] = []
         self._task_parse_issues: list[str] = []
+        self._latest_validation_issues: list[dict[str, Any]] = []
+        self._task_badges: dict[int, dict[str, str]] = {}
+        self._pending_fixed_plan_data: dict[str, Any] | None = None
+        self._pending_fix_diff: str = ""
+        self._pending_fix_count: int = 0
 
     @property
     def shell(self) -> "AppShell":
@@ -86,6 +99,8 @@ class RunSetupScreen(Vertical):
             yield Button("MaxParallel +", id="max-parallel-inc")
             yield Button("Validate", id="validate")
             yield Button("Apply Safe Fixes", id="apply-safe-fixes")
+            yield Button("Accept Fixes", id="accept-fixes")
+            yield Button("Reject Fixes", id="reject-fixes")
             yield Button("Save Revision", id="save-revision", variant="success")
             yield Button("Start", id="start-selected", variant="success")
 
@@ -98,7 +113,7 @@ class RunSetupScreen(Vertical):
         yield run_table
 
         tasks = DataTable(id="setup-tasks")
-        tasks.add_columns("Task", "Done", "Parallel Group", "Deps", "Agent", "Order")
+        tasks.add_columns("Task", "Done", "Parallel Group", "Deps", "Agent", "Order", "Title", "Deps✓", "Agent✓", "Group✓")
         yield tasks
 
         with Horizontal(id="setup-task-editor"):
@@ -110,6 +125,7 @@ class RunSetupScreen(Vertical):
             yield Button("Apply Task Edit", id="apply-task-edit", variant="primary")
 
         yield Static("No structure preview yet.", id="setup-structure")
+        yield Static("No safe-fix preview yet.", id="setup-fix-preview")
         yield Static("Load a plan to edit run controls and preview task blocks.", id="setup-validation")
 
     def on_mount(self) -> None:
@@ -132,6 +148,59 @@ class RunSetupScreen(Vertical):
 
     def _structure(self) -> Static:
         return self.query_one("#setup-structure", Static)
+
+    def _fix_preview(self) -> Static:
+        return self.query_one("#setup-fix-preview", Static)
+
+    def _clear_fix_preview(self) -> None:
+        self._pending_fixed_plan_data = None
+        self._pending_fix_diff = ""
+        self._pending_fix_count = 0
+        self._fix_preview().update("No safe-fix preview yet.")
+
+    def _task_index_from_issue_path(self, path: str) -> tuple[int | None, str | None]:
+        if not path:
+            return None, None
+        match = re.search(r"tasks\[(\d+)\]", path)
+        if not match:
+            match = re.search(r"tasks\.(\d+)", path)
+        if not match:
+            if path == "tasks":
+                return -1, "group"
+            return None, None
+        index = int(match.group(1))
+        if ".title" in path:
+            return index, "title"
+        if ".deps" in path:
+            return index, "deps"
+        if ".agent" in path:
+            return index, "agent"
+        if ".parallel_group" in path:
+            return index, "group"
+        return index, None
+
+    def _rebuild_task_badges(self) -> None:
+        self._task_badges = {
+            idx: {"title": "OK", "deps": "OK", "agent": "OK", "group": "OK"}
+            for idx in range(len(self._tasks))
+        }
+        for issue in self._latest_validation_issues:
+            if not isinstance(issue, dict):
+                continue
+            code = str(issue.get("code", "issue"))
+            path = str(issue.get("path", ""))
+            index, field = self._task_index_from_issue_path(path)
+            if index is None:
+                continue
+            if index == -1 and field == "group":
+                for idx in self._task_badges:
+                    self._task_badges[idx]["group"] = f"ERR({code})"
+                continue
+            if index < 0 or index >= len(self._tasks):
+                continue
+            target_fields = [field] if field else ["title", "deps", "agent", "group"]
+            for target in target_fields:
+                self._task_badges[index][target] = f"ERR({code})"
 
     def _selected_task_index(self) -> int | None:
         table = self._tasks_table()
@@ -215,6 +284,7 @@ class RunSetupScreen(Vertical):
         run_table.add_row("Max parallel", str(constraints.get("max_parallel", 1)))
 
         for idx, task in enumerate(self._tasks, start=1):
+            badges = self._task_badges.get(idx - 1, {"title": "OK", "deps": "OK", "agent": "OK", "group": "OK"})
             tasks_table.add_row(
                 task.id,
                 "yes" if task.completed else "no",
@@ -222,6 +292,10 @@ class RunSetupScreen(Vertical):
                 ",".join(task.depends_on) or "-",
                 task.agent or "worker_default",
                 str(idx),
+                badges["title"],
+                badges["deps"],
+                badges["agent"],
+                badges["group"],
             )
 
         if self._tasks:
@@ -233,10 +307,14 @@ class RunSetupScreen(Vertical):
         if not self._loaded_plan_data:
             self._validation().update("Load a plan to validate unified YAML tasks/run/agents.")
             self._structure().update("No structure preview yet.")
+            self._latest_validation_issues = []
+            self._task_badges = {}
             return
 
         content = yaml.safe_dump(self._loaded_plan_data, sort_keys=False, allow_unicode=False)
         valid, issues, summary = validate_plan_content(content, workspace_root=self.shell.orchestrator.workspace_root)
+        self._latest_validation_issues = [issue for issue in issues if isinstance(issue, dict)]
+        self._rebuild_task_badges()
         task_counts = summary.get("task_counts", {})
         block_counts = summary.get("block_counts", {})
 
@@ -268,6 +346,16 @@ class RunSetupScreen(Vertical):
                 if isinstance(node_ids, list):
                     structure_lines.append(f"- {name}: {len(node_ids)} node(s)")
         self._structure().update("\n".join(structure_lines))
+        errored_rows = len(
+            [
+                idx
+                for idx, badges in self._task_badges.items()
+                if any(value.startswith("ERR(") for value in badges.values())
+            ]
+        )
+        base = "Validation passed." if valid else f"Validation issues: {len(issues)}."
+        self._status().update(f"{base} Task rows with errors: {errored_rows}.")
+        self._render_editor_tables()
 
     def _load_plan(self, path: Path) -> None:
         raw = path.read_text(encoding="utf-8")
@@ -278,6 +366,7 @@ class RunSetupScreen(Vertical):
         tasks, parse_issues = parse_plan_tasks(plan_model)
         self._tasks = tasks
         self._task_parse_issues = parse_issues
+        self._clear_fix_preview()
 
         self._render_editor_tables()
         self._refresh_validation()
@@ -294,6 +383,7 @@ class RunSetupScreen(Vertical):
         if not isinstance(block, dict):
             return
         block["enabled"] = not bool(block.get("enabled", False))
+        self._clear_fix_preview()
         self._render_editor_tables()
         self._refresh_validation()
 
@@ -306,6 +396,7 @@ class RunSetupScreen(Vertical):
             self._loaded_plan_data["constraints"] = constraints
         current = int(constraints.get("max_parallel", 3) or 3)
         constraints["max_parallel"] = max(1, current + delta)
+        self._clear_fix_preview()
         self._render_editor_tables()
         self._refresh_validation()
 
@@ -340,6 +431,7 @@ class RunSetupScreen(Vertical):
             return
         row["agent"] = agent_raw or None
         row["completed"] = completed_raw in {"1", "true", "yes", "y"}
+        self._clear_fix_preview()
 
         try:
             model = parse_plan_yaml(yaml.safe_dump(self._loaded_plan_data, sort_keys=False, allow_unicode=False))
@@ -362,7 +454,35 @@ class RunSetupScreen(Vertical):
         updated = dict(self._loaded_plan_data)
         for fix in fixes:
             updated = apply_fix(updated, fix)
-        self._loaded_plan_data = updated
+        before_text = yaml.safe_dump(self._loaded_plan_data, sort_keys=False, allow_unicode=False).splitlines()
+        after_text = yaml.safe_dump(updated, sort_keys=False, allow_unicode=False).splitlines()
+        diff_lines = list(
+            difflib.unified_diff(
+                before_text,
+                after_text,
+                fromfile="current_plan",
+                tofile="safe_fix_candidate",
+                lineterm="",
+            )
+        )
+        self._pending_fixed_plan_data = updated
+        self._pending_fix_diff = "\n".join(diff_lines) if diff_lines else "No textual diff generated."
+        self._pending_fix_count = len(fixes)
+        self._fix_preview().update(
+            f"Safe-fix preview ({len(fixes)} fix(es)). Use Accept Fixes or Reject Fixes.\n\n{self._pending_fix_diff}"
+        )
+        self._status().update(f"Preview ready for {len(fixes)} safe fix(es).")
+
+    def _accept_pending_fixes(self) -> None:
+        if self._pending_fixed_plan_data is None:
+            self._status().update("No pending safe-fix preview to accept.")
+            return
+        self._loaded_plan_data = self._pending_fixed_plan_data
+        self._pending_fixed_plan_data = None
+        applied = self._pending_fix_count
+        self._pending_fix_count = 0
+        self._pending_fix_diff = ""
+        self._fix_preview().update("Safe-fix preview accepted.")
         try:
             model = parse_plan_yaml(yaml.safe_dump(self._loaded_plan_data, sort_keys=False, allow_unicode=False))
             self._tasks, self._task_parse_issues = parse_plan_tasks(model)
@@ -370,7 +490,14 @@ class RunSetupScreen(Vertical):
             pass
         self._render_editor_tables()
         self._refresh_validation()
-        self._status().update(f"Applied {len(fixes)} safe fix(es). Review and save revision.")
+        self._status().update(f"Accepted {applied} safe fix(es). Review and save revision.")
+
+    def _reject_pending_fixes(self) -> None:
+        if self._pending_fixed_plan_data is None:
+            self._status().update("No pending safe-fix preview to reject.")
+            return
+        self._clear_fix_preview()
+        self._status().update("Safe-fix preview rejected.")
 
     def _save_revision(self) -> Path | None:
         if not self._loaded_plan_data:
@@ -421,6 +548,12 @@ class RunSetupScreen(Vertical):
             return
         if button == "apply-safe-fixes":
             self._apply_safe_fixes()
+            return
+        if button == "accept-fixes":
+            self._accept_pending_fixes()
+            return
+        if button == "reject-fixes":
+            self._reject_pending_fixes()
             return
         if button == "apply-task-edit":
             self._apply_task_edit()
