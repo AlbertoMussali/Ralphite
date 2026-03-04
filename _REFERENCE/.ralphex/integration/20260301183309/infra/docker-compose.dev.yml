@@ -1,0 +1,88 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: voicevault
+      POSTGRES_PASSWORD: voicevault
+      POSTGRES_DB: voicevault_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    image: node:20-alpine
+    restart: unless-stopped
+    working_dir: /workspace
+    command: ["sh", "-c", "echo api-placeholder-replace-command && tail -f /dev/null"]
+    volumes:
+      - ./:/workspace
+    environment:
+      DATABASE_URL: postgresql://voicevault:voicevault@db:5432/voicevault_dev
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+
+  worker:
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm
+    restart: unless-stopped
+    working_dir: /workspace
+    command:
+      [
+        "sh",
+        "-lc",
+        "cd /workspace/apps/api && uv run --with-requirements requirements.txt python -m app.worker",
+      ]
+    volumes:
+      - ./:/workspace
+    environment:
+      DATABASE_URL: postgresql://voicevault:voicevault@db:5432/voicevault_dev
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    image: node:20-alpine
+    restart: unless-stopped
+    working_dir: /workspace
+    command: ["sh", "-c", "echo web-placeholder-replace-command && tail -f /dev/null"]
+    volumes:
+      - ./:/workspace
+    environment:
+      API_URL: http://api:3000
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "5173:5173"
+
+volumes:
+  db_data:
+  redis_data:

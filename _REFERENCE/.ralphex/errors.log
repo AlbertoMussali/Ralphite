@@ -1,0 +1,10 @@
+# Error Log
+
+> Failures detected by stream-parser. Use to update guardrails.
+
+[18:14:50] Fatal: unresolvable merge for line_133 (ralphex/parallel-20260301181113-3-line_133-fe-implement-upload-pipeline-create-entry-upload-audio-poll-status).
+[18:37:29] Fatal: unresolvable merge for line_137 (ralphex/parallel-20260301183309-2-line_137-ai-implement-transcription-worker-job-using-openai-stt-and-store-transcript-v1).
+[18:38:55] Fatal: unresolvable merge for line_139 (ralphex/parallel-20260301183309-3-line_139-be-define-and-enforce-error-contract-transient-vs-fatal-error-code-message).
+[19:05:39] Fatal: unresolvable merge for line_137 (ralphex/parallel-20260301190152-2-line_137-ai-implement-transcription-worker-job-using-openai-stt-and-store-transcript-v1).
+[19:07:22] Fatal: unresolvable merge for line_139 (ralphex/parallel-20260301190152-3-line_139-be-define-and-enforce-error-contract-transient-vs-fatal-error-code-message).
+[19:23:56] Fatal: unresolvable merge for line_154 (ralphex/parallel-20260301191629-6-line_154-fe-implement-edit-transcript-mode-that-creates-a-new-transcript-version).

@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ralphite.dev/schemas/plan-spec-v1.json",
+  "title": "PlanSpecV1",
+  "type": "object",
+  "required": ["version", "plan_id", "name", "agents", "graph"],
+  "properties": {
+    "version": {"type": "integer", "const": 1},
+    "plan_id": {"type": "string", "minLength": 1},
+    "name": {"type": "string", "minLength": 1},
+    "workspace": {
+      "type": "object",
+      "properties": {"root": {"type": ["string", "null"]}},
+      "additionalProperties": false
+    },
+    "materials": {
+      "type": "object",
+      "properties": {
+        "autodiscover": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "path": {"type": "string"},
+            "include_globs": {"type": "array", "items": {"type": "string"}}
+          },
+          "additionalProperties": false
+        },
+        "includes": {"type": "array", "items": {"type": "string"}},
+        "uploads": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "provider", "model"],
+        "properties": {
+          "id": {"type": "string"},
+          "provider": {"type": "string"},
+          "model": {"type": "string"},
+          "system_prompt": {"type": "string"},
+          "tools_allow": {"type": "array", "items": {"type": "string"}}
+        },
+        "additionalProperties": false
+      }
+    },
+    "graph": {
+      "type": "object",
+      "required": ["nodes"],
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "kind"],
+            "properties": {
+              "id": {"type": "string"},
+              "kind": {"type": "string", "enum": ["agent", "gate"]},
+              "group": {"type": "string"},
+              "depends_on": {"type": "array", "items": {"type": "string"}},
+              "agent_id": {"type": ["string", "null"]},
+              "task": {"type": ["string", "null"]},
+              "gate": {
+                "type": ["object", "null"],
+                "properties": {
+                  "mode": {"type": "string"},
+                  "pass_if": {"type": "string"}
+                },
+                "required": ["mode", "pass_if"],
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["from", "to", "when"],
+            "properties": {
+              "from": {"type": "string"},
+              "to": {"type": "string"},
+              "when": {"type": "string", "enum": ["success", "failure", "retry", "always"]},
+              "loop_id": {"type": ["string", "null"]}
+            },
+            "additionalProperties": false
+          }
+        },
+        "loops": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "max_iterations"],
+            "properties": {
+              "id": {"type": "string"},
+              "max_iterations": {"type": "integer", "minimum": 1}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "constraints": {
+      "type": "object",
+      "properties": {
+        "max_runtime_seconds": {"type": "integer", "minimum": 1},
+        "max_total_steps": {"type": "integer", "minimum": 1},
+        "max_cost_usd": {"type": "number", "minimum": 0},
+        "fail_fast": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "outputs": {
+      "type": "object",
+      "properties": {
+        "required_artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "format"],
+            "properties": {
+              "id": {"type": "string"},
+              "format": {"type": "string"}
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
