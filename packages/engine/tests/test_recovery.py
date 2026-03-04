@@ -91,3 +91,34 @@ def test_recover_run_and_resume_from_checkpoint(tmp_path: Path) -> None:
     assert recovered is not None
     assert recovered.status in {"succeeded", "failed", "cancelled"}
     assert any(evt.get("event") == "RUN_DONE" for evt in recovered.events)
+
+
+def test_recovery_preflight_blocks_unresolved_conflict_markers(tmp_path: Path) -> None:
+    orch = LocalOrchestrator(tmp_path)
+    plan_path = orch.goal_to_plan("recovery preflight")
+    run_id = orch.start_run(plan_ref=str(plan_path))
+    assert orch.wait_for_run(run_id, timeout=8.0) is True
+
+    assert orch.recover_run(run_id) is True
+    assert orch.set_recovery_mode(run_id, "manual") is True
+
+    conflict_file = tmp_path / "conflict.txt"
+    conflict_file.write_text("<<<<<<< ours\nx\n=======\ny\n>>>>>>> theirs\n", encoding="utf-8")
+
+    handle = orch.active[run_id]  # noqa: SLF001
+    handle.run.status = "paused_recovery_required"
+    handle.run.metadata.setdefault("recovery", {})
+    handle.run.metadata["recovery"]["details"] = {
+        "worktree": str(tmp_path),
+        "conflict_files": ["conflict.txt"],
+        "next_commands": ["resolve conflict"],
+    }
+
+    preflight = orch.recovery_preflight(run_id)
+    assert preflight.get("ok") is False
+    assert "conflict.txt" in preflight.get("unresolved_conflict_files", [])
+    assert orch.resume_from_checkpoint(run_id) is False
+
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.metadata.get("recovery", {}).get("status") == "preflight_failed"
