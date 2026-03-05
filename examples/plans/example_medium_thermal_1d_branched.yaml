@@ -151,7 +151,6 @@ tasks:
 orchestration:
   template: branched
   inference_mode: mixed
-  behaviors: []
   branched:
     lanes: [lane_rust, lane_python]
   blue_red:

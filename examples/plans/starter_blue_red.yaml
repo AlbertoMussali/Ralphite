@@ -49,7 +49,6 @@ tasks:
 orchestration:
   template: blue_red
   inference_mode: mixed
-  behaviors: []
   branched:
     lanes: [lane_a, lane_b]
   blue_red:
