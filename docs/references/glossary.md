@@ -7,5 +7,5 @@ Last verified against commit: 70b0c1f
 - **Runtime node**: compiled execution unit (worker or orchestrator) in the DAG.
 - **Behavior**: orchestrator operation binding (dispatch/merge/summarize/custom).
 - **Acceptance**: task-level commands and required artifacts validated post-execution.
-- **Beta gate**: strict `check` mode requiring doctor + backend smoke + release suites.
+- **Strict check mode**: `check --strict`, requiring doctor + backend smoke + validation suites.
 - **Worktree**: isolated git workspace path used by runtime execution.

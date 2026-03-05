@@ -6,5 +6,5 @@ Start here:
 
 - First run: [docs/workflows/first-run.md](docs/workflows/first-run.md)
 - Recovery: [docs/workflows/recovery.md](docs/workflows/recovery.md)
-- Beta release: [docs/workflows/beta-release.md](docs/workflows/beta-release.md)
+- Release readiness: [docs/workflows/release-readiness.md](docs/workflows/release-readiness.md)
 - CLI reference: [docs/references/cli-contracts.md](docs/references/cli-contracts.md)

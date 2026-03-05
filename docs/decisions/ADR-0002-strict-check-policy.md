@@ -1,4 +1,4 @@
-# ADR-0002: Release Gate Policy
+# ADR-0002: Strict Check Policy
 
 - Status: Accepted
 - Date: 2026-03-05
@@ -6,21 +6,21 @@
 
 ## Context
 
-A single deterministic release signal is needed for beta readiness.
+A single deterministic release signal is needed for release readiness.
 
 ## Decision
 
-`check --release-gate` requires:
+`check --strict` requires:
 
 1. doctor success (blocking checks)
 2. backend smoke success for selected default backend
-3. all release gate suites passing
+3. all strict check suites passing
 
 Cursor support is optional unless selected in config/CLI.
 
 ## Alternatives Considered
 
-1. Keep release gate equivalent to previous (less strict) release suites-only behavior.
+1. Keep strict checks equivalent to previous (less strict) release suites-only behavior.
 2. Require both codex and cursor always.
 3. Remove backend smoke from gate.
 

@@ -8,7 +8,7 @@ Verification commands:
 ```bash
 uv run ruff check .
 uv run --with pytest pytest -q
-uv run ralphite check --workspace . --release-gate --output json
+uv run ralphite check --workspace . --strict --output json
 ```
 
 ## Audience Navigation
@@ -22,7 +22,7 @@ uv run ralphite check --workspace . --release-gate --output json
 
 1. Product and quickstart: [README.md](../README.md)
 2. Runtime model: [docs/architecture/runtime-execution.md](architecture/runtime-execution.md)
-3. Gate and release policy: [docs/workflows/beta-release.md](workflows/beta-release.md)
+3. Gate and release policy: [docs/workflows/release-readiness.md](workflows/release-readiness.md)
 4. Plan/spec references: [docs/references/plan-v5-schema-reference.md](references/plan-v5-schema-reference.md)
 
 ## Source-of-Truth Policy

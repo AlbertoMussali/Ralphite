@@ -13,7 +13,7 @@ Last verified against commit: 70b0c1f
 
 - Tool/MCP allow/deny lists in local config.
 - Doctor and gate checks identify missing commands, model probe issues, and plan validity.
-- Beta gate requires doctor success plus backend smoke and release suites.
+- Strict check mode requires doctor success plus backend smoke and validation suites.
 
 ## Governance
 

@@ -25,7 +25,7 @@ REQUIRED_DOC_PATHS = [
     "docs/product-specs/index.md",
     "docs/product-specs/near-term-roadmap.md",
     "docs/product-specs/operator-personas.md",
-    "docs/product-specs/beta-success-criteria.md",
+    "docs/product-specs/release-success-criteria.md",
     "docs/architecture/index.md",
     "docs/architecture/runtime-execution.md",
     "docs/architecture/orchestration-templates.md",
@@ -35,7 +35,7 @@ REQUIRED_DOC_PATHS = [
     "docs/workflows/index.md",
     "docs/workflows/first-run.md",
     "docs/workflows/recovery.md",
-    "docs/workflows/beta-release.md",
+    "docs/workflows/release-readiness.md",
     "docs/workflows/docs-maintenance.md",
     "docs/exec-plans/active",
     "docs/exec-plans/completed",
@@ -51,7 +51,7 @@ REQUIRED_DOC_PATHS = [
     "docs/decisions/index.md",
     "docs/decisions/ADR-TEMPLATE.md",
     "docs/decisions/ADR-0001-headless-backend-default.md",
-    "docs/decisions/ADR-0002-release-gate-policy.md",
+    "docs/decisions/ADR-0002-strict-check-policy.md",
     "docs/decisions/ADR-0003-starter-plan-governance.md",
     "docs/QUALITY_SCORE.md",
     "docs/RELIABILITY.md",
@@ -105,7 +105,7 @@ def test_major_docs_have_freshness_marker() -> None:
 
 def test_docs_contain_current_contract_strings() -> None:
     corpus = "\n".join(path.read_text(encoding="utf-8") for path in _doc_files())
-    for required in ("gpt-5.3-codex", "--reasoning-effort", "--release-gate"):
+    for required in ("gpt-5.3-codex", "--reasoning-effort", "--strict"):
         assert required in corpus, f"expected docs to contain: {required}"
     assert "gpt-4.1" not in corpus, "legacy model reference leaked into docs"
 

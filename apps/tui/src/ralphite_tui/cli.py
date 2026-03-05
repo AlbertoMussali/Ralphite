@@ -1735,7 +1735,7 @@ def replay(
         ).run()
 
 
-def _run_release_gate(
+def _run_strict_checks(
     *,
     repo_root: Path,
     quiet: bool = False,
@@ -1816,7 +1816,7 @@ def _run_release_gate(
     for suite_name, command in suites:
         if not quiet and not machine_mode:
             console.print(
-                f"Running release gate suite [{suite_name}]: {' '.join(command)}"
+                f"Running strict check suite [{suite_name}]: {' '.join(command)}"
             )
         result = subprocess.run(
             command,
@@ -1950,11 +1950,11 @@ def check(
     full: Annotated[
         bool, typer.Option("--full", help="Run full repo test suite")
     ] = False,
-    release_gate: Annotated[
+    strict: Annotated[
         bool,
         typer.Option(
-            "--release-gate",
-            help="Run strict internal release gate (doctor + backend smoke + release suites)",
+            "--strict",
+            help="Run strict internal checks (doctor + backend smoke + validation suites)",
         ),
     ] = False,
     output: Annotated[
@@ -1975,10 +1975,10 @@ def check(
     capture_subprocess_output = machine_mode or quiet
 
     snapshot = _doctor_snapshot(orch, include_fix_suggestions=False)
-    if not machine_mode and not quiet and not release_gate:
+    if not machine_mode and not quiet and not strict:
         _render_doctor_table(snapshot)
     command_results: list[dict[str, Any]] = []
-    if release_gate and not bool(snapshot.get("ok")):
+    if strict and not bool(snapshot.get("ok")):
         envelope = _result_payload(
             command="check",
             ok=False,
@@ -1987,15 +1987,15 @@ def check(
             exit_code=1,
             issues=[
                 {
-                    "code": "check.release_gate_doctor_failed",
-                    "message": "doctor checks failed for release gate",
+                    "code": "check.strict_doctor_failed",
+                    "message": "doctor checks failed for strict checks",
                 }
             ],
             data={"doctor": snapshot, "commands": command_results},
         )
         _emit_payload(mode, envelope, title="Check")
         raise typer.Exit(code=1)
-    if not release_gate and not bool(snapshot.get("ok")):
+    if not strict and not bool(snapshot.get("ok")):
         envelope = _result_payload(
             command="check",
             ok=False,
@@ -2096,7 +2096,7 @@ def check(
             _emit_payload(mode, envelope, title="Check")
             raise typer.Exit(code=1)
 
-    if release_gate:
+    if strict:
         smoke_ok, smoke_results = _run_backend_smoke(
             orch=orch,
             repo_root=repo_root,
@@ -2123,8 +2123,8 @@ def check(
             _emit_payload(mode, envelope, title="Check")
             raise typer.Exit(code=1)
 
-    if release_gate:
-        gate_ok, gate_results = _run_release_gate(
+    if strict:
+        gate_ok, gate_results = _run_strict_checks(
             repo_root=repo_root,
             quiet=quiet,
             machine_mode=machine_mode,
@@ -2140,8 +2140,8 @@ def check(
                 exit_code=1,
                 issues=[
                     {
-                        "code": "check.release_gate_failed",
-                        "message": "release gate suite failed",
+                        "code": "check.strict_failed",
+                        "message": "strict check suite failed",
                     }
                 ],
                 data={"doctor": snapshot, "commands": command_results},

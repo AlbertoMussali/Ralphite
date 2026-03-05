@@ -23,7 +23,7 @@ Source file: `apps/tui/src/ralphite_tui/cli.py`
 - `--backend codex|cursor` (`run`, `quickstart`)
 - `--model <id>` (`run`, `quickstart`)
 - `--reasoning-effort low|medium|high` (`run`, `quickstart`)
-- `--release-gate` (`check`)
+- `--strict` (`check`)
 
 ## JSON Envelope
 

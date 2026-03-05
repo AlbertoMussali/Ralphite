@@ -12,6 +12,6 @@ Last verified against commit: 70b0c1f
 ## Operational Reliability Checks
 
 - doctor checks
-- release gate suites
-- strict release gate with backend smoke
+- strict check suites
+- strict checks with backend smoke
 - recovery preflight before resume

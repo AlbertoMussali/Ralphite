@@ -287,7 +287,7 @@ def test_quickstart_strict_doctor_blocks_warning(
     )
 
 
-def test_release_gate_includes_fixture_confidence_suites(
+def test_strict_checks_include_fixture_confidence_suites(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seen: list[tuple[list[str], str]] = []
@@ -302,7 +302,7 @@ def test_release_gate_includes_fixture_confidence_suites(
         return _Result()
 
     monkeypatch.setattr(cli_mod.subprocess, "run", fake_run)
-    ok, results = cli_mod._run_release_gate(
+    ok, results = cli_mod._run_strict_checks(
         repo_root=Path(__file__).resolve().parents[3],
         quiet=True,
         machine_mode=True,
@@ -331,7 +331,7 @@ def test_release_gate_includes_fixture_confidence_suites(
     assert all(cwd.endswith("Ralphite") for _row, cwd in seen)
 
 
-def test_check_release_gate_fails_when_doctor_fails(
+def test_check_strict_fails_when_doctor_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def fake_snapshot(_orch, include_fix_suggestions=False):  # noqa: ANN001
@@ -347,18 +347,18 @@ def test_check_release_gate_fails_when_doctor_fails(
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["check", "--workspace", str(tmp_path), "--release-gate", "--output", "json"],
+        ["check", "--workspace", str(tmp_path), "--strict", "--output", "json"],
     )
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
     assert payload["status"] == "failed"
     assert any(
-        item.get("code") == "check.release_gate_doctor_failed"
+        item.get("code") == "check.strict_doctor_failed"
         for item in payload.get("issues", [])
     )
 
 
-def test_check_release_gate_runs_backend_and_release_checks(
+def test_check_strict_runs_backend_and_strict_checks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def fake_snapshot(_orch, include_fix_suggestions=False):  # noqa: ANN001
@@ -380,7 +380,7 @@ def test_check_release_gate_runs_backend_and_release_checks(
             }
         ]
 
-    def fake_release_gate(*, repo_root, quiet, machine_mode, verbose):  # noqa: ANN001
+    def fake_strict_checks(*, repo_root, quiet, machine_mode, verbose):  # noqa: ANN001
         return True, [
             {
                 "suite": "release",
@@ -392,11 +392,11 @@ def test_check_release_gate_runs_backend_and_release_checks(
 
     monkeypatch.setattr(cli_mod, "_doctor_snapshot", fake_snapshot)
     monkeypatch.setattr(cli_mod, "_run_backend_smoke", fake_backend_smoke)
-    monkeypatch.setattr(cli_mod, "_run_release_gate", fake_release_gate)
+    monkeypatch.setattr(cli_mod, "_run_strict_checks", fake_strict_checks)
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["check", "--workspace", str(tmp_path), "--release-gate", "--output", "json"],
+        ["check", "--workspace", str(tmp_path), "--strict", "--output", "json"],
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)

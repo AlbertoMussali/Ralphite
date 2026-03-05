@@ -6,7 +6,7 @@
 
 ## Context
 
-Runtime moved from simulation-centric behavior to explicit headless backend execution for beta truthfulness.
+Runtime moved from simulation-centric behavior to explicit headless backend execution for production truthfulness.
 
 ## Decision
 
@@ -28,7 +28,7 @@ Runtime moved from simulation-centric behavior to explicit headless backend exec
 
 ## Rollback / Migration Plan
 
-If backend regressions occur, gate releases until contract/health checks pass. Do not silently restore simulation defaults for strict release-gate runs.
+If backend regressions occur, gate releases until contract/health checks pass. Do not silently restore simulation defaults for strict strict-check runs.
 
 ## References
 

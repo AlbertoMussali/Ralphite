@@ -199,7 +199,7 @@ def test_apply_orchestration_edit_updates_template_and_config() -> None:
 
     lookup = {
         "#edit-template": _InputStub("branched"),
-        "#edit-branched-lanes": _InputStub("alpha,beta"),
+        "#edit-branched-lanes": _InputStub("alpha,bravo"),
         "#edit-loop-unit": _InputStub("per_task"),
     }
 
@@ -212,7 +212,7 @@ def test_apply_orchestration_edit_updates_template_and_config() -> None:
     screen._apply_orchestration_edit()  # noqa: SLF001
     orchestration = screen._loaded_plan_data["orchestration"]  # noqa: SLF001
     assert orchestration["template"] == "branched"
-    assert orchestration["branched"]["lanes"] == ["alpha", "beta"]
+    assert orchestration["branched"]["lanes"] == ["alpha", "bravo"]
     assert "Template/config set to branched" in status.text
 
 

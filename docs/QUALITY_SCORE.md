@@ -8,7 +8,7 @@ Last verified against commit: 70b0c1f
 - lint: `uv run ruff check .`
 - tests: `uv run --with pytest pytest -q`
 - full check: `uv run ralphite check --workspace . --full --output json`
-- strict release gate: `uv run ralphite check --workspace . --release-gate --output json`
+- strict checks: `uv run ralphite check --workspace . --strict --output json`
 
 ## Scoring Model (Repo Internal)
 

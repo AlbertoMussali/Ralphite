@@ -20,7 +20,7 @@ uv run ralphite run --workspace . --no-tui --yes --output stream
 - User workflows: [docs/workflows/index.md](docs/workflows/index.md)
 - Architecture detail: [docs/architecture/index.md](docs/architecture/index.md)
 - CLI and schema references: [docs/references/index.md](docs/references/index.md)
-- Beta release runbook: [docs/workflows/beta-release.md](docs/workflows/beta-release.md)
+- Release readiness runbook: [docs/workflows/release-readiness.md](docs/workflows/release-readiness.md)
 
 ## Defaults and Compatibility
 

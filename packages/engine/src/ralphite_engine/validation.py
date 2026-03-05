@@ -493,7 +493,7 @@ def suggest_fixes(
             fixes.append(
                 ValidationFix(
                     code="fix.migrate_agent_model",
-                    title="Set beta default model",
+                    title="Set default model",
                     description=f"Sets {model_path} to gpt-5.3-codex.",
                     path=model_path,
                     patch={
@@ -507,7 +507,7 @@ def suggest_fixes(
             fixes.append(
                 ValidationFix(
                     code="fix.migrate_agent_reasoning",
-                    title="Set beta default reasoning effort",
+                    title="Set default reasoning effort",
                     description=f"Sets {reasoning_path} to medium.",
                     path=reasoning_path,
                     patch={

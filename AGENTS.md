@@ -35,17 +35,17 @@ When changing any of these, update docs in the same PR:
 - CLI flags / command outputs
 - Runtime command templates
 - Schema defaults/enums
-- Gate suite composition (`check --release-gate`)
+- Gate suite composition (`check --strict`)
 - Recovery semantics or exit codes
 
 ## ADR Requirement
 
-For architecture/runtime contract changes or release-gate policy changes, add/update an ADR in `docs/decisions/`.
+For architecture/runtime contract changes or strict-check policy changes, add/update an ADR in `docs/decisions/`.
 
 ## Verification Commands
 
 ```bash
 uv run ruff check .
 uv run --with pytest pytest -q
-uv run ralphite check --workspace . --release-gate --output json
+uv run ralphite check --workspace . --strict --output json
 ```
