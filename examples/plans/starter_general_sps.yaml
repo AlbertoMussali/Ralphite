@@ -1,6 +1,9 @@
+# Default starter template for Sequential -> Parallel -> Sequential flows.
 version: 1
 plan_id: starter_general_sps
 name: Starter General SPS
+# Materials define the initial context or files to give the agents.
+# autodiscover dynamically finds files in the workspace matching the globs.
 materials:
   autodiscover:
     enabled: true
@@ -12,6 +15,8 @@ materials:
       - '**/*.txt'
   includes: []
   uploads: []
+# Constraints limit the execution sandbox, protecting against runaway costs.
+# fail_fast ensures the orchestration halts immediately on the first error.
 constraints:
   max_runtime_seconds: 3600
   max_total_steps: 120
@@ -25,9 +30,13 @@ tasks:
   - id: task_plan
     title: Decompose the objective into executable steps.
     completed: false
+    # Routing controls how this task is orchestrated.
+    # cell determines the execution phase (e.g. seq_pre for initial sequential tasks).
     routing:
       cell: seq_pre
       tags: [planning]
+    # Acceptance defines the automated exit conditions for the task.
+    # The task only succeeds if the commands exit cleanly and artifacts exist.
     acceptance:
       commands: []
       required_artifacts: []

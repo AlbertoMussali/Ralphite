@@ -42,6 +42,8 @@ tasks:
     title: Implement Rust core solver for steady/transient 1D conduction in layered stack.
     completed: false
     deps: [task_trunk_spec]
+    # Routing assigns this task to a specific parallel lane.
+    # Tasks in different lanes can run concurrently.
     routing:
       lane: lane_rust
       tags: [lane_rust, rust, solver]
@@ -151,6 +153,8 @@ tasks:
 orchestration:
   template: branched
   inference_mode: mixed
+  # Branched template enables parallel tracks of execution using lanes.
+  # The lanes below define the exact parallel workers available.
   branched:
     lanes: [lane_rust, lane_python]
   blue_red:

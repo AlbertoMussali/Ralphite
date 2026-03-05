@@ -1,6 +1,8 @@
 version: 1
 plan_id: example_easy_calendar_math_cli
 name: Example Easy Calendar Math CLI
+# Materials define the initial context or files to give the agents.
+# autodiscover dynamically finds files in the workspace matching the globs.
 materials:
   autodiscover:
     enabled: true
@@ -12,6 +14,8 @@ materials:
       - '**/*.txt'
   includes: []
   uploads: []
+# Constraints limit the execution sandbox, protecting against runaway costs.
+# fail_fast ensures the orchestration halts immediately on the first task error.
 constraints:
   max_runtime_seconds: 3600
   max_total_steps: 120
@@ -25,9 +29,13 @@ tasks:
   - id: task_requirements
     title: Define calendar math scope, interactive UX flow, and date edge-case rules.
     completed: false
+    # Routing controls how this task is orchestrated.
+    # cell determines the execution phase (e.g. seq_pre for initial sequential tasks).
     routing:
       cell: seq_pre
       tags: [requirements, planning]
+    # Acceptance defines the automated exit conditions for the task.
+    # The task only succeeds if the commands exit cleanly and artifacts exist.
     acceptance:
       commands:
         - uv run --python 3.13 pytest -q tests/test_calendar_math_cli.py -k requirements
