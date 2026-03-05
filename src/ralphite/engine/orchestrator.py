@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import glob
 import json
 from pathlib import Path
-from queue import Empty, Queue
+from queue import Queue
 import subprocess
 import threading
 import time
@@ -24,12 +24,11 @@ from ralphite.engine.git_worktree import GitWorktreeManager
 from ralphite.engine.models import (
     ArtifactIndex,
     NodeRuntimeState,
-    RunCheckpoint,
     RunMetrics,
     RunPersistenceState,
     RunViewState,
 )
-from ralphite.engine.recovery import recoverable_run_ids, to_paused_for_recovery
+from ralphite.engine.recovery import to_paused_for_recovery
 from ralphite.engine.run_store import RunStore
 from ralphite.engine.store import HistoryStore
 from ralphite.engine.structure_compiler import (
@@ -79,6 +78,15 @@ class LocalOrchestrator:
         self.history = HistoryStore(self.paths["history"])
         self.run_store = RunStore(self.paths["runs"])
         self.active: dict[str, RuntimeHandle] = {}
+
+        from ralphite.engine.state_manager import RunStateManager
+        from ralphite.engine.event_logger import RunEventLogger
+        from ralphite.engine.git_orchestrator import GitOrchestrator
+
+        self.state_manager = RunStateManager(self.run_store, self.history)
+        self.event_logger = RunEventLogger(self.run_store, self.history, self.active)
+        self.git_orchestrator = GitOrchestrator(self.workspace_root)
+
         if bootstrap:
             seed_starter_if_missing(self.paths["plans"])
         self._bootstrap_recovery_candidates()
@@ -321,37 +329,10 @@ class LocalOrchestrator:
         return {"tools": tools, "mcps": mcps}
 
     def _persist_runtime_state(self, handle: RuntimeHandle, status: str) -> None:
-        state = RunPersistenceState(
-            run_id=handle.run.id,
-            status=status,
-            plan_path=handle.run.plan_path,
-            run=handle.run,
-            loop_counts={},
-            last_seq=handle.seq,
-        )
-        self.run_store.write_state(state)
-        self.history.upsert(handle.run)
+        self.state_manager.persist_runtime_state(handle, status)
 
     def _checkpoint(self, handle: RuntimeHandle, status: str = "running") -> None:
-        self._persist_runtime_state(handle, "checkpointing")
-        checkpoint = RunCheckpoint(
-            run_id=handle.run.id,
-            status=status,
-            plan_path=handle.run.plan_path,
-            last_seq=handle.seq,
-            loop_counts={},
-            retry_count=handle.run.retry_count,
-            node_attempts={
-                node_id: node.attempt_count
-                for node_id, node in handle.run.nodes.items()
-            },
-            node_statuses={
-                node_id: node.status for node_id, node in handle.run.nodes.items()
-            },
-            active_node_id=handle.run.active_node_id,
-        )
-        self.run_store.write_checkpoint(checkpoint)
-        self._persist_runtime_state(handle, status)
+        self.state_manager.checkpoint(handle, status)
 
     def start_run(
         self,
@@ -550,12 +531,7 @@ class LocalOrchestrator:
         )
 
     def list_recoverable_runs(self) -> list[str]:
-        states = [
-            state
-            for run_id in self.run_store.list_run_ids()
-            if (state := self.run_store.load_state(run_id)) is not None
-        ]
-        return recoverable_run_ids(states, lock_is_stale=self.run_store.lock_is_stale)
+        return self.state_manager.list_recoverable_runs()
 
     def stale_artifact_report(
         self, max_age_hours: int = 24
@@ -918,51 +894,10 @@ class LocalOrchestrator:
     def stream_events(
         self, run_id: str, after_seq: int = 0
     ) -> Generator[dict[str, Any], None, None]:
-        handle = self.active.get(run_id)
-        if not handle:
-            events = self.run_store.load_events(run_id)
-            if not events:
-                saved = self.history.get(run_id)
-                if not saved:
-                    return
-                events = saved.events
-            for event in events:
-                if int(event.get("id", 0)) > after_seq:
-                    yield event
-            return
-
-        seen_ids: set[int] = set()
-        for event in handle.run.events:
-            event_id = int(event.get("id", 0))
-            if event_id > after_seq:
-                seen_ids.add(event_id)
-                yield event
-
-        while True:
-            if handle.finished_event.is_set() and handle.event_queue.empty():
-                break
-            try:
-                event = handle.event_queue.get(timeout=0.25)
-                event_id = int(event.get("id", 0))
-                if event_id <= after_seq or event_id in seen_ids:
-                    continue
-                seen_ids.add(event_id)
-                if event_id > after_seq:
-                    yield event
-            except Empty:
-                continue
+        yield from self.event_logger.stream_events(run_id, after_seq)
 
     def poll_events(self, run_id: str) -> list[dict[str, Any]]:
-        handle = self.active.get(run_id)
-        if not handle:
-            return []
-        events: list[dict[str, Any]] = []
-        while True:
-            try:
-                events.append(handle.event_queue.get_nowait())
-            except Empty:
-                break
-        return events
+        return self.event_logger.poll_events(run_id)
 
     def _emit(
         self,
@@ -976,22 +911,16 @@ class LocalOrchestrator:
         task_id: str | None = None,
         meta: dict[str, Any] | None = None,
     ) -> None:
-        handle.seq += 1
-        payload = {
-            "id": handle.seq,
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "run_id": handle.run.id,
-            "group": group,
-            "task_id": task_id,
-            "stage": stage,
-            "event": event,
-            "level": level,
-            "message": message,
-            "meta": meta or {},
-        }
-        handle.run.events.append(payload)
-        handle.event_queue.put(payload)
-        self.run_store.append_event(handle.run.id, payload)
+        self.event_logger.emit(
+            handle,
+            stage=stage,
+            event=event,
+            level=level,
+            message=message,
+            group=group,
+            task_id=task_id,
+            meta=meta,
+        )
 
     def _tool_allowed(self, tool_id: str, snapshot: dict[str, list[str]]) -> bool:
         deny = set(snapshot.get("deny_tools", []))
@@ -1134,121 +1063,12 @@ class LocalOrchestrator:
         }
 
     def _emit_node_started(self, handle: RuntimeHandle, node: RuntimeNodeSpec) -> None:
-        metadata = handle.run.metadata
-        phase = node.phase
-        lane = node.lane
-
-        phase_started = set(metadata.get("phase_started", []))
-        if phase and phase not in phase_started:
-            self._emit(
-                handle,
-                stage="plan",
-                event="PHASE_STARTED",
-                level="info",
-                message=f"phase started: {phase}",
-                group=phase,
-            )
-            phase_started.add(phase)
-            metadata["phase_started"] = sorted(phase_started)
-
-        if node.role == "worker":
-            lane_started = set(metadata.get("lane_started", []))
-            lane_key = f"{phase}:{lane}"
-            if lane_key not in lane_started:
-                self._emit(
-                    handle,
-                    stage="plan",
-                    event="LANE_STARTED",
-                    level="info",
-                    message=f"lane started: {lane}",
-                    group=phase,
-                    meta={"lane": lane},
-                )
-                lane_started.add(lane_key)
-                metadata["lane_started"] = sorted(lane_started)
-            self._emit(
-                handle,
-                stage="task",
-                event="WORKER_STARTED",
-                level="info",
-                message="worker task started",
-                group=phase,
-                task_id=node.id,
-                meta={"lane": lane},
-            )
-        elif node.role == "orchestrator":
-            self._emit(
-                handle,
-                stage="orchestrator",
-                event="ORCH_STARTED",
-                level="info",
-                message="orchestrator cell started",
-                group=phase,
-                task_id=node.id,
-                meta={
-                    "cell_id": node.cell_id,
-                    "behavior_kind": node.behavior_kind,
-                    "behavior_id": node.behavior_id,
-                },
-            )
+        self.event_logger.emit_node_started(handle, node)
 
     def _emit_node_completed(
         self, handle: RuntimeHandle, node: RuntimeNodeSpec, success: bool
     ) -> None:
-        metadata = handle.run.metadata
-        phase = node.phase
-
-        if node.role == "worker" and success:
-            self._emit(
-                handle,
-                stage="task",
-                event="WORKER_MERGED",
-                level="info",
-                message="worker output integrated to phase branch",
-                group=phase,
-                task_id=node.id,
-                meta={"lane": node.lane},
-            )
-        elif node.role == "orchestrator":
-            self._emit(
-                handle,
-                stage="orchestrator",
-                event="ORCH_DONE",
-                level="info" if success else "error",
-                message="orchestrator cell completed"
-                if success
-                else "orchestrator cell failed",
-                group=phase,
-                task_id=node.id,
-                meta={
-                    "cell_id": node.cell_id,
-                    "behavior_kind": node.behavior_kind,
-                    "behavior_id": node.behavior_id,
-                },
-            )
-
-        phase_done = set(metadata.get("phase_done", []))
-        phase_node_ids = list(metadata.get("phase_nodes", {}).get(phase, []))
-        if phase and phase not in phase_done and phase_node_ids:
-            statuses = [
-                handle.run.nodes[node_id].status
-                for node_id in phase_node_ids
-                if node_id in handle.run.nodes
-            ]
-            terminal = {"succeeded", "failed", "blocked"}
-            if statuses and all(status in terminal for status in statuses):
-                self._emit(
-                    handle,
-                    stage="summary",
-                    event="PHASE_DONE",
-                    level="info"
-                    if all(status == "succeeded" for status in statuses)
-                    else "error",
-                    message=f"phase completed: {phase}",
-                    group=phase,
-                )
-                phase_done.add(phase)
-                metadata["phase_done"] = sorted(phase_done)
+        self.event_logger.emit_node_completed(handle, node, success)
 
     def _start_node_execution(
         self, handle: RuntimeHandle, node: RuntimeNodeSpec
@@ -1694,30 +1514,10 @@ class LocalOrchestrator:
         }
 
     def _resolve_worker_worktree(self, commit_meta: dict[str, Any]) -> Path:
-        raw = commit_meta.get("worktree") if isinstance(commit_meta, dict) else None
-        if isinstance(raw, str) and raw.strip():
-            candidate = Path(raw).expanduser().resolve()
-            if candidate.exists() and candidate.is_dir():
-                return candidate
-        return self.workspace_root
+        return self.git_orchestrator.resolve_worker_worktree(commit_meta)
 
     def _is_worktree_relative_glob(self, path_glob: str) -> bool:
-        value = (path_glob or "").strip()
-        if not value:
-            return False
-        if value.startswith("/") or value.startswith("\\"):
-            return False
-        if (
-            len(value) > 2
-            and value[1] == ":"
-            and value[0].isalpha()
-            and value[2] in {"\\", "/"}
-        ):
-            return False
-        normalized_parts = value.replace("\\", "/").split("/")
-        if any(part == ".." for part in normalized_parts):
-            return False
-        return True
+        return self.git_orchestrator.is_worktree_relative_glob(path_glob)
 
     def _evaluate_acceptance(
         self,
