@@ -1,0 +1,126 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quick-checks:
+    name: Quick Checks
+    runs-on: ubuntu-latest
+    env:
+      RALPHITE_DEV_SIMULATED_EXECUTION: "1"
+      RALPHITE_SKIP_BACKEND_CMD_CHECKS: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install workspace deps
+        run: uv sync --all-packages --dev
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Ruff lint check
+        run: uv run ruff check .
+
+      - name: Ruff autofix cleanliness gate
+        run: |
+          uv run ruff check . --fix
+          git diff --exit-code
+          git diff --cached --exit-code
+
+      - name: Docs contract tests
+        run: uv run --with pytest pytest packages/engine/tests/test_docs_knowledge_base.py -q
+
+      - name: Quick contract tests
+        run: |
+          uv run --with pytest pytest \
+            packages/engine/tests/test_headless_agent.py \
+            apps/cli/tests/test_cli_output_contract.py \
+            apps/cli/tests/test_cli_ux_commands.py::test_check_strict_runs_backend_and_strict_checks \
+            apps/cli/tests/test_cli_hard_pivot_contract.py -q
+
+      - name: CLI smoke
+        run: |
+          mkdir -p /tmp/ralphite-smoke
+          uv run ralphite quickstart --workspace /tmp/ralphite-smoke --bootstrap --yes --output json
+          uv run ralphite run --workspace /tmp/ralphite-smoke --yes --output json
+
+  strict-gate:
+    name: Strict Gate
+    runs-on: ubuntu-latest
+    needs: quick-checks
+    env:
+      RALPHITE_DEV_SIMULATED_EXECUTION: "1"
+      RALPHITE_SKIP_BACKEND_CMD_CHECKS: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install workspace deps
+        run: uv sync --all-packages --dev
+
+      - name: Full test suite
+        run: uv run --with pytest pytest -q
+
+      - name: Strict CLI check
+        run: uv run ralphite check --workspace . --strict --output json
+
+  perf-baseline:
+    name: Perf Baseline
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    needs: strict-gate
+    env:
+      RALPHITE_DEV_SIMULATED_EXECUTION: "1"
+      RALPHITE_SKIP_BACKEND_CMD_CHECKS: "1"
+      RALPHITE_PERF: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install workspace deps
+        run: uv sync --all-packages --dev
+
+      - name: Perf regression gate
+        run: uv run --with pytest pytest apps/cli/tests/perf -q -m perf
