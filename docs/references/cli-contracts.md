@@ -25,6 +25,7 @@ Execution commands (`run`, `quickstart`, `recover`, `replay`) require the select
 - `--model <id>` (`run`, `quickstart`)
 - `--reasoning-effort low|medium|high` (`run`, `quickstart`)
 - `--strict` (`check`)
+- `init --template` prefers job-shaped starters, and still accepts `general_sps | branched | blue_red | custom` for compatibility
 
 ## JSON Envelope
 

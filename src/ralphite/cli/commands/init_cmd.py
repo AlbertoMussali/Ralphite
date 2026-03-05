@@ -25,9 +25,9 @@ def init_command(
         str,
         typer.Option(
             "--template",
-            help="Bootstrap template: general_sps | branched | blue_red | custom",
+            help="Bootstrap template: starter_bugfix | starter_refactor | starter_docs_update | starter_release_prep",
         ),
-    ] = "general_sps",
+    ] = "starter_bugfix",
     plan_id: Annotated[
         str | None, typer.Option(help="Optional plan_id for generated bootstrap plan")
     ] = None,
@@ -53,12 +53,22 @@ def init_command(
     profile_name = profile or orch.config.profile_name
     if not yes and profile is None:
         profile_name = typer.prompt("Profile name", default=orch.config.profile_name)
-    effective_template = (template or "general_sps").strip()
-    if not yes and template == "general_sps":
+    effective_template = (template or "starter_bugfix").strip()
+    if not yes and template == "starter_bugfix":
         effective_template = (
-            typer.prompt("Template", default="general_sps").strip() or "general_sps"
+            typer.prompt("Template", default="starter_bugfix").strip()
+            or "starter_bugfix"
         )
-    allowed_templates = {"general_sps", "branched", "blue_red", "custom"}
+    allowed_templates = {
+        "starter_bugfix",
+        "starter_refactor",
+        "starter_docs_update",
+        "starter_release_prep",
+        "general_sps",
+        "branched",
+        "blue_red",
+        "custom",
+    }
     if effective_template not in allowed_templates:
         raise typer.BadParameter(
             f"template must be one of: {', '.join(sorted(allowed_templates))}"
@@ -106,7 +116,7 @@ def init_command(
         or goal is not None
         or plan_id is not None
         or name is not None
-        or template != "general_sps"
+        or template != "starter_bugfix"
         or branched_lanes is not None
         or blue_red_loop_unit != "per_task"
     )

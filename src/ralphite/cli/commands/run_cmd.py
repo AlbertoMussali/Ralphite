@@ -136,9 +136,7 @@ def run_command(
                     and isinstance(run_state.metadata.get("run_metrics"), dict)
                     else 0.0
                 ),
-                artifacts_count=(
-                    len(run_state.artifacts) if run_state else 0
-                ),
+                artifacts_count=(len(run_state.artifacts) if run_state else 0),
             ),
         },
     )

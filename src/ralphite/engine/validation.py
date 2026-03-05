@@ -486,7 +486,7 @@ def suggest_fixes(
             ValidationFix(
                 code="fix.add_default_worker",
                 title="Add default worker agent",
-                description="Adds a basic worker profile so tasks can execute.",
+                description="Adds a basic worker profile so tasks can execute. Rerun `validate --apply-safe-fixes` to apply automatically.",
                 path="agents",
                 patch={"action": "add_default_worker"},
             )
@@ -496,7 +496,7 @@ def suggest_fixes(
             ValidationFix(
                 code="fix.add_default_orchestrator",
                 title="Add default orchestrator agent",
-                description="Adds a basic orchestrator profile for orchestration cells.",
+                description="Adds a basic orchestrator profile for orchestration cells. Rerun `validate --apply-safe-fixes` to apply automatically.",
                 path="agents",
                 patch={"action": "add_default_orchestrator"},
             )
@@ -536,7 +536,7 @@ def suggest_fixes(
                     ValidationFix(
                         code="fix.clean_invalid_deps",
                         title="Remove invalid task dependencies",
-                        description=f"Removes missing or forward dependencies from {path}.",
+                        description=f"Removes missing or forward dependencies from {path}. Rerun `validate --apply-safe-fixes` to clear them.",
                         path=path,
                         patch={"action": "set_value", "path": path, "value": cleaned},
                     )
@@ -552,7 +552,7 @@ def suggest_fixes(
                 ValidationFix(
                     code="fix.assign_known_agent",
                     title="Assign a known agent profile",
-                    description=f"Replaces {path} with the first available agent id.",
+                    description=f"Replaces {path} with the first available agent id. Rerun `validate --apply-safe-fixes` to assign.",
                     path=path,
                     patch={"action": "set_value", "path": path, "value": agent_ids[0]},
                 )

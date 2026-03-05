@@ -15,8 +15,36 @@ from ralphite.engine.models import (
     RunViewState,
 )
 
+_AGENT_DEFAULTS = """\
+version: 1
+agents:
+  - id: worker_default
+    role: worker
+    provider: codex
+    model: gpt-5.3-codex
+    tools_allow: [tool:*]
+  - id: orchestrator_default
+    role: orchestrator
+    provider: codex
+    model: gpt-5.3-codex
+behaviors:
+  - id: prepare_dispatch_default
+    kind: prepare_dispatch
+    agent: orchestrator_default
+    enabled: true
+  - id: merge_default
+    kind: merge_and_conflict_resolution
+    agent: orchestrator_default
+    enabled: true
+  - id: summarize_default
+    kind: summarize_work
+    agent: orchestrator_default
+    enabled: true
+"""
+
 
 def _init_repo(path: Path) -> None:
+    (path / "agent_defaults.yaml").write_text(_AGENT_DEFAULTS, encoding="utf-8")
     subprocess.run(
         ["git", "init", "-b", "main"],
         cwd=path,
@@ -55,9 +83,10 @@ def _init_repo(path: Path) -> None:
     )
 
 
-@pytest.fixture(autouse=True)
-def _git_workspace(tmp_path: Path) -> None:
+@pytest.fixture
+def workspace(tmp_path: Path) -> Path:
     _init_repo(tmp_path)
+    return tmp_path
 
 
 def _build_stub_run(workspace: Path, run_id: str) -> RunViewState:
@@ -90,11 +119,11 @@ def _build_stub_run(workspace: Path, run_id: str) -> RunViewState:
     )
 
 
-def test_recover_run_and_resume_from_checkpoint(tmp_path: Path) -> None:
+def test_recover_run_and_resume_from_checkpoint(workspace: Path) -> None:
     run_id = "recover-me"
-    run = _build_stub_run(tmp_path, run_id)
+    run = _build_stub_run(workspace, run_id)
 
-    orch = LocalOrchestrator(tmp_path)
+    orch = LocalOrchestrator(workspace)
     orch.run_store.acquire_lock(run_id)
     lock_path = orch.run_store.run_dir(run_id) / "lock"
     lock_path.write_text(
@@ -136,7 +165,7 @@ def test_recover_run_and_resume_from_checkpoint(tmp_path: Path) -> None:
         )
     )
 
-    orch2 = LocalOrchestrator(tmp_path)
+    orch2 = LocalOrchestrator(workspace)
     assert run_id in orch2.list_recoverable_runs()
     assert orch2.recover_run(run_id) is True
     assert orch2.resume_from_checkpoint(run_id) is True
@@ -148,8 +177,8 @@ def test_recover_run_and_resume_from_checkpoint(tmp_path: Path) -> None:
     assert any(evt.get("event") == "RUN_DONE" for evt in recovered.events)
 
 
-def test_recovery_preflight_blocks_unresolved_conflict_markers(tmp_path: Path) -> None:
-    orch = LocalOrchestrator(tmp_path)
+def test_recovery_preflight_blocks_unresolved_conflict_markers(workspace: Path) -> None:
+    orch = LocalOrchestrator(workspace)
     plan_path = orch.goal_to_plan("recovery preflight")
     run_id = orch.start_run(plan_ref=str(plan_path))
     assert orch.wait_for_run(run_id, timeout=8.0) is True
@@ -157,7 +186,7 @@ def test_recovery_preflight_blocks_unresolved_conflict_markers(tmp_path: Path) -
     assert orch.recover_run(run_id) is True
     assert orch.set_recovery_mode(run_id, "manual") is True
 
-    conflict_file = tmp_path / "conflict.txt"
+    conflict_file = workspace / "conflict.txt"
     conflict_file.write_text(
         "<<<<<<< ours\nx\n=======\ny\n>>>>>>> theirs\n", encoding="utf-8"
     )
@@ -166,7 +195,7 @@ def test_recovery_preflight_blocks_unresolved_conflict_markers(tmp_path: Path) -
     handle.run.status = "paused_recovery_required"
     handle.run.metadata.setdefault("recovery", {})
     handle.run.metadata["recovery"]["details"] = {
-        "worktree": str(tmp_path),
+        "worktree": str(workspace),
         "conflict_files": ["conflict.txt"],
         "next_commands": ["resolve conflict"],
     }
@@ -181,7 +210,12 @@ def test_recovery_preflight_blocks_unresolved_conflict_markers(tmp_path: Path) -
     assert run.metadata.get("recovery", {}).get("status") == "preflight_failed"
 
 
-def test_recover_run_requires_git_workspace(tmp_path: Path) -> None:
+def test_recover_run_requires_git_workspace(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ralphite.engine import LocalOrchestrator
+
+    monkeypatch.undo()
     plain = Path(tempfile.mkdtemp())
     orch = LocalOrchestrator(plain)
     with pytest.raises(GitRequiredError):

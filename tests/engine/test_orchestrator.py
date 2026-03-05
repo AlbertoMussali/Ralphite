@@ -10,8 +10,36 @@ from ralphite.engine import LocalOrchestrator
 from ralphite.engine.git_worktree import GitRequiredError
 import yaml
 
+_AGENT_DEFAULTS = """\
+version: 1
+agents:
+  - id: worker_default
+    role: worker
+    provider: codex
+    model: gpt-5.3-codex
+    tools_allow: [tool:*]
+  - id: orchestrator_default
+    role: orchestrator
+    provider: codex
+    model: gpt-5.3-codex
+behaviors:
+  - id: prepare_dispatch_default
+    kind: prepare_dispatch
+    agent: orchestrator_default
+    enabled: true
+  - id: merge_default
+    kind: merge_and_conflict_resolution
+    agent: orchestrator_default
+    enabled: true
+  - id: summarize_default
+    kind: summarize_work
+    agent: orchestrator_default
+    enabled: true
+"""
+
 
 def _init_repo(path: Path) -> None:
+    (path / "agent_defaults.yaml").write_text(_AGENT_DEFAULTS, encoding="utf-8")
     subprocess.run(
         ["git", "init", "-b", "main"],
         cwd=path,
@@ -50,9 +78,10 @@ def _init_repo(path: Path) -> None:
     )
 
 
-@pytest.fixture(autouse=True)
-def _git_workspace(tmp_path: Path) -> None:
+@pytest.fixture
+def workspace(tmp_path: Path) -> Path:
     _init_repo(tmp_path)
+    return tmp_path
 
 
 def _plan_content() -> str:
@@ -238,8 +267,8 @@ def _artifact_text(run, artifact_id: str) -> str:  # type: ignore[no-untyped-def
     return Path(artifact["path"]).read_text(encoding="utf-8")
 
 
-def test_goal_plan_run_succeeds(tmp_path: Path) -> None:
-    orch = LocalOrchestrator(tmp_path)
+def test_goal_plan_run_succeeds(workspace: Path) -> None:
+    orch = LocalOrchestrator(workspace)
     plan_path = orch.goal_to_plan("Create a simple test artifact")
 
     run_id = orch.start_run(plan_ref=str(plan_path))
@@ -261,8 +290,8 @@ def test_goal_plan_run_succeeds(tmp_path: Path) -> None:
     assert "## Run Highlights" in report
 
 
-def test_cancel_run(tmp_path: Path) -> None:
-    orch = LocalOrchestrator(tmp_path)
+def test_cancel_run(workspace: Path) -> None:
+    orch = LocalOrchestrator(workspace)
     plan_path = orch.goal_to_plan("Longish task to test cancel")
     run_id = orch.start_run(plan_ref=str(plan_path))
     assert orch.cancel_run(run_id) is True
@@ -275,8 +304,8 @@ def test_cancel_run(tmp_path: Path) -> None:
     assert any(evt["event"] in {"RUN_CANCEL_REQUESTED", "RUN_DONE"} for evt in events)
 
 
-def test_v1_plan_executes_with_phase_events(tmp_path: Path) -> None:
-    orch = LocalOrchestrator(tmp_path)
+def test_v1_plan_executes_with_phase_events(workspace: Path) -> None:
+    orch = LocalOrchestrator(workspace)
     run_id = orch.start_run(plan_content=_plan_content())
     events = list(orch.stream_events(run_id))
     names = [event["event"] for event in events]
@@ -290,9 +319,9 @@ def test_v1_plan_executes_with_phase_events(tmp_path: Path) -> None:
     assert "RUN_DONE" in names
 
 
-def test_conflict_triggers_recovery_and_abort_mode(tmp_path: Path) -> None:
-    orch = LocalOrchestrator(tmp_path)
-    (tmp_path / ".ralphite" / "force_merge_conflict").write_text(
+def test_conflict_triggers_recovery_and_abort_mode(workspace: Path) -> None:
+    orch = LocalOrchestrator(workspace)
+    (workspace / ".ralphite" / "force_merge_conflict").write_text(
         "phase-1", encoding="utf-8"
     )
     run_id = orch.start_run(plan_content=_conflict_plan_content())
@@ -310,8 +339,8 @@ def test_conflict_triggers_recovery_and_abort_mode(tmp_path: Path) -> None:
     assert final.status == "failed"
 
 
-def test_start_run_applies_execution_overrides_to_metadata(tmp_path: Path) -> None:
-    orch = LocalOrchestrator(tmp_path)
+def test_start_run_applies_execution_overrides_to_metadata(workspace: Path) -> None:
+    orch = LocalOrchestrator(workspace)
     run_id = orch.start_run(
         plan_content=_single_task_plan(),
         backend_override="cursor",
@@ -327,8 +356,8 @@ def test_start_run_applies_execution_overrides_to_metadata(tmp_path: Path) -> No
     assert defaults.get("reasoning_effort") == "high"
 
 
-def test_acceptance_timeout_produces_typed_failure(tmp_path: Path) -> None:
-    orch = LocalOrchestrator(tmp_path)
+def test_acceptance_timeout_produces_typed_failure(workspace: Path) -> None:
+    orch = LocalOrchestrator(workspace)
     plan = _single_task_plan(
         acceptance_commands=["python3 -c 'import time; time.sleep(2)'"],
         acceptance_timeout_seconds=1,
@@ -347,7 +376,12 @@ def test_acceptance_timeout_produces_typed_failure(tmp_path: Path) -> None:
     assert "Acceptance Timeout" in report
 
 
-def test_start_run_requires_git_workspace(tmp_path: Path) -> None:
+def test_start_run_requires_git_workspace(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ralphite.engine import LocalOrchestrator
+
+    monkeypatch.undo()
     plain = Path(tempfile.mkdtemp())
     orch = LocalOrchestrator(plain)
     plan = _single_task_plan(acceptance_commands=["echo ok"])
@@ -355,11 +389,11 @@ def test_start_run_requires_git_workspace(tmp_path: Path) -> None:
         orch.start_run(plan_content=plan)
 
 
-def test_acceptance_artifact_out_of_bounds_symlink_is_rejected(tmp_path: Path) -> None:
-    leak_target = tmp_path.parent
+def test_acceptance_artifact_out_of_bounds_symlink_is_rejected(workspace: Path) -> None:
+    leak_target = workspace.parent
     outside = leak_target / "outside_artifact.txt"
     outside.write_text("x", encoding="utf-8")
-    orch = LocalOrchestrator(tmp_path)
+    orch = LocalOrchestrator(workspace)
 
     def symlink_agent(self, handle, node, profile, snapshot, *, worktree):  # type: ignore[no-untyped-def]
         if node.role == "worker":
@@ -385,8 +419,10 @@ def test_acceptance_artifact_out_of_bounds_symlink_is_rejected(tmp_path: Path) -
     assert node.result.get("reason") == "acceptance_artifact_out_of_bounds"
 
 
-def test_acceptance_artifact_missing_is_reported_in_final_report(tmp_path: Path) -> None:
-    orch = LocalOrchestrator(tmp_path)
+def test_acceptance_artifact_missing_is_reported_in_final_report(
+    workspace: Path,
+) -> None:
+    orch = LocalOrchestrator(workspace)
     plan = _single_task_plan(
         acceptance_artifacts=[
             {"id": "missing", "path_glob": "missing/*.txt", "format": "file"}
@@ -403,9 +439,9 @@ def test_acceptance_artifact_missing_is_reported_in_final_report(tmp_path: Path)
     assert "## Failures and Warnings" in report
 
 
-def test_recovery_required_run_is_reported_in_final_report(tmp_path: Path) -> None:
-    orch = LocalOrchestrator(tmp_path)
-    (tmp_path / ".ralphite" / "force_merge_conflict").write_text(
+def test_recovery_required_run_is_reported_in_final_report(workspace: Path) -> None:
+    orch = LocalOrchestrator(workspace)
+    (workspace / ".ralphite" / "force_merge_conflict").write_text(
         "phase-1", encoding="utf-8"
     )
     run_id = orch.start_run(plan_content=_conflict_plan_content())
@@ -419,8 +455,8 @@ def test_recovery_required_run_is_reported_in_final_report(tmp_path: Path) -> No
     assert "## Next Steps" in report
 
 
-def test_retry_policy_retries_transient_node_failures(tmp_path: Path) -> None:
-    orch = LocalOrchestrator(tmp_path)
+def test_retry_policy_retries_transient_node_failures(workspace: Path) -> None:
+    orch = LocalOrchestrator(workspace)
     original_run_node = orch._run_node
     failed_once = {"value": False}
 
@@ -442,9 +478,9 @@ def test_retry_policy_retries_transient_node_failures(tmp_path: Path) -> None:
 
 
 def test_retry_policy_does_not_retry_deterministic_artifact_missing(
-    tmp_path: Path,
+    workspace: Path,
 ) -> None:
-    orch = LocalOrchestrator(tmp_path)
+    orch = LocalOrchestrator(workspace)
     plan = _single_task_plan(
         acceptance_artifacts=[
             {"id": "missing", "path_glob": "missing/*.txt", "format": "file"}

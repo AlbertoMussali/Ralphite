@@ -175,7 +175,7 @@ def quickstart_command(
     if bootstrap and selected_bootstrap_plan is None:
         selected_bootstrap_plan = _bootstrap_plan_file(
             orch,
-            template="general_sps",
+            template="starter_bugfix",
             goal=goal,
             plan_id="starter_loop",
             name="Starter Loop",
@@ -351,9 +351,7 @@ def quickstart_command(
                 model=selected_model,
                 reasoning_effort=selected_reasoning_effort,
                 capabilities=capabilities,
-                duration_seconds=round(
-                    max(0.0, time.perf_counter() - flow_started), 3
-                ),
+                duration_seconds=round(max(0.0, time.perf_counter() - flow_started), 3),
                 artifacts_count=len(run.artifacts) if run else 0,
             ),
             "total_elapsed_seconds": round(

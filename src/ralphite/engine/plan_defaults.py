@@ -131,7 +131,11 @@ def resolve_plan_defaults(
     except PydanticValidationError as exc:
         error = exc.errors()[0] if exc.errors() else {"msg": str(exc), "loc": []}
         loc = error.get("loc", [])
-        path = ".".join(str(part) for part in loc) if isinstance(loc, (tuple, list)) else ""
+        path = (
+            ".".join(str(part) for part in loc)
+            if isinstance(loc, (tuple, list))
+            else ""
+        )
         detail = str(error.get("msg") or "schema validation failed")
         if path:
             detail = f"{path}: {detail}"

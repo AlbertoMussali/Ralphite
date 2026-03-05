@@ -344,6 +344,4 @@ def test_validation_rejects_invalid_prompt_placeholder_for_role() -> None:
     )
     valid, issues, _summary = validate_plan_content(content)
     assert valid is False
-    assert any(
-        issue.get("code") == "defaults.placeholder_invalid" for issue in issues
-    )
+    assert any(issue.get("code") == "defaults.placeholder_invalid" for issue in issues)

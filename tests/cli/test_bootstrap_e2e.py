@@ -181,9 +181,17 @@ def test_quickstart_surfaces_step_timing_and_artifacts(tmp_path: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("template", ["general_sps", "branched", "blue_red", "custom"])
+@pytest.mark.parametrize(
+    ("template", "expected_orchestration"),
+    [
+        ("starter_bugfix", "blue_red"),
+        ("starter_refactor", "general_sps"),
+        ("starter_docs_update", "general_sps"),
+        ("starter_release_prep", "branched"),
+    ],
+)
 def test_init_bootstrap_generates_v1_plan_for_template(
-    tmp_path: Path, template: str
+    tmp_path: Path, template: str, expected_orchestration: str
 ) -> None:
     runner = CliRunner()
     result = runner.invoke(
@@ -206,6 +214,35 @@ def test_init_bootstrap_generates_v1_plan_for_template(
     assert plan_path.exists()
     content = plan_path.read_text(encoding="utf-8")
     assert "version: 1" in content
+    assert f"plan_id: plan_{template}" in content
+    assert f"template: {expected_orchestration}" in content
+
+
+@pytest.mark.parametrize("template", ["general_sps", "branched", "blue_red", "custom"])
+def test_init_legacy_template_names_preserve_orchestration_shape(
+    tmp_path: Path, template: str
+) -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "init",
+            "--workspace",
+            str(tmp_path),
+            "--yes",
+            "--template",
+            template,
+            "--plan-id",
+            f"plan_{template}",
+            "--name",
+            f"Plan {template}",
+        ],
+    )
+    assert result.exit_code == 0
+    plan_path = tmp_path / ".ralphite" / "plans" / f"plan_{template}.yaml"
+    assert plan_path.exists()
+    content = plan_path.read_text(encoding="utf-8")
+    assert f"plan_id: plan_{template}" in content
     assert f"template: {template}" in content
 
 

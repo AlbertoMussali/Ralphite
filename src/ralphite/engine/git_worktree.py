@@ -56,14 +56,49 @@ class GitWorktreeManager:
         return "main"
 
     def runtime_status(self) -> dict[str, Any]:
-        if self.git_available:
+        try:
+            subprocess.run(
+                ["git", "rev-parse", "--is-inside-work-tree"],
+                cwd=self.workspace_root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except Exception:
             return {
-                "ok": True,
+                "ok": False,
+                "reason": "git_required",
                 "workspace_root": str(self.workspace_root),
-                "base_branch": self.base_branch,
-                "detail": f"git worktree detected (base branch: {self.base_branch})",
+                "detail": "workspace must be inside a git worktree for Ralphite execution",
+                "remediation": "git init -b main",
             }
-        return {"ok": False, **git_required_details(self.workspace_root)}
+
+        result = self._git(["rev-parse", "HEAD"], check=False)
+        if result.returncode != 0:
+            return {
+                "ok": False,
+                "reason": "git_required",
+                "workspace_root": str(self.workspace_root),
+                "detail": "git repo has no initial commit",
+                "remediation": 'git add -A && git commit -m "initial workspace state"',
+            }
+
+        status = self._git(["status", "--porcelain"], check=False)
+        if status.returncode == 0 and status.stdout.strip():
+            return {
+                "ok": False,
+                "reason": "git_required",
+                "workspace_root": str(self.workspace_root),
+                "detail": "worktree is dirty in a blocking way",
+                "remediation": 'git add -A && git commit -m "save state"',
+            }
+
+        return {
+            "ok": True,
+            "workspace_root": str(self.workspace_root),
+            "base_branch": self.base_branch,
+            "detail": f"git worktree detected (base branch: {self.base_branch})",
+        }
 
     def _ensure_git_available(self) -> None:
         if not self.git_available:
@@ -483,9 +518,7 @@ class GitWorktreeManager:
             if not Path(path).exists():
                 messages.append(f"worktree already removed {path}")
                 continue
-            removed = self._git(
-                ["worktree", "remove", "--force", path], check=False
-            )
+            removed = self._git(["worktree", "remove", "--force", path], check=False)
             if removed.returncode == 0:
                 messages.append(f"removed worktree {path}")
             else:

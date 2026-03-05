@@ -190,7 +190,8 @@ def recover_command(
             data={
                 "preflight": preflight,
                 "plan_path": recovered_run.plan_path if recovered_run else "",
-                "recovery_mode": recovery_label,
+                "recovery_mode": mode,
+                "recovery_mode_label": recovery_label,
                 "primary_failure_reason": _primary_failure_reason(recovered_run),
             },
         )
@@ -216,7 +217,8 @@ def recover_command(
             data={
                 "preflight": preflight,
                 "plan_path": recovered_run.plan_path if recovered_run else "",
-                "recovery_mode": recovery_label,
+                "recovery_mode": mode,
+                "recovery_mode_label": recovery_label,
                 "primary_failure_reason": _primary_failure_reason(recovered_run),
             },
         )
@@ -234,7 +236,8 @@ def recover_command(
             data={
                 "preflight": preflight,
                 "plan_path": recovered_run.plan_path if recovered_run else "",
-                "recovery_mode": recovery_label,
+                "recovery_mode": mode,
+                "recovery_mode_label": recovery_label,
                 "primary_failure_reason": _primary_failure_reason(recovered_run),
             },
         )
@@ -259,7 +262,8 @@ def recover_command(
             data={
                 "preflight": latest_preflight,
                 "plan_path": recovered_run.plan_path if recovered_run else "",
-                "recovery_mode": recovery_label,
+                "recovery_mode": mode,
+                "recovery_mode_label": recovery_label,
                 "primary_failure_reason": _primary_failure_reason(recovered_run),
             },
         )
@@ -300,7 +304,8 @@ def recover_command(
             "artifacts": run.artifacts if run else [],
             "plan_path": run.plan_path if run else "",
             "preflight": preflight,
-            "recovery_mode": recovery_label,
+            "recovery_mode": mode,
+            "recovery_mode_label": recovery_label,
             "primary_failure_reason": _primary_failure_reason(run),
         },
     )

@@ -146,7 +146,8 @@ def test_cli_recover_preflight_only_success(tmp_path: Path) -> None:
     )
     assert result.exit_code == RECOVER_EXIT_SUCCESS
     payload = json.loads(result.stdout)
-    assert payload["data"]["recovery_mode"] == "Manual"
+    assert payload["data"]["recovery_mode"] == "manual"
+    assert payload["data"]["recovery_mode_label"] == "Manual"
     assert payload["data"]["preflight"]["ok"] is True
 
 
@@ -174,12 +175,45 @@ def test_cli_recover_preflight_reports_blockers_and_mode(tmp_path: Path) -> None
     )
     assert result.exit_code == RECOVER_EXIT_PREFLIGHT_FAILED
     payload = json.loads(result.stdout)
-    assert payload["data"]["recovery_mode"] == "Best Effort Agent"
+    assert payload["data"]["recovery_mode"] == "agent_best_effort"
+    assert payload["data"]["recovery_mode_label"] == "Best Effort Agent"
     blockers = payload["data"]["preflight"]["blocking_reasons"]
     assert any("requires a non-empty prompt" in item for item in blockers)
 
 
-def test_cli_recover_requires_git_workspace(tmp_path: Path) -> None:
+def test_cli_recover_no_resume_table_shows_selected_mode(tmp_path: Path) -> None:
+    orch = LocalOrchestrator(tmp_path)
+    marker = tmp_path / ".ralphite" / "force_merge_conflict"
+    marker.write_text("phase-1", encoding="utf-8")
+    run_id = orch.start_run(plan_content=_plan_content())
+    assert orch.wait_for_run(run_id, timeout=8.0)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "recover",
+            "--workspace",
+            str(tmp_path),
+            "--run-id",
+            run_id,
+            "--mode",
+            "manual",
+            "--no-resume",
+            "--output",
+            "table",
+        ],
+    )
+    assert result.exit_code != RECOVER_EXIT_SUCCESS
+    assert "Recovery mode:" in result.stdout
+    assert "Manual" in result.stdout
+    assert "Not Selected" not in result.stdout
+
+
+def test_cli_recover_requires_git_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.undo()
     plain = Path(tempfile.mkdtemp())
     runner = CliRunner()
     result = runner.invoke(app, ["recover", "--workspace", str(plain), "--json"])

@@ -42,9 +42,7 @@ def _dedupe_strings(items: list[str]) -> list[str]:
     return unique
 
 
-def _summarize_capability_group(
-    kind: str, entries: list[str]
-) -> dict[str, object]:
+def _summarize_capability_group(kind: str, entries: list[str]) -> dict[str, object]:
     normalized = _dedupe_strings(entries)
     singular = "tool" if kind == "tool" else "MCP server"
     plural = "tools" if kind == "tool" else "MCP servers"
@@ -155,6 +153,56 @@ def _print_preflight_summary(
     )
 
 
+def _find_final_report_path(artifacts: list[dict[str, Any]]) -> Path | None:
+    for item in artifacts:
+        if (
+            isinstance(item, dict)
+            and item.get("id") == "final_report"
+            and isinstance(item.get("path"), str)
+        ):
+            return Path(item["path"])
+    return None
+
+
+def _read_final_report_preview(path: Path | None) -> tuple[Path | None, list[str]]:
+    if path is None or not path.exists():
+        return path, []
+    try:
+        report_lines = path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return path, []
+    preview = [line.strip() for line in report_lines if line.strip()][:3]
+    return path, preview
+
+
+def _render_final_report_preview(
+    renderables: list[Any], artifacts: list[dict[str, Any]]
+) -> None:
+    final_report_path, preview = _read_final_report_preview(
+        _find_final_report_path(artifacts)
+    )
+    if final_report_path is None or not final_report_path.exists():
+        return
+    renderables.append(Text(""))
+    renderables.append(Text("Final Report:", style="bold green"))
+    renderables.append(Text(str(final_report_path)))
+    if preview:
+        renderables.append(Text(""))
+        for line in preview:
+            renderables.append(Text(f"│ {line}", style="italic dim"))
+
+
+def _display_recovery_mode(data: dict[str, Any]) -> str | None:
+    label = data.get("recovery_mode_label")
+    if isinstance(label, str) and label.strip():
+        return label
+    raw = data.get("recovery_mode")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    display = present_recovery_mode(raw)
+    return display if display != "Not Selected" else raw
+
+
 def _orchestrator(workspace: Path, *, bootstrap: bool = True) -> LocalOrchestrator:
     return LocalOrchestrator(workspace.expanduser().resolve(), bootstrap=bootstrap)
 
@@ -213,7 +261,9 @@ def _git_required_payload(
     exit_code: int = 1,
 ) -> None:
     advice = classify_failure("git_required")
-    status = GitWorktreeManager(workspace.expanduser().resolve(), "cli").runtime_status()
+    status = GitWorktreeManager(
+        workspace.expanduser().resolve(), "cli"
+    ).runtime_status()
     payload = _result_payload(
         command=command,
         ok=False,
@@ -326,6 +376,14 @@ def _print_run_stream(
     run = orch.get_run(run_id)
     if run and run.artifacts:
         console.print()
+        renderables: list[Any] = []
+        _render_final_report_preview(
+            renderables,
+            [item for item in run.artifacts if isinstance(item, dict)],
+        )
+        if renderables:
+            console.print(Group(*renderables))
+            console.print()
         tree = Tree("[bold]Artifacts[/bold]")
         for artifact in run.artifacts:
             tree.add(f"{artifact['id']}: {artifact['path']}")
@@ -343,7 +401,11 @@ def _emit_payload(
     lines: list[str] = []
     status = present_run_status(str(payload.get("status", "")))
     status_color = (
-        "green" if status.severity == "info" else "yellow" if status.severity == "warn" else "red"
+        "green"
+        if status.severity == "info"
+        else "yellow"
+        if status.severity == "warn"
+        else "red"
     )
     lines.append(f"Status: [{status_color}]{status.label}[/{status_color}]")
 
@@ -387,7 +449,13 @@ def _emit_payload(
         else []
     )
 
-    renderables = [Text.from_markup(content)]
+    renderables: list[Any] = [Text.from_markup(content)]
+
+    if artifacts:
+        _render_final_report_preview(
+            renderables,
+            [item for item in artifacts if isinstance(item, dict)],
+        )
 
     capabilities = execution_summary.get("capabilities", {})
     if isinstance(capabilities, dict):
@@ -430,15 +498,44 @@ def _emit_payload(
             renderables.append(Text("Failure signal:", style="bold"))
             renderables.append(Text(primary_failure_reason))
 
-        recovery_mode = data.get("recovery_mode")
+        recovery_mode = _display_recovery_mode(data)
         if isinstance(recovery_mode, str) and recovery_mode.strip():
             renderables.append(Text(""))
             renderables.append(Text("Recovery mode:", style="bold"))
-            display_mode = present_recovery_mode(recovery_mode)
+            renderables.append(Text(recovery_mode))
+
+    run_status_raw = str(payload.get("status", "")).lower()
+    renderables.append(Text(""))
+    renderables.append(Text("Next context:", style="bold blue"))
+    if run_status_raw == "succeeded":
+        renderables.append(
+            Text("Review final_report.md and share results / next steps.")
+        )
+    elif (
+        run_status_raw == "paused"
+        and isinstance(data, dict)
+        and _display_recovery_mode(data)
+    ):
+        rec_mode_display = _display_recovery_mode(data)
+        renderables.append(
+            Text(f"Run is paused. Fix required using recovery mode: {rec_mode_display}")
+        )
+    else:
+        # Failed or other unexpected statuses
+        if isinstance(run_id, str):
             renderables.append(
-                Text(display_mode if display_mode != "Not Selected" else recovery_mode)
+                Text(
+                    f"Use `ralphite history` to inspect, or run `ralphite recover --workspace .` or `ralphite replay {run_id}`."
+                )
+            )
+        else:
+            renderables.append(
+                Text(
+                    "Use `ralphite history` to inspect, or run `ralphite recover --workspace .`"
+                )
             )
 
+    if isinstance(data, dict):
         preflight = data.get("preflight")
         if isinstance(preflight, dict):
             blockers = preflight.get("blocking_reasons", [])

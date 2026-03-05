@@ -7,6 +7,13 @@ from typing import Any
 
 import yaml
 
+from ralphite.engine.bundled_templates import (
+    STARTER_BUGFIX,
+    STARTER_DOCS_UPDATE,
+    STARTER_REFACTOR,
+    STARTER_RELEASE_PREP,
+)
+
 
 def _slug(value: str, fallback: str = "plan") -> str:
     normalized = re.sub(r"[^a-zA-Z0-9_-]+", "-", value.strip()).strip("-").lower()
@@ -18,33 +25,39 @@ def versioned_filename(plan_id: str, hint: str | None = None) -> str:
     return f"{_slug(hint or plan_id)}.{ts}.yaml"
 
 
-def _default_behaviors() -> list[dict[str, Any]]:
+def _legacy_default_behaviors() -> list[dict[str, Any]]:
     return [
         {
             "id": "prepare_dispatch_default",
             "kind": "prepare_dispatch",
             "agent": "orchestrator_default",
-            "prompt_template": "Prepare the next dispatch cell and summarize prerequisites.",
+            "prompt_template": (
+                "Prepare the next dispatch cell and summarize prerequisites."
+            ),
             "enabled": True,
         },
         {
             "id": "merge_and_conflict_resolution_default",
             "kind": "merge_and_conflict_resolution",
             "agent": "orchestrator_default",
-            "prompt_template": "Merge outputs, resolve conflicts safely, and report unresolved risks.",
+            "prompt_template": (
+                "Merge outputs, resolve conflicts safely, and report unresolved risks."
+            ),
             "enabled": True,
         },
         {
             "id": "summarize_work_default",
             "kind": "summarize_work",
             "agent": "orchestrator_default",
-            "prompt_template": "Summarize work completed, validation status, and next handoff context.",
+            "prompt_template": (
+                "Summarize work completed, validation status, and next handoff context."
+            ),
             "enabled": True,
         },
     ]
 
 
-def _default_agents() -> list[dict[str, Any]]:
+def _legacy_default_agents() -> list[dict[str, Any]]:
     return [
         {
             "id": "worker_default",
@@ -61,14 +74,21 @@ def _default_agents() -> list[dict[str, Any]]:
             "provider": "codex",
             "model": "gpt-5.3-codex",
             "reasoning_effort": "medium",
-            "system_prompt": "Orchestrate merges, conflict handling, and handoffs between task cells.",
+            "system_prompt": (
+                "Orchestrate merges, conflict handling, and handoffs between task cells."
+            ),
             "tools_allow": ["tool:*", "mcp:*"],
         },
     ]
 
 
-def _common_plan_shell(
-    *, plan_id: str, name: str, lanes: list[str], loop_unit: str
+def _legacy_plan_shell(
+    *,
+    template: str,
+    plan_id: str,
+    name: str,
+    lanes: list[str],
+    loop_unit: str,
 ) -> dict[str, Any]:
     return {
         "version": 1,
@@ -92,12 +112,12 @@ def _common_plan_shell(
             "acceptance_timeout_seconds": 120,
             "max_retries_per_node": 0,
         },
-        "agents": _default_agents(),
+        "agents": _legacy_default_agents(),
         "tasks": [],
         "orchestration": {
-            "template": "general_sps",
+            "template": template,
             "inference_mode": "mixed",
-            "behaviors": _default_behaviors(),
+            "behaviors": _legacy_default_behaviors(),
             "branched": {"lanes": list(lanes)},
             "blue_red": {"loop_unit": loop_unit},
             "custom": {"cells": []},
@@ -111,14 +131,25 @@ def _common_plan_shell(
     }
 
 
-def make_bootstrap_plan(
+def _legacy_goal_titles(goal: str | None) -> tuple[str, str, str]:
+    plan_task = "Decompose the objective into executable steps."
+    execute_task = "Implement the planned tasks and update project artifacts."
+    verify_task = "Validate outcomes and summarize decisions."
+    if goal:
+        plan_task = f"Decompose objective: {goal}"
+        execute_task = f"Execute objective: {goal}"
+        verify_task = f"Verify objective outcome: {goal}"
+    return plan_task, execute_task, verify_task
+
+
+def _legacy_bootstrap_plan(
     *,
-    template: str = "general_sps",
-    plan_id: str = "starter_loop",
-    name: str = "Starter Loop",
-    goal: str | None = None,
-    branched_lanes: list[str] | None = None,
-    blue_red_loop_unit: str = "per_task",
+    template: str,
+    plan_id: str,
+    name: str,
+    goal: str | None,
+    branched_lanes: list[str] | None,
+    blue_red_loop_unit: str,
 ) -> dict[str, Any]:
     lanes = [
         item.strip()
@@ -127,19 +158,14 @@ def make_bootstrap_plan(
     ]
     if not lanes:
         lanes = ["lane_a", "lane_b"]
-
-    shell = _common_plan_shell(
-        plan_id=plan_id, name=name, lanes=lanes, loop_unit=blue_red_loop_unit
+    plan_task, execute_task, verify_task = _legacy_goal_titles(goal)
+    shell = _legacy_plan_shell(
+        template=template,
+        plan_id=plan_id,
+        name=name,
+        lanes=lanes,
+        loop_unit=blue_red_loop_unit,
     )
-    shell["orchestration"]["template"] = template
-
-    plan_task = "Decompose the objective into executable steps."
-    execute_task = "Implement the planned tasks and update project artifacts."
-    verify_task = "Validate outcomes and summarize decisions."
-    if goal:
-        plan_task = f"Decompose objective: {goal}"
-        execute_task = f"Execute objective: {goal}"
-        verify_task = f"Verify objective outcome: {goal}"
 
     if template == "general_sps":
         shell["tasks"] = [
@@ -316,20 +342,101 @@ def make_bootstrap_plan(
     return shell
 
 
+def make_bootstrap_plan(
+    *,
+    template: str = "starter_bugfix",
+    plan_id: str | None = None,
+    name: str | None = None,
+    goal: str | None = None,
+    branched_lanes: list[str] | None = None,
+    blue_red_loop_unit: str = "per_task",
+) -> dict[str, Any]:
+    starter_templates = {
+        "starter_bugfix": STARTER_BUGFIX,
+        "starter_refactor": STARTER_REFACTOR,
+        "starter_docs_update": STARTER_DOCS_UPDATE,
+        "starter_release_prep": STARTER_RELEASE_PREP,
+    }
+    legacy_templates = {"general_sps", "branched", "blue_red", "custom"}
+
+    if template in starter_templates:
+        plan = yaml.safe_load(starter_templates[template])
+        if plan_id and plan_id != "starter_loop":
+            plan["plan_id"] = plan_id
+        if name and name != "Starter Loop":
+            plan["name"] = name
+        if goal:
+            plan["tasks"] = [
+                {
+                    "id": "task_plan",
+                    "title": f"Decompose objective: {goal}",
+                    "completed": False,
+                    "routing": {"cell": "seq_pre", "tags": ["planning"]},
+                    "acceptance": {
+                        "commands": [],
+                        "required_artifacts": [],
+                        "rubric": [f"Execution plan created for goal: {goal}"],
+                    },
+                },
+                {
+                    "id": "task_execute",
+                    "title": f"Execute objective: {goal}",
+                    "completed": False,
+                    "deps": ["task_plan"],
+                    "routing": {"cell": "par_core", "tags": ["implementation"]},
+                    "acceptance": {
+                        "commands": [],
+                        "required_artifacts": [],
+                        "rubric": ["Feature implementation is complete."],
+                    },
+                },
+                {
+                    "id": "task_verify",
+                    "title": f"Verify objective outcome: {goal}",
+                    "completed": False,
+                    "deps": ["task_execute"],
+                    "routing": {"cell": "seq_post", "tags": ["verification"]},
+                    "acceptance": {
+                        "commands": [],
+                        "required_artifacts": [],
+                        "rubric": ["Validation and summary are complete."],
+                    },
+                },
+            ]
+            plan["orchestration"]["template"] = "general_sps"
+        if branched_lanes and plan["orchestration"]["template"] == "branched":
+            plan["orchestration"]["branched"]["lanes"] = branched_lanes
+        if blue_red_loop_unit and plan["orchestration"]["template"] == "blue_red":
+            plan["orchestration"]["blue_red"]["loop_unit"] = blue_red_loop_unit
+        return plan
+
+    if template in legacy_templates:
+        return _legacy_bootstrap_plan(
+            template=template,
+            plan_id=plan_id or "starter_loop",
+            name=name or "Starter Loop",
+            goal=goal,
+            branched_lanes=branched_lanes,
+            blue_red_loop_unit=blue_red_loop_unit,
+        )
+
+    raise ValueError(f"unsupported template: {template}")
+
+
 def make_starter_plan(goal: str | None = None) -> dict[str, Any]:
     return make_bootstrap_plan(goal=goal)
 
 
-def make_goal_plan(goal: str) -> dict:
+def make_goal_plan(goal: str) -> dict[str, Any]:
     return make_bootstrap_plan(
-        template="general_sps",
+        template="starter_bugfix",
         goal=goal,
-        plan_id=_slug(goal[:50], "goal-plan"),
-        name=f"Goal Plan: {goal[:48]}",
+        plan_id=_slug(goal[:50], "goal-plan") if goal else "goal-plan",
+        name=f"Goal Plan: {goal[:48]}" if goal else "Goal Plan",
     )
 
 
-def dump_yaml(plan: dict) -> str:
+def dump_yaml(plan: dict[str, Any]) -> str:
     return yaml.safe_dump(plan, sort_keys=False, allow_unicode=False)
 
 
@@ -347,10 +454,10 @@ def _is_v1_plan_file(path: Path) -> bool:
 
 
 def _starter_target_path(plans_dir: Path) -> Path:
-    default = plans_dir / "starter_loop.yaml"
+    default = plans_dir / "starter_bugfix.yaml"
     if not default.exists():
         return default
-    return plans_dir / "starter_loop.bootstrap.yaml"
+    return plans_dir / "starter_bugfix.bootstrap.yaml"
 
 
 def seed_starter_if_missing(plans_dir: Path) -> Path | None:
@@ -365,5 +472,5 @@ def seed_starter_if_missing(plans_dir: Path) -> Path | None:
         return None
 
     path = _starter_target_path(plans_dir)
-    path.write_text(dump_yaml(make_starter_plan()), encoding="utf-8")
+    path.write_text(dump_yaml(make_starter_plan(goal=None)), encoding="utf-8")
     return path

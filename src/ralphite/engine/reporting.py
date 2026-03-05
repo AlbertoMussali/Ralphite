@@ -34,9 +34,7 @@ def _node_sort_key(node_id: str, catalog: dict[str, dict[str, Any]]) -> tuple[in
 def _node_label(node_id: str, catalog: dict[str, dict[str, Any]]) -> str:
     item = catalog.get(node_id, {})
     task_id = (
-        str(item.get("source_task_id") or "").strip()
-        if isinstance(item, dict)
-        else ""
+        str(item.get("source_task_id") or "").strip() if isinstance(item, dict) else ""
     )
     title = str(item.get("task_title") or "").strip() if isinstance(item, dict) else ""
     if task_id and title:
@@ -90,10 +88,14 @@ def _build_outcome(run: RunViewState) -> list[str]:
     return lines
 
 
-def _build_changed_files(run: RunViewState, catalog: dict[str, dict[str, Any]]) -> list[str]:
+def _build_changed_files(
+    run: RunViewState, catalog: dict[str, dict[str, Any]]
+) -> list[str]:
     lines: list[str] = []
     found = False
-    for node_id in sorted(run.nodes.keys(), key=lambda item: _node_sort_key(item, catalog)):
+    for node_id in sorted(
+        run.nodes.keys(), key=lambda item: _node_sort_key(item, catalog)
+    ):
         state = run.nodes[node_id]
         result = state.result if isinstance(state.result, dict) else {}
         worktree = result.get("worktree") if isinstance(result, dict) else {}
@@ -142,11 +144,15 @@ def _build_changed_files(run: RunViewState, catalog: dict[str, dict[str, Any]]) 
                 if isinstance(writeback_commit.get("paths"), list)
                 else []
             )
-            path = str(writeback.get("path") or (writeback_paths[0] if writeback_paths else ""))
+            path = str(
+                writeback.get("path") or (writeback_paths[0] if writeback_paths else "")
+            )
             if path:
                 lines.append(f"- Updated path: `{path}`")
             else:
-                mode = writeback.get("mode") or writeback_commit.get("mode") or "unknown"
+                mode = (
+                    writeback.get("mode") or writeback_commit.get("mode") or "unknown"
+                )
                 lines.append(f"- Mode: `{mode}`")
         lines.append("")
 
@@ -165,10 +171,14 @@ def _acceptance_payload(result: dict[str, Any]) -> tuple[dict[str, Any] | None, 
     return None, True
 
 
-def _build_acceptance(run: RunViewState, catalog: dict[str, dict[str, Any]]) -> list[str]:
+def _build_acceptance(
+    run: RunViewState, catalog: dict[str, dict[str, Any]]
+) -> list[str]:
     lines: list[str] = []
     recorded = False
-    for node_id in sorted(run.nodes.keys(), key=lambda item: _node_sort_key(item, catalog)):
+    for node_id in sorted(
+        run.nodes.keys(), key=lambda item: _node_sort_key(item, catalog)
+    ):
         state = run.nodes[node_id]
         result = state.result if isinstance(state.result, dict) else {}
         acceptance, passed = _acceptance_payload(result)
@@ -178,7 +188,9 @@ def _build_acceptance(run: RunViewState, catalog: dict[str, dict[str, Any]]) -> 
         lines.append(f"### {_node_label(node_id, catalog)}")
         lines.append(f"- Result: {'PASS' if passed else 'FAIL'}")
         commands = (
-            acceptance.get("commands") if isinstance(acceptance.get("commands"), list) else []
+            acceptance.get("commands")
+            if isinstance(acceptance.get("commands"), list)
+            else []
         )
         if commands:
             for command in commands:
@@ -204,7 +216,9 @@ def _build_acceptance(run: RunViewState, catalog: dict[str, dict[str, Any]]) -> 
                 if not isinstance(item, dict):
                     continue
                 artifact_id = str(item.get("id") or "artifact")
-                matches = item.get("matches") if isinstance(item.get("matches"), list) else []
+                matches = (
+                    item.get("matches") if isinstance(item.get("matches"), list) else []
+                )
                 if matches:
                     lines.append(f"- Artifact PASS: `{artifact_id}`")
                     for match in matches:
@@ -214,19 +228,27 @@ def _build_acceptance(run: RunViewState, catalog: dict[str, dict[str, Any]]) -> 
         missing_artifact = str(acceptance.get("missing_artifact") or "").strip()
         if missing_artifact:
             lines.append(f"- Missing artifact: `{missing_artifact}`")
-        rubric = acceptance.get("rubric") if isinstance(acceptance.get("rubric"), list) else []
+        rubric = (
+            acceptance.get("rubric")
+            if isinstance(acceptance.get("rubric"), list)
+            else []
+        )
         for item in rubric:
             if isinstance(item, str) and item.strip():
                 lines.append(f"- Rubric: {item.strip()}")
         lines.append("")
     if not recorded:
-        return ["- No task-level acceptance commands or required artifacts were defined."]
+        return [
+            "- No task-level acceptance commands or required artifacts were defined."
+        ]
     return lines[:-1] if lines and lines[-1] == "" else lines
 
 
 def _build_failures(run: RunViewState, catalog: dict[str, dict[str, Any]]) -> list[str]:
     lines: list[str] = []
-    for node_id in sorted(run.nodes.keys(), key=lambda item: _node_sort_key(item, catalog)):
+    for node_id in sorted(
+        run.nodes.keys(), key=lambda item: _node_sort_key(item, catalog)
+    ):
         state = run.nodes[node_id]
         result = state.result if isinstance(state.result, dict) else {}
         if state.status != "failed" or not result:
@@ -241,8 +263,14 @@ def _build_failures(run: RunViewState, catalog: dict[str, dict[str, Any]]) -> li
 
     recovery = run.metadata.get("recovery", {})
     recovery = recovery if isinstance(recovery, dict) else {}
-    details = recovery.get("details") if isinstance(recovery.get("details"), dict) else {}
-    conflicts = details.get("conflict_files") if isinstance(details.get("conflict_files"), list) else []
+    details = (
+        recovery.get("details") if isinstance(recovery.get("details"), dict) else {}
+    )
+    conflicts = (
+        details.get("conflict_files")
+        if isinstance(details.get("conflict_files"), list)
+        else []
+    )
     for item in conflicts:
         lines.append(f"- Unresolved conflict: `{item}`")
 
@@ -277,8 +305,14 @@ def _build_next_steps(run: RunViewState) -> list[str]:
 
     recovery = run.metadata.get("recovery", {})
     recovery = recovery if isinstance(recovery, dict) else {}
-    details = recovery.get("details") if isinstance(recovery.get("details"), dict) else {}
-    next_commands = details.get("next_commands") if isinstance(details.get("next_commands"), list) else []
+    details = (
+        recovery.get("details") if isinstance(recovery.get("details"), dict) else {}
+    )
+    next_commands = (
+        details.get("next_commands")
+        if isinstance(details.get("next_commands"), list)
+        else []
+    )
     actions.extend(str(item).strip() for item in next_commands if str(item).strip())
 
     for event in run.events:

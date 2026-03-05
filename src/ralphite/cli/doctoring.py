@@ -110,11 +110,16 @@ def _doctor_snapshot(
         )
 
     git_status = orch.git_runtime_status()
+    git_status_ok = bool(git_status.get("ok"))
+    git_detail = str(git_status.get("detail", ""))
+    git_remediation = git_status.get("remediation")
+    if git_remediation and not git_status_ok:
+        git_detail += f" (remediation: {git_remediation})"
     checks.append(
         {
             "check": "git-worktree",
-            "status": "OK" if bool(git_status.get("ok")) else "FAIL",
-            "detail": str(git_status.get("detail", "")),
+            "status": "OK" if git_status_ok else "FAIL",
+            "detail": git_detail,
         }
     )
     if not bool(git_status.get("ok")):
@@ -366,7 +371,7 @@ def _render_doctor_table(snapshot: dict[str, Any]) -> None:
             status_str = f"[bold yellow]{status_val}[/bold yellow]"
         else:
             status_str = f"[bold red]{status_val}[/bold red]"
-        
+
         table.add_row(
             str(row.get("check", "")),
             status_str,
@@ -380,7 +385,7 @@ def _render_doctor_table(snapshot: dict[str, Any]) -> None:
         plan_path = str(failure.get("plan_path"))
         issues = failure.get("issues", [])
         summary = failure.get("summary", {})
-        
+
         lines = []
         if isinstance(issues, list):
             for issue in issues:
@@ -399,8 +404,15 @@ def _render_doctor_table(snapshot: dict[str, Any]) -> None:
             for cmd in recommended:
                 if isinstance(cmd, str):
                     lines.append(f"  - {cmd}")
-                    
-        console.print(Panel("\n".join(lines), title=f"[bold red]Invalid plan:[/bold red] {plan_path}", border_style="red", expand=False))
+
+        console.print(
+            Panel(
+                "\n".join(lines),
+                title=f"[bold red]Invalid plan:[/bold red] {plan_path}",
+                border_style="red",
+                expand=False,
+            )
+        )
 
     stale = snapshot.get("stale_artifacts", {})
     if not isinstance(stale, dict):
@@ -432,4 +444,11 @@ def _render_doctor_table(snapshot: dict[str, Any]) -> None:
         lines.append(
             "  Action: run cleanup by resolving or resuming stale runs, then re-check doctor."
         )
-        console.print(Panel("\n".join(lines), title="[bold yellow]Stale managed artifacts[/bold yellow]", border_style="yellow", expand=False))
+        console.print(
+            Panel(
+                "\n".join(lines),
+                title="[bold yellow]Stale managed artifacts[/bold yellow]",
+                border_style="yellow",
+                expand=False,
+            )
+        )
