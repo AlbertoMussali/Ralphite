@@ -331,7 +331,7 @@ def test_release_gate_includes_fixture_confidence_suites(
     assert all(cwd.endswith("Ralphite") for _row, cwd in seen)
 
 
-def test_check_release_gate_ignores_doctor_failures(
+def test_check_release_gate_fails_when_doctor_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def fake_snapshot(_orch, include_fix_suggestions=False):  # noqa: ANN001
@@ -343,56 +343,22 @@ def test_check_release_gate_ignores_doctor_failures(
             "fix_suggestions": [],
         }
 
-    def fake_release_gate(*, repo_root, quiet, machine_mode, verbose):  # noqa: ANN001
-        return True, [
-            {
-                "suite": "fake",
-                "command": "pytest -q",
-                "cwd": str(repo_root),
-                "exit_code": 0,
-            }
-        ]
-
     monkeypatch.setattr(cli_mod, "_doctor_snapshot", fake_snapshot)
-    monkeypatch.setattr(cli_mod, "_run_release_gate", fake_release_gate)
     runner = CliRunner()
     result = runner.invoke(
         app,
         ["check", "--workspace", str(tmp_path), "--release-gate", "--output", "json"],
     )
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["status"] == "succeeded"
-
-
-def test_check_beta_gate_fails_when_doctor_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def fake_snapshot(_orch, include_fix_suggestions=False):  # noqa: ANN001
-        return {
-            "ok": False,
-            "checks": [],
-            "plan_failures": [],
-            "stale_artifacts": {},
-            "fix_suggestions": [],
-        }
-
-    monkeypatch.setattr(cli_mod, "_doctor_snapshot", fake_snapshot)
-    runner = CliRunner()
-    result = runner.invoke(
-        app,
-        ["check", "--workspace", str(tmp_path), "--beta-gate", "--output", "json"],
-    )
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
     assert payload["status"] == "failed"
     assert any(
-        item.get("code") == "check.beta_gate_doctor_failed"
+        item.get("code") == "check.release_gate_doctor_failed"
         for item in payload.get("issues", [])
     )
 
 
-def test_check_beta_gate_runs_backend_and_release_checks(
+def test_check_release_gate_runs_backend_and_release_checks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def fake_snapshot(_orch, include_fix_suggestions=False):  # noqa: ANN001
@@ -430,7 +396,7 @@ def test_check_beta_gate_runs_backend_and_release_checks(
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["check", "--workspace", str(tmp_path), "--beta-gate", "--output", "json"],
+        ["check", "--workspace", str(tmp_path), "--release-gate", "--output", "json"],
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)

@@ -1,0 +1,9 @@
+# References
+
+Owners: engine, schemas, tui
+Last verified against commit: 70b0c1f
+
+- [CLI Contracts](cli-contracts.md)
+- [Plan v5 Schema Reference](plan-v5-schema-reference.md)
+- [Test Matrix](test-matrix.md)
+- [Glossary](glossary.md)

@@ -26,6 +26,15 @@ jobs:
           pip install pytest
       - name: Run unit and integration suites
         run: pytest packages/engine/tests apps/tui/tests -q
+      - name: Run docs quality checks
+        run: |
+          pytest packages/engine/tests/test_docs_knowledge_base.py -q
+      - name: Enforce ADR requirement for contract-critical changes
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+        run: |
+          ./scripts/check_adr_requirement.sh
       - name: Assert no tracked diffs after checks
         run: |
           git diff --exit-code
@@ -114,7 +123,7 @@ jobs:
           pip install pytest
       - name: Headless backend command-build tests
         run: |
-          pytest packages/engine/tests/test_headless_agent.py apps/tui/tests/test_cli_ux_commands.py::test_check_beta_gate_runs_backend_and_release_checks -q
+          pytest packages/engine/tests/test_headless_agent.py apps/tui/tests/test_cli_ux_commands.py::test_check_release_gate_runs_backend_and_release_checks -q
       - name: Non-interactive run smoke
         run: |
           ralphite run --workspace . --no-tui --yes --output json

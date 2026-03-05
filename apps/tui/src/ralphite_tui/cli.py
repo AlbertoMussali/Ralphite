@@ -1952,13 +1952,9 @@ def check(
     ] = False,
     release_gate: Annotated[
         bool,
-        typer.Option("--release-gate", help="Run v5 stabilization release gate suites"),
-    ] = False,
-    beta_gate: Annotated[
-        bool,
         typer.Option(
-            "--beta-gate",
-            help="Run strict beta gate (doctor + backend smoke + release suites)",
+            "--release-gate",
+            help="Run strict internal release gate (doctor + backend smoke + release suites)",
         ),
     ] = False,
     output: Annotated[
@@ -1979,10 +1975,10 @@ def check(
     capture_subprocess_output = machine_mode or quiet
 
     snapshot = _doctor_snapshot(orch, include_fix_suggestions=False)
-    if not machine_mode and not quiet and not (release_gate or beta_gate):
+    if not machine_mode and not quiet and not release_gate:
         _render_doctor_table(snapshot)
     command_results: list[dict[str, Any]] = []
-    if beta_gate and not bool(snapshot.get("ok")):
+    if release_gate and not bool(snapshot.get("ok")):
         envelope = _result_payload(
             command="check",
             ok=False,
@@ -1991,15 +1987,15 @@ def check(
             exit_code=1,
             issues=[
                 {
-                    "code": "check.beta_gate_doctor_failed",
-                    "message": "doctor checks failed for beta gate",
+                    "code": "check.release_gate_doctor_failed",
+                    "message": "doctor checks failed for release gate",
                 }
             ],
             data={"doctor": snapshot, "commands": command_results},
         )
         _emit_payload(mode, envelope, title="Check")
         raise typer.Exit(code=1)
-    if not beta_gate and not release_gate and not bool(snapshot.get("ok")):
+    if not release_gate and not bool(snapshot.get("ok")):
         envelope = _result_payload(
             command="check",
             ok=False,
@@ -2100,7 +2096,7 @@ def check(
             _emit_payload(mode, envelope, title="Check")
             raise typer.Exit(code=1)
 
-    if beta_gate:
+    if release_gate:
         smoke_ok, smoke_results = _run_backend_smoke(
             orch=orch,
             repo_root=repo_root,
@@ -2127,7 +2123,7 @@ def check(
             _emit_payload(mode, envelope, title="Check")
             raise typer.Exit(code=1)
 
-    if release_gate or beta_gate:
+    if release_gate:
         gate_ok, gate_results = _run_release_gate(
             repo_root=repo_root,
             quiet=quiet,

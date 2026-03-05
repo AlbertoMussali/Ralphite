@@ -1,0 +1,39 @@
+# ADR-0002: Release Gate Policy
+
+- Status: Accepted
+- Date: 2026-03-05
+- Owners: release, engine
+
+## Context
+
+A single deterministic release signal is needed for beta readiness.
+
+## Decision
+
+`check --release-gate` requires:
+
+1. doctor success (blocking checks)
+2. backend smoke success for selected default backend
+3. all release gate suites passing
+
+Cursor support is optional unless selected in config/CLI.
+
+## Alternatives Considered
+
+1. Keep release gate equivalent to previous (less strict) release suites-only behavior.
+2. Require both codex and cursor always.
+3. Remove backend smoke from gate.
+
+## Consequences
+
+- Stronger readiness confidence.
+- Slightly stricter local environment requirements.
+
+## Rollback / Migration Plan
+
+Adjust policy only through ADR update and matching CLI/test/docs changes.
+
+## References
+
+- `apps/tui/src/ralphite_tui/cli.py`
+- `apps/tui/tests/test_cli_ux_commands.py`
