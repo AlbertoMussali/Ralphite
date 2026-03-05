@@ -1,6 +1,6 @@
 # Ralphite
 
-Ralphite is a local-first, TUI-first multi-agent execution system for **v5 YAML plans**.
+Ralphite is a local-first, CLI-first multi-agent execution system for **v5 YAML plans**.
 
 Last verified against commit: 70b0c1f
 
@@ -10,8 +10,8 @@ Requirements: Python 3.12+, `uv`, `git`, `rg`, and `codex` in PATH.
 
 ```bash
 uv run ralphite init --workspace .
-uv run ralphite quickstart --workspace . --no-tui --yes --output stream
-uv run ralphite run --workspace . --no-tui --yes --output stream
+uv run ralphite quickstart --workspace . --yes --output stream
+uv run ralphite run --workspace . --yes --output stream
 ```
 
 ## What To Read Next

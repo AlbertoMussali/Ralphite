@@ -1,16 +1,14 @@
 # Frontend
 
-Owners: tui
+Owners: cli
 Last verified against commit: 70b0c1f
 
-Primary frontend surface is Textual TUI in `apps/tui/src/ralphite_tui/tui/`.
+Primary frontend surface is the Typer-based CLI in `apps/cli/src/ralphite_cli/`.
 
-Key screens:
+Primary interaction modes:
 
-- Run Setup
-- Runs
-- Phase Timeline
-- Recovery
-- Summary
+- `--output table`
+- `--output stream`
+- `--output json`
 
 UX behavior and operator workflows are documented under `docs/workflows/`.

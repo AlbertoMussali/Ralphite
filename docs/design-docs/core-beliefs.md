@@ -1,6 +1,6 @@
 # Core Beliefs
 
-Owners: engine, tui
+Owners: engine, cli
 Last verified against commit: 70b0c1f
 
 1. Local-first execution: all runtime behavior should run via local CLIs and local workspace state.

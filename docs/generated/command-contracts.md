@@ -1,11 +1,11 @@
 # Command Contracts (Generated Snapshot)
 
-Owners: engine, tui
+Owners: engine, cli
 Last verified against commit: 70b0c1f
 Generated from:
 
 - `packages/engine/src/ralphite_engine/headless_agent.py`
-- `apps/tui/src/ralphite_tui/cli.py`
+- `apps/cli/src/ralphite_cli/app.py`
 
 Verification command:
 

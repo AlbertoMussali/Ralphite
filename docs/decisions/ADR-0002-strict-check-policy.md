@@ -35,5 +35,5 @@ Adjust policy only through ADR update and matching CLI/test/docs changes.
 
 ## References
 
-- `apps/tui/src/ralphite_tui/cli.py`
-- `apps/tui/tests/test_cli_ux_commands.py`
+- `apps/cli/src/ralphite_cli/commands/check_cmd.py`
+- `apps/cli/tests/test_cli_ux_commands.py`

@@ -1,6 +1,6 @@
 # Design
 
-Owners: product, engine, tui
+Owners: product, engine, cli
 Last verified against commit: 70b0c1f
 
 Design rationale and boundaries are captured in:

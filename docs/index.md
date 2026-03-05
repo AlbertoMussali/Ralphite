@@ -1,6 +1,6 @@
 # Ralphite Documentation Hub
 
-Owners: engine, tui, schemas, release
+Owners: engine, cli, schemas, release
 Last verified against commit: 70b0c1f
 
 Verification commands:

@@ -1,6 +1,6 @@
 # Docs Maintenance Workflow
 
-Owners: release, engine, tui, schemas
+Owners: release, engine, cli, schemas
 Last verified against commit: 70b0c1f
 
 ## Update Triggers
@@ -17,7 +17,7 @@ Update docs in the same PR when changing:
 
 ```bash
 uv run --with pytest pytest packages/engine/tests/test_docs_knowledge_base.py -q
-uv run --with pytest pytest packages/engine/tests/test_headless_agent.py apps/tui/tests/test_cli_ux_commands.py -q
+uv run --with pytest pytest packages/engine/tests/test_headless_agent.py apps/cli/tests/test_cli_ux_commands.py -q
 ```
 
 ## ADR Trigger

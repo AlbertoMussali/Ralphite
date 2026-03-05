@@ -1,6 +1,6 @@
 # Architecture
 
-Owners: engine, schemas, tui
+Owners: engine, schemas, cli
 Last verified against commit: 70b0c1f
 
 - [Runtime Execution](runtime-execution.md)

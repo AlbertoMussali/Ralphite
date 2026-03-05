@@ -25,7 +25,7 @@ FAILURE_MAP: dict[str, FailureAdvice] = {
         title="Task Triggered Failure",
         message="Task content explicitly triggered failure simulation marker.",
         next_action="Remove '[fail]' markers and rerun failed tasks.",
-        command_hint="uv run ralphite replay <RUN_ID> --workspace . --no-tui --output table",
+        command_hint="uv run ralphite replay <RUN_ID> --workspace . --output table",
     ),
     "backend_binary_missing": FailureAdvice(
         code="backend_binary_missing",
@@ -39,7 +39,7 @@ FAILURE_MAP: dict[str, FailureAdvice] = {
         title="Backend Model Unsupported",
         message="The selected backend does not support the configured model id.",
         next_action="Switch model to a backend-supported id or update backend account access.",
-        command_hint="uv run ralphite run --workspace . --no-tui --output table --model gpt-5.3-codex",
+        command_hint="uv run ralphite run --workspace . --output table --model gpt-5.3-codex",
     ),
     "backend_auth_failed": FailureAdvice(
         code="backend_auth_failed",
@@ -74,7 +74,7 @@ FAILURE_MAP: dict[str, FailureAdvice] = {
         title="Out-of-Worktree Change Rejected",
         message="Backend output referenced edits outside the assigned worktree.",
         next_action="Rerun with stricter instructions; ensure tool operates only in assigned worktree.",
-        command_hint="uv run ralphite replay <RUN_ID> --workspace . --no-tui --output table",
+        command_hint="uv run ralphite replay <RUN_ID> --workspace . --output table",
     ),
     "backend_execution_error": FailureAdvice(
         code="backend_execution_error",
@@ -88,7 +88,7 @@ FAILURE_MAP: dict[str, FailureAdvice] = {
         title="Worktree Missing",
         message="Assigned worktree path was missing when execution started.",
         next_action="Recreate run/worktree by replaying failed run.",
-        command_hint="uv run ralphite replay <RUN_ID> --workspace . --no-tui --output table",
+        command_hint="uv run ralphite replay <RUN_ID> --workspace . --output table",
     ),
     "unknown_node_kind": FailureAdvice(
         code="unknown_node_kind",

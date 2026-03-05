@@ -1,6 +1,6 @@
 # Design Docs
 
-Owners: engine, tui
+Owners: engine, cli
 Last verified against commit: 70b0c1f
 
 - [Core Beliefs](core-beliefs.md)

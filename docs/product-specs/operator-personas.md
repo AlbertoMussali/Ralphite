@@ -1,6 +1,6 @@
 # Operator Personas
 
-Owners: product, tui
+Owners: product, cli
 Last verified against commit: 70b0c1f
 
 ## Solo Builder

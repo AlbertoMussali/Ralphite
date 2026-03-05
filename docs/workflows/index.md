@@ -1,6 +1,6 @@
 # Workflows
 
-Owners: tui, engine, release
+Owners: cli, engine, release
 Last verified against commit: 70b0c1f
 
 - [First Run](first-run.md)

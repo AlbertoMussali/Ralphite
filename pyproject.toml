@@ -1,12 +1,12 @@
 [tool.uv.workspace]
 members = [
-  "apps/tui",
+  "apps/cli",
   "packages/engine",
   "packages/schemas/python"
 ]
 
 [tool.uv.sources]
-ralphite-tui = { workspace = true }
+ralphite-cli = { workspace = true }
 ralphite-engine = { workspace = true }
 ralphite-schemas = { workspace = true }
 
@@ -14,4 +14,9 @@ ralphite-schemas = { workspace = true }
 dev = [
     "pytest>=9.0.2",
     "ruff>=0.15.4",
+]
+
+[tool.pytest.ini_options]
+markers = [
+  "perf: performance baseline checks (opt-in with RALPHITE_PERF=1)"
 ]

@@ -1,24 +1,24 @@
 # Recovery Workflow
 
-Owners: engine, tui
+Owners: engine, cli
 Last verified against commit: 70b0c1f
 
 ## Preflight
 
 ```bash
-uv run ralphite recover --workspace . --no-tui --preflight-only --output json
+uv run ralphite recover --workspace . --preflight-only --output json
 ```
 
 ## Manual Recovery
 
 ```bash
-uv run ralphite recover --workspace . --run-id <RUN_ID> --mode manual --no-tui --output json
+uv run ralphite recover --workspace . --run-id <RUN_ID> --mode manual --output json
 ```
 
 ## Agent Best Effort
 
 ```bash
-uv run ralphite recover --workspace . --run-id <RUN_ID> --mode agent_best_effort --prompt "resolve conflicts" --resume --no-tui --output json
+uv run ralphite recover --workspace . --run-id <RUN_ID> --mode agent_best_effort --prompt "resolve conflicts" --resume --output json
 ```
 
 ## Exit Code Contract

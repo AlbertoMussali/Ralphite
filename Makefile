@@ -1,8 +1,8 @@
-.PHONY: install test init doctor run recover history replay check tui
+.PHONY: install test init doctor run recover history replay check
 
 install:
 	python3 -m venv .venv
-	. .venv/bin/activate && pip install -e packages/schemas/python -e packages/engine -e apps/tui
+	. .venv/bin/activate && pip install -e packages/schemas/python -e packages/engine -e apps/cli
 
 init:
 	uv run ralphite init --workspace $(WORKSPACE_ROOT)
@@ -24,6 +24,3 @@ replay:
 
 check:
 	uv run ralphite check --workspace $(WORKSPACE_ROOT) --full
-
-tui:
-	uv run ralphite tui --workspace $(WORKSPACE_ROOT)

@@ -33,5 +33,5 @@ If backend regressions occur, gate releases until contract/health checks pass. D
 ## References
 
 - `packages/engine/src/ralphite_engine/headless_agent.py`
-- `apps/tui/src/ralphite_tui/cli.py`
+- `apps/cli/src/ralphite_cli/app.py`
 - `packages/engine/tests/test_headless_agent.py`

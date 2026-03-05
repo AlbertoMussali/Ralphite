@@ -1,6 +1,6 @@
 # References
 
-Owners: engine, schemas, tui
+Owners: engine, schemas, cli
 Last verified against commit: 70b0c1f
 
 - [CLI Contracts](cli-contracts.md)

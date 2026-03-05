@@ -1,6 +1,6 @@
 # AGENTS Guide
 
-Owners: engine, tui, schemas, release
+Owners: engine, cli, schemas, release
 Last verified against commit: 70b0c1f
 
 ## Purpose
@@ -12,7 +12,7 @@ This file orients contributors and coding agents to Ralphite's source-of-truth d
 - Product entry: [README.md](README.md)
 - Documentation hub: [docs/index.md](docs/index.md)
 - Core engine: `packages/engine/src/ralphite_engine/`
-- TUI + CLI: `apps/tui/src/ralphite_tui/`
+- CLI: `apps/cli/src/ralphite_cli/`
 - Schemas: `packages/schemas/`
 - Canonical starter plans: `examples/plans/`
 
@@ -21,7 +21,7 @@ This file orients contributors and coding agents to Ralphite's source-of-truth d
 1. Runtime behavior must be documented from code and tests, not inferred intent.
 2. Command contracts must align with:
    - `packages/engine/src/ralphite_engine/headless_agent.py`
-   - `apps/tui/src/ralphite_tui/cli.py`
+   - `apps/cli/src/ralphite_cli/app.py`
 3. Schema defaults must align with:
    - `packages/schemas/json/plan-spec-v5.schema.json`
    - `packages/schemas/python/src/ralphite_schemas/plan_v5.py`

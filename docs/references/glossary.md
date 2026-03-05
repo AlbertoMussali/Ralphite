@@ -1,6 +1,6 @@
 # Glossary
 
-Owners: engine, tui
+Owners: engine, cli
 Last verified against commit: 70b0c1f
 
 - **Plan v5**: single YAML execution contract for tasks + orchestration + agents.

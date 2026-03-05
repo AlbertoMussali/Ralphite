@@ -1,6 +1,6 @@
 # Near-Term Roadmap
 
-Owners: product, engine, tui
+Owners: product, engine, cli
 Last verified against commit: 70b0c1f
 
 ## Milestone 1: Stabilization (current)
