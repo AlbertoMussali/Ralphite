@@ -1,4 +1,4 @@
-version: 5
+version: 1
 plan_id: fixture_blue_red
 name: Fixture Blue Red Per Task
 materials:

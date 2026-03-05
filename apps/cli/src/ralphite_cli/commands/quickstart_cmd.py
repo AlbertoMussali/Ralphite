@@ -11,7 +11,7 @@ from ralphite_engine import present_run_status
 from ..core import (
     _bootstrap_plan_file,
     _emit_payload,
-    _find_first_valid_v5_plan,
+    _find_first_valid_plan,
     _normalize_output,
     _orchestrator,
     _print_run_stream,
@@ -28,15 +28,21 @@ from ..doctoring import (
 
 def quickstart_command(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
-    goal: Annotated[str | None, typer.Option(help="Optional goal to generate a plan")] = None,
+    goal: Annotated[
+        str | None, typer.Option(help="Optional goal to generate a plan")
+    ] = None,
     backend: Annotated[
         str | None, typer.Option(help="Execution backend override: codex | cursor")
     ] = None,
-    model: Annotated[str | None, typer.Option(help="Model override for headless backend")] = None,
+    model: Annotated[
+        str | None, typer.Option(help="Model override for headless backend")
+    ] = None,
     reasoning_effort: Annotated[
         str | None, typer.Option(help="Reasoning effort override: low | medium | high")
     ] = None,
-    yes: Annotated[bool, typer.Option("--yes", help="Auto-approve capabilities")] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Auto-approve capabilities")
+    ] = False,
     strict_doctor: Annotated[
         bool, typer.Option("--strict-doctor", help="Fail on any doctor warning")
     ] = False,
@@ -50,7 +56,9 @@ def quickstart_command(
     output: Annotated[
         str, typer.Option("--output", help="Output mode: table | stream | json")
     ] = "table",
-    quiet: Annotated[bool, typer.Option("--quiet", help="Suppress non-critical output")] = False,
+    quiet: Annotated[
+        bool, typer.Option("--quiet", help="Suppress non-critical output")
+    ] = False,
     verbose: Annotated[
         bool, typer.Option("--verbose", help="Show extra event guidance")
     ] = False,
@@ -96,7 +104,9 @@ def quickstart_command(
     record_step("Doctor", doctor_started, doctor_detail)
     if blocking_checks:
         recommended = _collect_recommended_commands(snapshot)
-        next_actions = recommended or ["Run `ralphite doctor --output table` to inspect failures."]
+        next_actions = recommended or [
+            "Run `ralphite doctor --output table` to inspect failures."
+        ]
         if mode == "json":
             _emit_payload(
                 mode,
@@ -106,14 +116,18 @@ def quickstart_command(
                     status="failed",
                     run_id=None,
                     exit_code=1,
-                    issues=[{"code": "doctor.failed", "message": "workspace checks failed"}],
+                    issues=[
+                        {"code": "doctor.failed", "message": "workspace checks failed"}
+                    ],
                     next_actions=next_actions,
                     data={
                         "doctor": snapshot,
                         "strict_doctor": strict_doctor,
                         "warnings": warning_checks,
                         "step_timing": steps,
-                        "total_elapsed_seconds": round(max(0.0, time.perf_counter() - flow_started), 3),
+                        "total_elapsed_seconds": round(
+                            max(0.0, time.perf_counter() - flow_started), 3
+                        ),
                     },
                 ),
                 title="Quickstart",
@@ -127,7 +141,7 @@ def quickstart_command(
         raise typer.Exit(code=1)
 
     bootstrap_started = time.perf_counter()
-    selected_bootstrap_plan = _find_first_valid_v5_plan(orch)
+    selected_bootstrap_plan = _find_first_valid_plan(orch)
     if bootstrap and selected_bootstrap_plan is None:
         selected_bootstrap_plan = _bootstrap_plan_file(
             orch,
@@ -146,16 +160,20 @@ def quickstart_command(
             bootstrap_paths.append(str(orch.paths["config"]))
         if not plans_before and plans_after:
             bootstrap_paths.append(str(orch.paths["plans"]))
-    record_step("Bootstrap", bootstrap_started, "created" if bootstrap_paths else "ready")
+    record_step(
+        "Bootstrap", bootstrap_started, "created" if bootstrap_paths else "ready"
+    )
     if bootstrap and mode != "json" and not quiet and bootstrap_paths:
-        console.print(f"Bootstrap: initialized {', '.join(dict.fromkeys(bootstrap_paths))}")
+        console.print(
+            f"Bootstrap: initialized {', '.join(dict.fromkeys(bootstrap_paths))}"
+        )
 
     plan_started = time.perf_counter()
     plan_ref: str | None = None
     if goal:
         plan_ref = str(orch.goal_to_plan(goal))
     else:
-        preferred = selected_bootstrap_plan or _find_first_valid_v5_plan(orch)
+        preferred = selected_bootstrap_plan or _find_first_valid_plan(orch)
         if preferred is None:
             payload = _result_payload(
                 command="quickstart",
@@ -163,18 +181,31 @@ def quickstart_command(
                 status="failed",
                 run_id=None,
                 exit_code=1,
-                issues=[{"code": "quickstart.no_valid_plan", "message": "no valid v5 plan found"}],
-                next_actions=["Run `ralphite init --workspace . --yes` to generate a valid v5 plan."],
+                issues=[
+                    {
+                        "code": "quickstart.no_valid_plan",
+                        "message": "no valid v1 plan found",
+                    }
+                ],
+                next_actions=[
+                    "Run `ralphite init --workspace . --yes` to generate a valid v1 plan."
+                ],
                 data={
                     "step_timing": steps,
                     "bootstrap_paths": list(dict.fromkeys(bootstrap_paths)),
-                    "total_elapsed_seconds": round(max(0.0, time.perf_counter() - flow_started), 3),
+                    "total_elapsed_seconds": round(
+                        max(0.0, time.perf_counter() - flow_started), 3
+                    ),
                 },
             )
             _emit_payload(mode, payload, title="Quickstart")
             raise typer.Exit(code=1)
         plan_ref = str(preferred)
-    record_step("Plan Selection", plan_started, Path(plan_ref).name if isinstance(plan_ref, str) else "none")
+    record_step(
+        "Plan Selection",
+        plan_started,
+        Path(plan_ref).name if isinstance(plan_ref, str) else "none",
+    )
 
     approval_started = time.perf_counter()
     requirements = orch.collect_requirements(plan_ref=plan_ref)
@@ -184,7 +215,9 @@ def quickstart_command(
         console.print(f"Required mcps: {requirements['mcps'] or ['none']}")
 
     if not yes:
-        approved = typer.confirm("Approve these capabilities for this run?", default=True)
+        approved = typer.confirm(
+            "Approve these capabilities for this run?", default=True
+        )
         if not approved:
             record_step("Capability Approval", approval_started, "cancelled")
             payload = _result_payload(
@@ -193,16 +226,22 @@ def quickstart_command(
                 status="cancelled",
                 run_id=None,
                 exit_code=1,
-                issues=[{"code": "quickstart.cancelled", "message": "run aborted by user"}],
+                issues=[
+                    {"code": "quickstart.cancelled", "message": "run aborted by user"}
+                ],
                 data={
                     "step_timing": steps,
                     "bootstrap_paths": list(dict.fromkeys(bootstrap_paths)),
-                    "total_elapsed_seconds": round(max(0.0, time.perf_counter() - flow_started), 3),
+                    "total_elapsed_seconds": round(
+                        max(0.0, time.perf_counter() - flow_started), 3
+                    ),
                 },
             )
             _emit_payload(mode, payload, title="Quickstart")
             raise typer.Exit(code=1)
-    record_step("Capability Approval", approval_started, "approved" if approved else "cancelled")
+    record_step(
+        "Capability Approval", approval_started, "approved" if approved else "cancelled"
+    )
 
     run_started = time.perf_counter()
     run_id = orch.start_run(
@@ -245,8 +284,11 @@ def quickstart_command(
             "bootstrap_paths": list(dict.fromkeys(bootstrap_paths)),
             "backend": backend or orch.config.default_backend,
             "model": model or orch.config.default_model,
-            "reasoning_effort": reasoning_effort or orch.config.default_reasoning_effort,
-            "total_elapsed_seconds": round(max(0.0, time.perf_counter() - flow_started), 3),
+            "reasoning_effort": reasoning_effort
+            or orch.config.default_reasoning_effort,
+            "total_elapsed_seconds": round(
+                max(0.0, time.perf_counter() - flow_started), 3
+            ),
         },
     )
     _emit_payload(mode, payload, title="Quickstart")

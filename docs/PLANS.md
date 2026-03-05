@@ -6,7 +6,7 @@ Last verified against commit: 70b0c1f
 ## Canonical Plan Sources
 
 - tracked examples: `examples/plans/*.yaml`
-- schema contracts: `packages/schemas/json/plan-spec-v5.schema.json`
+- schema contracts: `packages/schemas/json/plan-spec.schema.json`
 
 ## Local Plan State
 

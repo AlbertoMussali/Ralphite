@@ -12,7 +12,7 @@ from ralphite_cli.cli import app
 
 def _plan_content() -> str:
     return """
-version: 5
+version: 1
 plan_id: contract
 name: contract
 materials:

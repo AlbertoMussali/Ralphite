@@ -20,3 +20,6 @@ dev = [
 markers = [
   "perf: performance baseline checks (opt-in with RALPHITE_PERF=1)"
 ]
+
+[tool.ruff]
+extend-exclude = ["build"]

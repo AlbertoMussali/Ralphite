@@ -10,7 +10,7 @@ import yaml
 
 def _plan_content() -> str:
     return """
-version: 5
+version: 1
 plan_id: orch
 name: orch
 materials:
@@ -77,7 +77,7 @@ outputs:
 
 def _conflict_plan_content() -> str:
     return """
-version: 5
+version: 1
 plan_id: recovery
 name: recovery
 materials:
@@ -128,7 +128,7 @@ def _single_task_plan(
     acceptance_timeout_seconds: int = 120,
 ) -> str:
     plan = {
-        "version": 5,
+        "version": 1,
         "plan_id": "acceptance",
         "name": "acceptance",
         "materials": {
@@ -216,7 +216,7 @@ def test_cancel_run(tmp_path: Path) -> None:
     assert any(evt["event"] in {"RUN_CANCEL_REQUESTED", "RUN_DONE"} for evt in events)
 
 
-def test_v5_plan_executes_with_phase_events(tmp_path: Path) -> None:
+def test_v1_plan_executes_with_phase_events(tmp_path: Path) -> None:
     orch = LocalOrchestrator(tmp_path)
     run_id = orch.start_run(plan_content=_plan_content())
     events = list(orch.stream_events(run_id))

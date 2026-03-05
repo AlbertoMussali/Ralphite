@@ -7,7 +7,7 @@ Source files:
 
 - `packages/engine/src/ralphite_engine/structure_compiler.py`
 - `packages/engine/src/ralphite_engine/task_parser.py`
-- `packages/schemas/python/src/ralphite_schemas/plan_v5.py`
+- `packages/schemas/python/src/ralphite_schemas/plan.py`
 
 ## Supported Templates
 

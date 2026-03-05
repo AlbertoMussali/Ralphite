@@ -18,9 +18,9 @@ from ralphite_cli.cli import app
 from ralphite_cli.core import _orchestrator
 
 
-def _broken_v5_missing_worker(plan_id: str) -> str:
+def _broken_v1_missing_worker(plan_id: str) -> str:
     return f"""
-version: 5
+version: 1
 plan_id: {plan_id}
 name: {plan_id}
 materials:
@@ -84,7 +84,7 @@ def test_validate_command_returns_fixes_for_invalid_plan(tmp_path: Path) -> None
     plans = tmp_path / ".ralphite" / "plans"
     plans.mkdir(parents=True, exist_ok=True)
     broken = plans / "broken.yaml"
-    broken.write_text(_broken_v5_missing_worker("broken"), encoding="utf-8")
+    broken.write_text(_broken_v1_missing_worker("broken"), encoding="utf-8")
 
     runner = CliRunner()
     result = runner.invoke(
@@ -113,7 +113,7 @@ def test_validate_apply_safe_fixes_writes_revision(tmp_path: Path) -> None:
     plans = tmp_path / ".ralphite" / "plans"
     plans.mkdir(parents=True, exist_ok=True)
     broken = plans / "broken2.yaml"
-    broken.write_text(_broken_v5_missing_worker("broken2"), encoding="utf-8")
+    broken.write_text(_broken_v1_missing_worker("broken2"), encoding="utf-8")
 
     runner = CliRunner()
     result = runner.invoke(
@@ -156,15 +156,15 @@ def test_validate_json_includes_resolved_execution(tmp_path: Path) -> None:
     assert isinstance(resolved.get("resolved_nodes"), list)
 
 
-def test_validate_non_v5_returns_version_invalid(tmp_path: Path) -> None:
+def test_validate_non_v1_returns_version_invalid(tmp_path: Path) -> None:
     plans = tmp_path / ".ralphite" / "plans"
     plans.mkdir(parents=True, exist_ok=True)
-    legacy = plans / "legacy_v4.yaml"
-    legacy.write_text(
+    invalid_plan = plans / "invalid_v4.yaml"
+    invalid_plan.write_text(
         """
 version: 4
-plan_id: legacy
-name: legacy
+plan_id: invalid_plan
+name: invalid_plan
 tasks: []
 """,
         encoding="utf-8",
@@ -172,7 +172,7 @@ tasks: []
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["validate", "--workspace", str(tmp_path), "--plan", str(legacy), "--json"],
+        ["validate", "--workspace", str(tmp_path), "--plan", str(invalid_plan), "--json"],
     )
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
@@ -289,13 +289,15 @@ def test_strict_checks_include_fixture_confidence_suites(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seen: list[tuple[list[str], str]] = []
+    monkeypatch.setenv("RALPHITE_SKIP_BACKEND_CMD_CHECKS", "1")
 
     class _Result:
         returncode = 0
         stdout = ""
         stderr = ""
 
-    def fake_run(command, cwd, check, capture_output, text):  # noqa: ANN001
+    def fake_run(command, cwd, check, capture_output, text, env):  # noqa: ANN001
+        assert "RALPHITE_SKIP_BACKEND_CMD_CHECKS" not in env
         seen.append((list(command), str(cwd)))
         return _Result()
 
@@ -472,6 +474,32 @@ def test_backend_smoke_cursor_command_matches_runtime_builder(
         force=True,
     )
     assert "--force" in seen["command"]
+
+
+def test_backend_smoke_is_skipped_when_env_requests_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    orch = _orchestrator(tmp_path)
+    repo_root = Path(__file__).resolve().parents[3]
+
+    def fail_run(*_args, **_kwargs):  # noqa: ANN001
+        raise AssertionError(
+            "subprocess.run should not be called when backend checks are skipped"
+        )
+
+    monkeypatch.setenv("RALPHITE_SKIP_BACKEND_CMD_CHECKS", "1")
+    monkeypatch.setattr(suite_mod.subprocess, "run", fail_run)
+    ok, results = suite_mod._run_backend_smoke(
+        orch=orch,
+        repo_root=repo_root,
+        quiet=True,
+        machine_mode=True,
+        verbose=False,
+    )
+    assert ok is True
+    assert results
+    assert results[0]["suite"] == "backend-smoke-skipped"
+    assert results[0]["exit_code"] == 0
 
 
 def test_run_json_propagates_backend_overrides(tmp_path: Path) -> None:

@@ -22,9 +22,9 @@ What is selected?
 
 What gets better? What tradeoffs are accepted?
 
-## Rollback / Migration Plan
+## Rollback Plan
 
-How to revert or migrate if needed?
+How to revert if needed?
 
 ## References
 

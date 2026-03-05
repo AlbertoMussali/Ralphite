@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from ralphite_schemas.plan_v5 import PlanSpecV5
+from ralphite_schemas.plan import PlanSpec
 
 from ralphite_engine.structure_compiler import compile_execution_structure
 from ralphite_engine.task_parser import parse_plan_tasks
@@ -35,7 +35,7 @@ def test_examples_plans_validate_and_compile(plan_path: Path) -> None:
     assert resolved.get("resolved_nodes")
 
     raw = yaml.safe_load(content)
-    plan = PlanSpecV5.model_validate(raw)
+    plan = PlanSpec.model_validate(raw)
     tasks, parse_issues = parse_plan_tasks(plan)
     assert parse_issues == []
 

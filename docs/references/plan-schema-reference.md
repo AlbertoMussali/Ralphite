@@ -1,12 +1,12 @@
-# Plan v5 Schema Reference
+# Plan v1 Schema Reference
 
 Owners: schemas
 Last verified against commit: 70b0c1f
 
 Source files:
 
-- `packages/schemas/json/plan-spec-v5.schema.json`
-- `packages/schemas/python/src/ralphite_schemas/plan_v5.py`
+- `packages/schemas/json/plan-spec.schema.json`
+- `packages/schemas/python/src/ralphite_schemas/plan.py`
 
 ## Required Top-Level Sections
 
@@ -14,7 +14,7 @@ Source files:
 
 ## Agent Defaults
 
-- `provider: codex` (legacy `openai` allowed for migration warnings)
+- `provider: codex` (supported providers: `codex`, `cursor`)
 - `model: gpt-5.3-codex`
 - `reasoning_effort: medium`
 
@@ -24,4 +24,4 @@ Source files:
 
 ## Runtime Compatibility
 
-- execution supports only `version: 5`
+- execution supports only `version: 1`

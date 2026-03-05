@@ -23,7 +23,7 @@ uv run ralphite check --workspace . --strict --output json
 1. Product and quickstart: [README.md](../README.md)
 2. Runtime model: [docs/architecture/runtime-execution.md](architecture/runtime-execution.md)
 3. Gate and release policy: [docs/workflows/release-readiness.md](workflows/release-readiness.md)
-4. Plan/spec references: [docs/references/plan-v5-schema-reference.md](references/plan-v5-schema-reference.md)
+4. Plan/spec references: [docs/references/plan-schema-reference.md](references/plan-schema-reference.md)
 
 ## Source-of-Truth Policy
 

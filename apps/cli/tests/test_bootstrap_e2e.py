@@ -137,7 +137,7 @@ def test_quickstart_surfaces_step_timing_and_artifacts(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("template", ["general_sps", "branched", "blue_red", "custom"])
-def test_init_bootstrap_generates_v5_plan_for_template(
+def test_init_bootstrap_generates_v1_plan_for_template(
     tmp_path: Path, template: str
 ) -> None:
     runner = CliRunner()
@@ -160,14 +160,14 @@ def test_init_bootstrap_generates_v5_plan_for_template(
     plan_path = tmp_path / ".ralphite" / "plans" / f"plan_{template}.yaml"
     assert plan_path.exists()
     content = plan_path.read_text(encoding="utf-8")
-    assert "version: 5" in content
+    assert "version: 1" in content
     assert f"template: {template}" in content
 
 
-def test_validate_non_v5_returns_version_invalid(tmp_path: Path) -> None:
+def test_validate_non_v1_returns_version_invalid(tmp_path: Path) -> None:
     plans = tmp_path / ".ralphite" / "plans"
     plans.mkdir(parents=True, exist_ok=True)
-    invalid = plans / "legacy.yaml"
+    invalid = plans / "invalid.yaml"
     invalid.write_text("version: 4\nplan_id: x\nname: x\n", encoding="utf-8")
 
     runner = CliRunner()

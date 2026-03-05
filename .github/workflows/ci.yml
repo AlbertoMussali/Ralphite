@@ -63,8 +63,8 @@ jobs:
       - name: CLI smoke
         run: |
           mkdir -p /tmp/ralphite-smoke
-          uv run ralphite quickstart --workspace /tmp/ralphite-smoke --bootstrap --yes --output json
-          uv run ralphite run --workspace /tmp/ralphite-smoke --yes --output json
+          PYTHONPATH=apps/cli/src:packages/engine/src:packages/schemas/python/src uv run python -m ralphite_cli.main quickstart --workspace /tmp/ralphite-smoke --bootstrap --yes --output json
+          PYTHONPATH=apps/cli/src:packages/engine/src:packages/schemas/python/src uv run python -m ralphite_cli.main run --workspace /tmp/ralphite-smoke --yes --output json
 
   strict-gate:
     name: Strict Gate
@@ -94,7 +94,7 @@ jobs:
         run: uv run --with pytest pytest -q
 
       - name: Strict CLI check
-        run: uv run ralphite check --workspace . --strict --output json
+        run: PYTHONPATH=apps/cli/src:packages/engine/src:packages/schemas/python/src uv run python -m ralphite_cli.main check --workspace . --strict --output json
 
   perf-baseline:
     name: Perf Baseline

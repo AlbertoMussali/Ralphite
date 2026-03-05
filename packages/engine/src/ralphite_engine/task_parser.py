@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ralphite_schemas.plan_v5 import PlanSpecV5
+from ralphite_schemas.plan import PlanSpec
 
 
 @dataclass(slots=True)
@@ -25,7 +25,7 @@ class ParsedTask:
     acceptance_rubric: list[str]
 
 
-def parse_plan_tasks(plan: PlanSpecV5) -> tuple[list[ParsedTask], list[str]]:
+def parse_plan_tasks(plan: PlanSpec) -> tuple[list[ParsedTask], list[str]]:
     issues: list[str] = []
     tasks: list[ParsedTask] = []
 

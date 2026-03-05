@@ -4,7 +4,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 import re
 
-from .plan_v5 import CustomCellKind, OrchestrationTemplate, PlanSpecV5
+from .plan import CustomCellKind, OrchestrationTemplate, PlanSpec
 
 
 @dataclass(slots=True)
@@ -17,7 +17,7 @@ class ValidationIssue:
 
 @dataclass(slots=True)
 class CompiledPlan:
-    plan: PlanSpecV5
+    plan: PlanSpec
     node_levels: dict[str, int]
     outgoing: dict[str, list[str]]
     incoming: dict[str, list[str]]
@@ -56,12 +56,12 @@ def _is_worktree_relative_glob(path_glob: str) -> bool:
     return True
 
 
-def validate_plan(plan: PlanSpecV5) -> list[ValidationIssue]:
+def validate_plan(plan: PlanSpec) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
 
-    if plan.version != 5:
+    if plan.version != 1:
         issues.append(
-            ValidationIssue("version.invalid", "version must be 5", "version")
+            ValidationIssue("version.invalid", "version must be 1", "version")
         )
 
     if not plan.tasks:
@@ -84,16 +84,6 @@ def validate_plan(plan: PlanSpecV5) -> list[ValidationIssue]:
             )
         agent_ids.add(agent.id)
         role_counts[agent.role.value] += 1
-        if agent.provider.value == "openai":
-            issues.append(
-                ValidationIssue(
-                    "agent.provider.legacy_openai",
-                    f"agent '{agent.id}' uses legacy provider 'openai'; migrate to 'codex' or 'cursor'",
-                    f"agents[{idx}].provider",
-                    level="warn",
-                )
-            )
-
     if role_counts.get("worker", 0) == 0:
         issues.append(
             ValidationIssue(
@@ -292,7 +282,7 @@ def validate_plan(plan: PlanSpecV5) -> list[ValidationIssue]:
     return issues
 
 
-def _compile_plan(plan: PlanSpecV5) -> CompiledPlan:
+def _compile_plan(plan: PlanSpec) -> CompiledPlan:
     incoming: dict[str, list[str]] = defaultdict(list)
     outgoing: dict[str, list[str]] = defaultdict(list)
     groups: dict[str, list[str]] = defaultdict(list)
@@ -345,7 +335,7 @@ def _compile_plan(plan: PlanSpecV5) -> CompiledPlan:
     )
 
 
-def compile_plan(plan: PlanSpecV5) -> CompiledPlan:
+def compile_plan(plan: PlanSpec) -> CompiledPlan:
     issues = validate_plan(plan)
     errors = [issue for issue in issues if issue.level == "error"]
     if errors:

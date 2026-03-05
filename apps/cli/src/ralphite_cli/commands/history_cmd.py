@@ -8,16 +8,28 @@ import typer
 
 from ralphite_engine import present_run_status
 
-from ..core import _emit_payload, _normalize_output, _orchestrator, _result_payload, console
+from ..core import (
+    _emit_payload,
+    _normalize_output,
+    _orchestrator,
+    _result_payload,
+    console,
+)
 
 
 def history_command(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
     query: Annotated[str | None, typer.Option(help="Search by id/status/path")] = None,
     limit: Annotated[int, typer.Option(help="Max rows")] = 20,
-    output: Annotated[str, typer.Option("--output", help="Output mode: table | json")] = "table",
-    quiet: Annotated[bool, typer.Option("--quiet", help="Suppress non-critical output")] = False,
-    verbose: Annotated[bool, typer.Option("--verbose", help="Show extra details")] = False,
+    output: Annotated[
+        str, typer.Option("--output", help="Output mode: table | json")
+    ] = "table",
+    quiet: Annotated[
+        bool, typer.Option("--quiet", help="Suppress non-critical output")
+    ] = False,
+    verbose: Annotated[
+        bool, typer.Option("--verbose", help="Show extra details")
+    ] = False,
 ) -> None:
     """Show local run history."""
     orch = _orchestrator(workspace)
@@ -73,7 +85,11 @@ def history_command(
     table.add_column("Retries")
     for run in rows:
         status = present_run_status(run.status)
-        metrics = run.metadata.get("run_metrics", {}) if isinstance(run.metadata.get("run_metrics"), dict) else {}
+        metrics = (
+            run.metadata.get("run_metrics", {})
+            if isinstance(run.metadata.get("run_metrics"), dict)
+            else {}
+        )
         duration = metrics.get("total_seconds", "-")
         table.add_row(
             run.id,

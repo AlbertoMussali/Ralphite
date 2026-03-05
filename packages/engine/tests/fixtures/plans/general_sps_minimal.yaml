@@ -1,4 +1,4 @@
-version: 5
+version: 1
 plan_id: fixture_general_sps
 name: Fixture General SPS Minimal
 materials:

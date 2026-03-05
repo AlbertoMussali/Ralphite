@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -16,7 +17,6 @@ class AgentRole(str, Enum):
 class AgentProvider(str, Enum):
     CODEX = "codex"
     CURSOR = "cursor"
-    OPENAI = "openai"
 
 
 class ReasoningEffort(str, Enum):
@@ -35,7 +35,7 @@ class AgentSpec(BaseModel):
     tools_allow: list[str] = Field(default_factory=list)
 
 
-class ConstraintsSpecV5(BaseModel):
+class ConstraintsSpec(BaseModel):
     max_runtime_seconds: int = Field(default=5400, ge=1)
     max_total_steps: int = Field(default=250, ge=1)
     max_cost_usd: Decimal = Field(default=Decimal("25.00"), ge=Decimal("0"))
@@ -142,13 +142,13 @@ class OrchestrationSpec(BaseModel):
     custom: CustomOrchestrationSpec = Field(default_factory=CustomOrchestrationSpec)
 
 
-class PlanSpecV5(BaseModel):
-    version: int = Field(default=5)
+class PlanSpec(BaseModel):
+    version: Literal[1]
     plan_id: str
     name: str
     workspace: WorkspaceSpec = Field(default_factory=WorkspaceSpec)
     materials: MaterialsSpec = Field(default_factory=MaterialsSpec)
-    constraints: ConstraintsSpecV5 = Field(default_factory=ConstraintsSpecV5)
+    constraints: ConstraintsSpec = Field(default_factory=ConstraintsSpec)
     agents: list[AgentSpec] = Field(default_factory=list)
     tasks: list[TaskSpec] = Field(default_factory=list)
     orchestration: OrchestrationSpec

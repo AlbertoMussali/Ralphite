@@ -8,13 +8,22 @@ from typing import Annotated
 import typer
 
 from ..checks.suites import _run_backend_smoke, _run_strict_checks
-from ..core import _emit_payload, _normalize_output, _orchestrator, _repo_root, _result_payload, console
+from ..core import (
+    _emit_payload,
+    _normalize_output,
+    _orchestrator,
+    _repo_root,
+    _result_payload,
+    console,
+)
 from ..doctoring import _doctor_snapshot, _render_doctor_table
 
 
 def check_command(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
-    full: Annotated[bool, typer.Option("--full", help="Run full repo test suite")] = False,
+    full: Annotated[
+        bool, typer.Option("--full", help="Run full repo test suite")
+    ] = False,
     strict: Annotated[
         bool,
         typer.Option(
@@ -22,9 +31,15 @@ def check_command(
             help="Run strict internal checks (doctor + backend smoke + validation suites)",
         ),
     ] = False,
-    output: Annotated[str, typer.Option("--output", help="Output mode: table | json")] = "table",
-    quiet: Annotated[bool, typer.Option("--quiet", help="Suppress non-critical output")] = False,
-    verbose: Annotated[bool, typer.Option("--verbose", help="Show extra details")] = False,
+    output: Annotated[
+        str, typer.Option("--output", help="Output mode: table | json")
+    ] = "table",
+    quiet: Annotated[
+        bool, typer.Option("--quiet", help="Suppress non-critical output")
+    ] = False,
+    verbose: Annotated[
+        bool, typer.Option("--verbose", help="Show extra details")
+    ] = False,
 ) -> None:
     """Run baseline quality gates for local CLI reliability."""
     orch = _orchestrator(workspace)
@@ -85,8 +100,12 @@ def check_command(
             {
                 "command": " ".join(compile_cmd),
                 "exit_code": compile_result.returncode,
-                "stdout": compile_result.stdout if capture_subprocess_output and verbose else "",
-                "stderr": compile_result.stderr if capture_subprocess_output and verbose else "",
+                "stdout": compile_result.stdout
+                if capture_subprocess_output and verbose
+                else "",
+                "stderr": compile_result.stderr
+                if capture_subprocess_output and verbose
+                else "",
             }
         )
         if compile_result.returncode != 0:
@@ -96,14 +115,25 @@ def check_command(
                 status="failed",
                 run_id=None,
                 exit_code=1,
-                issues=[{"code": "check.compile_failed", "message": "compileall failed"}],
+                issues=[
+                    {"code": "check.compile_failed", "message": "compileall failed"}
+                ],
                 data={"doctor": snapshot, "commands": command_results},
             )
             _emit_payload(mode, envelope, title="Check")
             raise typer.Exit(code=1)
 
     if full:
-        command = ["uv", "run", "--with", "pytest", "pytest", "packages/engine/tests", "apps/cli/tests", "-q"]
+        command = [
+            "uv",
+            "run",
+            "--with",
+            "pytest",
+            "pytest",
+            "packages/engine/tests",
+            "apps/cli/tests",
+            "-q",
+        ]
         if not quiet and not machine_mode:
             console.print(f"Running: {' '.join(command)}")
         result = subprocess.run(
@@ -117,8 +147,12 @@ def check_command(
             {
                 "command": " ".join(command),
                 "exit_code": result.returncode,
-                "stdout": result.stdout if capture_subprocess_output and verbose else "",
-                "stderr": result.stderr if capture_subprocess_output and verbose else "",
+                "stdout": result.stdout
+                if capture_subprocess_output and verbose
+                else "",
+                "stderr": result.stderr
+                if capture_subprocess_output and verbose
+                else "",
             }
         )
         if result.returncode != 0:
@@ -128,7 +162,9 @@ def check_command(
                 status="failed",
                 run_id=None,
                 exit_code=1,
-                issues=[{"code": "check.pytest_failed", "message": "full test suite failed"}],
+                issues=[
+                    {"code": "check.pytest_failed", "message": "full test suite failed"}
+                ],
                 data={"doctor": snapshot, "commands": command_results},
             )
             _emit_payload(mode, envelope, title="Check")
@@ -150,7 +186,12 @@ def check_command(
                 status="failed",
                 run_id=None,
                 exit_code=1,
-                issues=[{"code": "check.backend_smoke_failed", "message": "backend smoke check failed"}],
+                issues=[
+                    {
+                        "code": "check.backend_smoke_failed",
+                        "message": "backend smoke check failed",
+                    }
+                ],
                 data={"doctor": snapshot, "commands": command_results},
             )
             _emit_payload(mode, envelope, title="Check")
@@ -171,7 +212,12 @@ def check_command(
                 status="failed",
                 run_id=None,
                 exit_code=1,
-                issues=[{"code": "check.strict_failed", "message": "strict check suite failed"}],
+                issues=[
+                    {
+                        "code": "check.strict_failed",
+                        "message": "strict check suite failed",
+                    }
+                ],
                 data={"doctor": snapshot, "commands": command_results},
             )
             _emit_payload(mode, envelope, title="Check")

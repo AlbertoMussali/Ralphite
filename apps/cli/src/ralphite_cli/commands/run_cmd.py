@@ -7,23 +7,40 @@ import typer
 
 from ralphite_engine import present_run_status
 
-from ..core import _emit_payload, _normalize_output, _orchestrator, _print_run_stream, _result_payload, console
+from ..core import (
+    _emit_payload,
+    _normalize_output,
+    _orchestrator,
+    _print_run_stream,
+    _result_payload,
+    console,
+)
 
 
 def run_command(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
     plan: Annotated[str | None, typer.Option(help="Plan file path or name")] = None,
-    goal: Annotated[str | None, typer.Option(help="Goal text to generate a plan")] = None,
+    goal: Annotated[
+        str | None, typer.Option(help="Goal text to generate a plan")
+    ] = None,
     backend: Annotated[
         str | None, typer.Option(help="Execution backend override: codex | cursor")
     ] = None,
-    model: Annotated[str | None, typer.Option(help="Model override for headless backend")] = None,
+    model: Annotated[
+        str | None, typer.Option(help="Model override for headless backend")
+    ] = None,
     reasoning_effort: Annotated[
         str | None, typer.Option(help="Reasoning effort override: low | medium | high")
     ] = None,
-    yes: Annotated[bool, typer.Option("--yes", help="Auto-approve requirements")] = False,
-    output: Annotated[str, typer.Option("--output", help="Output mode: stream | table | json")] = "stream",
-    quiet: Annotated[bool, typer.Option("--quiet", help="Suppress non-critical run output")] = False,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Auto-approve requirements")
+    ] = False,
+    output: Annotated[
+        str, typer.Option("--output", help="Output mode: stream | table | json")
+    ] = "stream",
+    quiet: Annotated[
+        bool, typer.Option("--quiet", help="Suppress non-critical run output")
+    ] = False,
     verbose: Annotated[
         bool, typer.Option("--verbose", help="Show extra event guidance")
     ] = False,
@@ -45,7 +62,9 @@ def run_command(
         console.print(f"Required mcps: {requirements['mcps'] or ['none']}")
 
     if not yes:
-        approved = typer.confirm("Approve these capabilities for this run?", default=True)
+        approved = typer.confirm(
+            "Approve these capabilities for this run?", default=True
+        )
         if not approved:
             if not quiet and output_mode != "json":
                 console.print("Run aborted by user.")
@@ -82,7 +101,8 @@ def run_command(
             "required_mcps": requirements["mcps"],
             "backend": backend or orch.config.default_backend,
             "model": model or orch.config.default_model,
-            "reasoning_effort": reasoning_effort or orch.config.default_reasoning_effort,
+            "reasoning_effort": reasoning_effort
+            or orch.config.default_reasoning_effort,
         },
     )
     _emit_payload(output_mode, payload, title="Run Result")

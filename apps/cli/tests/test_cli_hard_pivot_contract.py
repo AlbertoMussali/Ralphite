@@ -20,17 +20,27 @@ def test_tui_command_removed(tmp_path: Path) -> None:
 def test_no_tui_flag_removed(tmp_path: Path) -> None:
     runner = CliRunner()
     run_result = runner.invoke(
-        app, ["run", "--workspace", str(tmp_path), "--no-tui", "--yes", "--output", "json"]
+        app,
+        ["run", "--workspace", str(tmp_path), "--no-tui", "--yes", "--output", "json"],
     )
     assert run_result.exit_code == 2
 
     quickstart_result = runner.invoke(
-        app, ["quickstart", "--workspace", str(tmp_path), "--no-tui", "--yes", "--output", "json"]
+        app,
+        [
+            "quickstart",
+            "--workspace",
+            str(tmp_path),
+            "--no-tui",
+            "--yes",
+            "--output",
+            "json",
+        ],
     )
     assert quickstart_result.exit_code == 2
 
 
-def test_strict_suites_have_no_legacy_tui_paths() -> None:
+def test_strict_suites_have_no_tui_paths() -> None:
     for _name, command in STRICT_SUITES:
         joined = " ".join(command)
         assert "apps/cli" in joined or "packages/engine" in joined
@@ -70,12 +80,21 @@ def test_check_full_targets_cli_tests(tmp_path: Path, monkeypatch) -> None:  # t
 def test_doctor_fix_suggestions_payload(tmp_path: Path) -> None:
     plans = tmp_path / ".ralphite" / "plans"
     plans.mkdir(parents=True, exist_ok=True)
-    (plans / "broken.yaml").write_text("version: 4\nplan_id: bad\nname: bad\n", encoding="utf-8")
+    (plans / "broken.yaml").write_text(
+        "version: 4\nplan_id: bad\nname: bad\n", encoding="utf-8"
+    )
 
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["doctor", "--workspace", str(tmp_path), "--fix-suggestions", "--output", "json"],
+        [
+            "doctor",
+            "--workspace",
+            str(tmp_path),
+            "--fix-suggestions",
+            "--output",
+            "json",
+        ],
     )
     assert result.exit_code == 1
     payload = json.loads(result.stdout)

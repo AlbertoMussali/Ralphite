@@ -5,7 +5,7 @@ from ralphite_engine import LocalOrchestrator
 
 def _plan_content() -> str:
     return """
-version: 5
+version: 1
 plan_id: e2e_recovery
 name: e2e_recovery
 materials:

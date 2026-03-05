@@ -23,8 +23,8 @@ This file orients contributors and coding agents to Ralphite's source-of-truth d
    - `packages/engine/src/ralphite_engine/headless_agent.py`
    - `apps/cli/src/ralphite_cli/app.py`
 3. Schema defaults must align with:
-   - `packages/schemas/json/plan-spec-v5.schema.json`
-   - `packages/schemas/python/src/ralphite_schemas/plan_v5.py`
+   - `packages/schemas/json/plan-spec.schema.json`
+   - `packages/schemas/python/src/ralphite_schemas/plan.py`
 4. Failure taxonomy must align with:
    - `packages/engine/src/ralphite_engine/taxonomy.py`
 

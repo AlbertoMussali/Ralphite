@@ -4,7 +4,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Any
 
-from ralphite_schemas.plan_v5 import BehaviorKind, OrchestrationTemplate, PlanSpecV5
+from ralphite_schemas.plan import BehaviorKind, OrchestrationTemplate, PlanSpec
 
 from .task_parser import ParsedTask, task_acceptance_payload
 
@@ -77,7 +77,7 @@ class _BehaviorChoice:
 
 
 def compile_execution_structure(
-    plan: PlanSpecV5,
+    plan: PlanSpec,
     tasks: list[ParsedTask],
     *,
     task_parse_issues: list[str] | None = None,

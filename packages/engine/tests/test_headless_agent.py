@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -283,14 +284,17 @@ def test_backend_out_of_worktree_claim_is_rejected(monkeypatch, tmp_path: Path) 
     outside = tmp_path.parent / "outside.txt"
 
     def _fake_run(command, cwd, check, capture_output, text, timeout):  # noqa: ANN001
+        payload = {
+            "type": "item.completed",
+            "item": {
+                "type": "agent_message",
+                "text": f"Updated {outside}",
+            },
+        }
         return subprocess.CompletedProcess(
             command,
             0,
-            stdout=(
-                '{"type":"item.completed","item":{"type":"agent_message","text":"Updated '
-                + str(outside)
-                + '"}}\n'
-            ),
+            stdout=json.dumps(payload) + "\n",
             stderr="",
         )
 

@@ -9,7 +9,7 @@ from ralphite_engine import LocalConfig, save_config, seed_starter_if_missing
 
 from ..core import (
     _bootstrap_plan_file,
-    _find_first_valid_v5_plan,
+    _find_first_valid_plan,
     _orchestrator,
     _parse_csv_items,
     console,
@@ -18,7 +18,9 @@ from ..core import (
 
 def init_command(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
-    profile: Annotated[str | None, typer.Option(help="Profile name for local policy")] = None,
+    profile: Annotated[
+        str | None, typer.Option(help="Profile name for local policy")
+    ] = None,
     template: Annotated[
         str,
         typer.Option(
@@ -38,10 +40,14 @@ def init_command(
     branched_lanes: Annotated[
         str | None, typer.Option(help="Comma-separated branched lane names")
     ] = None,
-    blue_red_loop_unit: Annotated[str, typer.Option(help="blue_red.loop_unit value")] = "per_task",
-    yes: Annotated[bool, typer.Option("--yes", help="Use defaults without prompts")] = False,
+    blue_red_loop_unit: Annotated[
+        str, typer.Option(help="blue_red.loop_unit value")
+    ] = "per_task",
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Use defaults without prompts")
+    ] = False,
 ) -> None:
-    """Initialize a local-first Ralphite workspace and bootstrap a v5 plan."""
+    """Initialize a local-first Ralphite workspace and bootstrap a v1 plan."""
     orch = _orchestrator(workspace, bootstrap=False)
 
     profile_name = profile or orch.config.profile_name
@@ -49,20 +55,31 @@ def init_command(
         profile_name = typer.prompt("Profile name", default=orch.config.profile_name)
     effective_template = (template or "general_sps").strip()
     if not yes and template == "general_sps":
-        effective_template = typer.prompt("Template", default="general_sps").strip() or "general_sps"
+        effective_template = (
+            typer.prompt("Template", default="general_sps").strip() or "general_sps"
+        )
     allowed_templates = {"general_sps", "branched", "blue_red", "custom"}
     if effective_template not in allowed_templates:
-        raise typer.BadParameter(f"template must be one of: {', '.join(sorted(allowed_templates))}")
+        raise typer.BadParameter(
+            f"template must be one of: {', '.join(sorted(allowed_templates))}"
+        )
 
     effective_plan_id = (plan_id or "starter_loop").strip() or "starter_loop"
     effective_name = (name or "Starter Loop").strip() or "Starter Loop"
     if not yes and plan_id is None:
-        effective_plan_id = typer.prompt("Plan ID", default=effective_plan_id).strip() or effective_plan_id
+        effective_plan_id = (
+            typer.prompt("Plan ID", default=effective_plan_id).strip()
+            or effective_plan_id
+        )
     if not yes and name is None:
-        effective_name = typer.prompt("Plan name", default=effective_name).strip() or effective_name
+        effective_name = (
+            typer.prompt("Plan name", default=effective_name).strip() or effective_name
+        )
     lanes = _parse_csv_items(branched_lanes, default=["lane_a", "lane_b"])
     if not yes and effective_template == "branched" and branched_lanes is None:
-        lane_prompt = typer.prompt("Branched lanes (comma-separated)", default="lane_a,lane_b")
+        lane_prompt = typer.prompt(
+            "Branched lanes (comma-separated)", default="lane_a,lane_b"
+        )
         lanes = _parse_csv_items(lane_prompt, default=lanes)
 
     config = LocalConfig(
@@ -83,7 +100,7 @@ def init_command(
     cfg_path = save_config(orch.workspace_root, config)
     seeded = seed_starter_if_missing(orch.paths["plans"])
 
-    reused_plan = _find_first_valid_v5_plan(orch)
+    reused_plan = _find_first_valid_plan(orch)
     create_new = (
         reused_plan is None
         or goal is not None

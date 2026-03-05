@@ -6,7 +6,7 @@
 
 ## Context
 
-Ralphite previously mixed a Textual TUI with the CLI package boundary. Runtime command contracts and release gates were tied to a legacy TUI package path, which increased maintenance overhead and produced a large single-file CLI surface.
+Ralphite previously mixed a Textual TUI with the CLI package boundary. Runtime command contracts and release gates were tied to TUI package paths, which increased maintenance overhead and produced a large single-file CLI surface.
 
 ## Decision
 
@@ -14,13 +14,13 @@ Ralphite previously mixed a Textual TUI with the CLI package boundary. Runtime c
 - Remove `--no-tui` flags from `quickstart`, `run`, `recover`, and `replay`.
 - Extract and keep the stable command surface in `apps/cli/src/ralphite_cli/`.
 - Keep command envelope schema `cli-output.v1` because payload structure remains compatible.
-- Update strict/full check suites to reference `apps/cli/tests` and no legacy TUI paths.
+- Update strict/full check suites to reference `apps/cli/tests` and no TUI paths.
 
 ## Alternatives Considered
 
 1. Keep TUI as an optional plugin.
 2. Keep `--no-tui` as compatibility alias.
-3. Keep legacy package naming/paths despite TUI removal.
+3. Keep prior package naming/paths despite TUI removal.
 
 ## Consequences
 
@@ -28,9 +28,9 @@ Ralphite previously mixed a Textual TUI with the CLI package boundary. Runtime c
 - Breaking CLI change for removed flags and removed command.
 - Strict checks now validate CLI-only suites.
 
-## Rollback / Migration Plan
+## Rollback Plan
 
-Rollback requires restoring legacy TUI code and CLI options, and updating docs + strict-check suites consistently. Forward migration is mandatory for new releases.
+Rollback requires restoring TUI code and CLI options, and updating docs + strict-check suites consistently.
 
 ## References
 

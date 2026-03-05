@@ -1,4 +1,4 @@
-version: 5
+version: 1
 plan_id: fixture_branched
 name: Fixture Branched Two Lane
 materials:

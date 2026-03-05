@@ -31,7 +31,9 @@ def _resolve_plan_ref(orch: LocalOrchestrator, plan: str | None) -> Path:
         candidate = Path(plan)
         search = [candidate]
         if not candidate.is_absolute():
-            search.extend([orch.workspace_root / candidate, orch.paths["plans"] / candidate])
+            search.extend(
+                [orch.workspace_root / candidate, orch.paths["plans"] / candidate]
+            )
         for item in search:
             if item.exists() and item.is_file():
                 return item.resolve()
@@ -87,7 +89,7 @@ def _parse_csv_items(raw: str | None, *, default: list[str]) -> list[str]:
     return items or list(default)
 
 
-def _find_first_valid_v5_plan(orch: LocalOrchestrator) -> Path | None:
+def _find_first_valid_plan(orch: LocalOrchestrator) -> Path | None:
     for plan_path in orch.list_plans():
         valid, _issues, _summary = validate_plan_content(
             plan_path.read_text(encoding="utf-8"),
@@ -132,7 +134,9 @@ def _bootstrap_plan_file(
     return target
 
 
-def _print_run_stream(orch: LocalOrchestrator, run_id: str, *, verbose: bool = False) -> None:
+def _print_run_stream(
+    orch: LocalOrchestrator, run_id: str, *, verbose: bool = False
+) -> None:
     console.print(f"\n[bold]Streaming run {run_id}[/bold]")
     for event in orch.stream_events(run_id):
         level = str(event.get("level", "info"))
@@ -153,7 +157,9 @@ def _print_run_stream(orch: LocalOrchestrator, run_id: str, *, verbose: bool = F
             console.print(f"- {artifact['id']}: {artifact['path']}")
 
 
-def _emit_payload(output: str, payload: dict[str, Any], *, title: str | None = None) -> None:
+def _emit_payload(
+    output: str, payload: dict[str, Any], *, title: str | None = None
+) -> None:
     if output == "json":
         sys.stdout.write(json.dumps(payload, sort_keys=True) + "\n")
         sys.stdout.flush()
@@ -171,7 +177,9 @@ def _emit_payload(output: str, payload: dict[str, Any], *, title: str | None = N
         plan_path = data.get("plan_path")
         if isinstance(plan_path, str) and plan_path.strip():
             console.print(f"Plan: {plan_path}")
-        artifacts = data.get("artifacts") if isinstance(data.get("artifacts"), list) else []
+        artifacts = (
+            data.get("artifacts") if isinstance(data.get("artifacts"), list) else []
+        )
         if artifacts:
             console.print(f"Artifacts: {len(artifacts)}")
             shown = 0

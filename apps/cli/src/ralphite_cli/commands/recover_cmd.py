@@ -7,7 +7,14 @@ import typer
 
 from ralphite_engine import present_run_status
 
-from ..core import _emit_payload, _normalize_output, _orchestrator, _print_run_stream, _result_payload, console
+from ..core import (
+    _emit_payload,
+    _normalize_output,
+    _orchestrator,
+    _print_run_stream,
+    _result_payload,
+    console,
+)
 from ..exit_codes import (
     RECOVER_EXIT_INTERNAL_ERROR,
     RECOVER_EXIT_INVALID_INPUT,
@@ -27,16 +34,27 @@ def recover_command(
         str,
         typer.Option(help="Recovery mode: manual | agent_best_effort | abort_phase"),
     ] = "manual",
-    prompt: Annotated[str | None, typer.Option(help="Prompt used by agent_best_effort mode")] = None,
+    prompt: Annotated[
+        str | None, typer.Option(help="Prompt used by agent_best_effort mode")
+    ] = None,
     preflight_only: Annotated[
         bool, typer.Option("--preflight-only", help="Validate recovery readiness only")
     ] = False,
     resume: Annotated[
-        bool, typer.Option("--resume/--no-resume", help="Resume immediately after setting mode")
+        bool,
+        typer.Option(
+            "--resume/--no-resume", help="Resume immediately after setting mode"
+        ),
     ] = True,
-    json_mode: Annotated[bool, typer.Option("--json", help="Emit machine-readable output")] = False,
-    output: Annotated[str, typer.Option("--output", help="Output mode: stream | table | json")] = "table",
-    quiet: Annotated[bool, typer.Option("--quiet", help="Suppress non-critical output")] = False,
+    json_mode: Annotated[
+        bool, typer.Option("--json", help="Emit machine-readable output")
+    ] = False,
+    output: Annotated[
+        str, typer.Option("--output", help="Output mode: stream | table | json")
+    ] = "table",
+    quiet: Annotated[
+        bool, typer.Option("--quiet", help="Suppress non-critical output")
+    ] = False,
     verbose: Annotated[
         bool, typer.Option("--verbose", help="Show extra event guidance")
     ] = False,
@@ -53,7 +71,9 @@ def recover_command(
             status="failed",
             run_id=run_id,
             exit_code=RECOVER_EXIT_INVALID_INPUT,
-            issues=[{"code": "recover.invalid_mode", "message": f"invalid mode '{mode}'"}],
+            issues=[
+                {"code": "recover.invalid_mode", "message": f"invalid mode '{mode}'"}
+            ],
             next_actions=["Use one of: manual, agent_best_effort, abort_phase."],
         )
         _emit_payload(output_mode, payload, title="Recovery")
@@ -69,7 +89,9 @@ def recover_command(
                 status="failed",
                 run_id=None,
                 exit_code=RECOVER_EXIT_NO_RECOVERABLE,
-                issues=[{"code": "recover.none", "message": "no recoverable runs found"}],
+                issues=[
+                    {"code": "recover.none", "message": "no recoverable runs found"}
+                ],
                 next_actions=["Run `ralphite history` to inspect previous runs."],
             )
             _emit_payload(output_mode, payload, title="Recovery")
@@ -83,7 +105,12 @@ def recover_command(
             status="failed",
             run_id=target,
             exit_code=RECOVER_EXIT_UNRECOVERABLE,
-            issues=[{"code": "recover.unrecoverable", "message": "run not found or unrecoverable"}],
+            issues=[
+                {
+                    "code": "recover.unrecoverable",
+                    "message": "run not found or unrecoverable",
+                }
+            ],
         )
         _emit_payload(output_mode, payload, title="Recovery")
         raise typer.Exit(code=RECOVER_EXIT_UNRECOVERABLE)
@@ -107,8 +134,16 @@ def recover_command(
 
     preflight = orch.recovery_preflight(target)
     if preflight_only:
-        exit_code = RECOVER_EXIT_SUCCESS if preflight.get("ok") else RECOVER_EXIT_PREFLIGHT_FAILED
-        issues = [] if preflight.get("ok") else [{"code": "recover.preflight_failed", "message": "preflight failed"}]
+        exit_code = (
+            RECOVER_EXIT_SUCCESS
+            if preflight.get("ok")
+            else RECOVER_EXIT_PREFLIGHT_FAILED
+        )
+        issues = (
+            []
+            if preflight.get("ok")
+            else [{"code": "recover.preflight_failed", "message": "preflight failed"}]
+        )
         payload = _result_payload(
             command="recover",
             ok=bool(preflight.get("ok")),
@@ -116,7 +151,9 @@ def recover_command(
             run_id=target,
             exit_code=exit_code,
             issues=issues,
-            next_actions=list(preflight.get("blocking_reasons", [])) if isinstance(preflight, dict) else [],
+            next_actions=list(preflight.get("blocking_reasons", []))
+            if isinstance(preflight, dict)
+            else [],
             data={"preflight": preflight},
         )
         _emit_payload(output_mode, payload, title="Recovery Preflight")
@@ -129,8 +166,15 @@ def recover_command(
             status="failed",
             run_id=target,
             exit_code=RECOVER_EXIT_PREFLIGHT_FAILED,
-            issues=[{"code": "recover.preflight_failed", "message": "recovery preflight failed"}],
-            next_actions=list(preflight.get("blocking_reasons", [])) if isinstance(preflight, dict) else [],
+            issues=[
+                {
+                    "code": "recover.preflight_failed",
+                    "message": "recovery preflight failed",
+                }
+            ],
+            next_actions=list(preflight.get("blocking_reasons", []))
+            if isinstance(preflight, dict)
+            else [],
             data={"preflight": preflight},
         )
         _emit_payload(output_mode, payload, title="Recovery")

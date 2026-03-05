@@ -15,27 +15,32 @@ from ralphite_engine.structure_compiler import (
     compile_execution_structure,
 )
 from ralphite_engine.task_parser import ParsedTask, parse_plan_tasks
-from ralphite_schemas.plan_v5 import PlanSpecV5
+from ralphite_schemas.plan import PlanSpec
 from ralphite_schemas.validation import ValidationError, compile_plan, validate_plan
 
 
-UNSUPPORTED_VERSION_MESSAGE = "Invalid plan version. Ralphite executes only version: 5 unified YAML (tasks + orchestration + agents)."
+UNSUPPORTED_VERSION_MESSAGE = "Invalid plan version. Ralphite executes only version: 1 unified YAML (tasks + orchestration + agents)."
 
 
-PlanDocument = PlanSpecV5
+PlanDocument = PlanSpec
 
 
 def parse_plan_yaml(content: str) -> PlanDocument:
     data = yaml.safe_load(content)
     if not isinstance(data, dict):
         raise ValueError("plan content must be a YAML object")
-    version = int(data.get("version", 1))
-    if version != 5:
+    if "version" not in data:
         raise ValueError(UNSUPPORTED_VERSION_MESSAGE)
-    return PlanSpecV5.model_validate(data)
+    try:
+        version = int(data.get("version"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(UNSUPPORTED_VERSION_MESSAGE) from exc
+    if version != 1:
+        raise ValueError(UNSUPPORTED_VERSION_MESSAGE)
+    return PlanSpec.model_validate(data)
 
 
-def _collect_profile_tools(plan: PlanSpecV5) -> tuple[list[str], list[str]]:
+def _collect_profile_tools(plan: PlanSpec) -> tuple[list[str], list[str]]:
     tools = sorted(
         {
             entry
@@ -91,7 +96,7 @@ def _git_recovery_readiness(workspace_root: str | Path | None) -> dict[str, Any]
 
 def _append_task_diagnostics(
     *,
-    plan: PlanSpecV5,
+    plan: PlanSpec,
     issues: list[dict[str, Any]],
 ) -> tuple[list[str], RuntimeExecutionPlan | None, list[ParsedTask]]:
     tasks, parse_issues = parse_plan_tasks(plan)
@@ -152,7 +157,7 @@ def _recommended_commands(
     }
     if "version.invalid" in codes:
         commands.append(
-            'uv run ralphite init --workspace . --yes --template general_sps --plan-id migrated_v5 --name "Migrated V5"'
+            'uv run ralphite init --workspace . --yes --template general_sps --plan-id starter_loop --name "Starter Loop"'
         )
     if "agent.missing_worker" in codes or "agent.missing_orchestrator" in codes:
         commands.append(
@@ -165,10 +170,6 @@ def _recommended_commands(
     if "tasks.unassigned" in codes or "tasks.routing.missing" in codes:
         commands.append(
             "Open Run Setup and assign routing.lane / routing.cell for pending tasks, then validate again."
-        )
-    if "agent.provider.legacy_openai" in codes:
-        commands.append(
-            "Update agents provider to codex/cursor and set model to gpt-5.3-codex with reasoning_effort=medium."
         )
     return list(dict.fromkeys(commands))
 
@@ -209,8 +210,12 @@ def validate_plan_content(
             {},
         )
 
-    version = int(raw.get("version", 1))
-    if version != 5:
+    version_raw = raw.get("version")
+    try:
+        version = int(version_raw)
+    except (TypeError, ValueError):
+        version = 0
+    if version != 1:
         issues = [
             {
                 "code": "version.invalid",
@@ -224,8 +229,8 @@ def validate_plan_content(
             False,
             issues,
             {
-                "version": version,
-                "expected_version": 5,
+                "version": version_raw,
+                "expected_version": 1,
                 "recommended_commands": _recommended_commands(
                     issues, plan_path=plan_path
                 ),
@@ -233,7 +238,7 @@ def validate_plan_content(
         )
 
     try:
-        plan = PlanSpecV5.model_validate(raw)
+        plan = PlanSpec.model_validate(raw)
     except PydanticValidationError as exc:
         issues = [
             {
@@ -340,7 +345,7 @@ def validate_plan_content(
         }
 
     summary = {
-        "version": 5,
+        "version": 1,
         "plan_id": plan.plan_id,
         "name": plan.name,
         "template": plan.orchestration.template.value,
@@ -399,7 +404,7 @@ def suggest_fixes(
         isinstance(agent, dict) and str(agent.get("role")) == "orchestrator"
         for agent in agents
     )
-    if version == 5 and not worker_exists:
+    if version == 1 and not worker_exists:
         fixes.append(
             ValidationFix(
                 code="fix.add_default_worker",
@@ -409,7 +414,7 @@ def suggest_fixes(
                 patch={"action": "add_default_worker"},
             )
         )
-    if version == 5 and not orchestrator_exists:
+    if version == 1 and not orchestrator_exists:
         fixes.append(
             ValidationFix(
                 code="fix.add_default_orchestrator",
@@ -475,49 +480,6 @@ def suggest_fixes(
                     patch={"action": "set_value", "path": path, "value": agent_ids[0]},
                 )
             )
-        if (
-            code == "agent.provider.legacy_openai"
-            and path.startswith("agents[")
-            and path.endswith(".provider")
-        ):
-            fixes.append(
-                ValidationFix(
-                    code="fix.migrate_agent_provider",
-                    title="Migrate agent provider to codex",
-                    description=f"Updates {path} provider/model defaults for headless codex backend.",
-                    path=path,
-                    patch={"action": "set_value", "path": path, "value": "codex"},
-                )
-            )
-            model_path = path.rsplit(".", 1)[0] + ".model"
-            fixes.append(
-                ValidationFix(
-                    code="fix.migrate_agent_model",
-                    title="Set default model",
-                    description=f"Sets {model_path} to gpt-5.3-codex.",
-                    path=model_path,
-                    patch={
-                        "action": "set_value",
-                        "path": model_path,
-                        "value": "gpt-5.3-codex",
-                    },
-                )
-            )
-            reasoning_path = path.rsplit(".", 1)[0] + ".reasoning_effort"
-            fixes.append(
-                ValidationFix(
-                    code="fix.migrate_agent_reasoning",
-                    title="Set default reasoning effort",
-                    description=f"Sets {reasoning_path} to medium.",
-                    path=reasoning_path,
-                    patch={
-                        "action": "set_value",
-                        "path": reasoning_path,
-                        "value": "medium",
-                    },
-                )
-            )
-
     unique: list[ValidationFix] = []
     seen_keys: set[tuple[str, str]] = set()
     for fix in fixes:

@@ -42,7 +42,7 @@ REQUIRED_DOC_PATHS = [
     "docs/exec-plans/tech-debt-tracker.md",
     "docs/references/index.md",
     "docs/references/cli-contracts.md",
-    "docs/references/plan-v5-schema-reference.md",
+    "docs/references/plan-schema-reference.md",
     "docs/references/test-matrix.md",
     "docs/references/glossary.md",
     "docs/generated/index.md",
@@ -107,7 +107,7 @@ def test_docs_contain_current_contract_strings() -> None:
     corpus = "\n".join(path.read_text(encoding="utf-8") for path in _doc_files())
     for required in ("gpt-5.3-codex", "--reasoning-effort", "--strict"):
         assert required in corpus, f"expected docs to contain: {required}"
-    assert "gpt-4.1" not in corpus, "legacy model reference leaked into docs"
+    assert "gpt-4.1" not in corpus, "obsolete model reference leaked into docs"
 
 
 def test_markdown_local_links_resolve() -> None:

@@ -1,6 +1,6 @@
 {
   "captured_at": "2026-03-05",
-  "source": "pre-pivot legacy CLI package",
+  "source": "pre-pivot CLI package",
   "env": {
     "RALPHITE_DEV_SIMULATED_EXECUTION": "1",
     "RALPHITE_SKIP_BACKEND_CMD_CHECKS": "1"

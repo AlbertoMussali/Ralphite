@@ -5,7 +5,7 @@ Last verified against commit: 70b0c1f
 
 ## In Scope
 
-- Parsing/validating v5 plans
+- Parsing/validating v1 plans
 - Compiling orchestration templates into runtime DAG nodes
 - Executing nodes through headless backends (, optional )
 - Enforcing acceptance commands/artifact checks
@@ -14,5 +14,5 @@ Last verified against commit: 70b0c1f
 ## Out of Scope
 
 - Hosting remote orchestration services
-- Non-v5 plan runtime compatibility
+- Non-v1 plan runtime compatibility
 - Hidden implicit task-generation semantics outside explicit plan + template contracts

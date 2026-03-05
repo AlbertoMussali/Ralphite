@@ -1,6 +1,6 @@
 # Ralphite
 
-Ralphite is a local-first, CLI-first multi-agent execution system for **v5 YAML plans**.
+Ralphite is a local-first, CLI-first multi-agent execution system for **v1 YAML plans**.
 
 Last verified against commit: 70b0c1f
 
@@ -28,5 +28,4 @@ uv run ralphite run --workspace . --yes --output stream
 - Optional backend: `cursor` (`agent` command)
 - Default model: `gpt-5.3-codex`
 - Default reasoning effort: `medium`
-- Plan runtime: `version: 5` only
-- Legacy `provider: openai` remains migration-compatible and normalizes to codex behavior at runtime
+- Plan runtime: `version: 1` only

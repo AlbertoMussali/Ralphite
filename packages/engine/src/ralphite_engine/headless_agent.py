@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+from pathlib import PureWindowsPath
+import re
 import shlex
 import subprocess
 import time
@@ -23,8 +25,6 @@ class BackendExecutionConfig:
 
 def normalize_backend_name(raw_backend: str | None) -> str:
     backend = (raw_backend or "codex").strip().lower()
-    if backend == "openai":
-        return "codex"
     if backend not in {"codex", "cursor"}:
         return "codex"
     return backend
@@ -244,17 +244,31 @@ def _mentions_external_path(summary: str, *, worktree: Path) -> bool:
     text = summary.lower()
     if "outside worktree" in text or "outside workspace" in text:
         return True
+    resolved_worktree = worktree.resolve()
+    worktree_text = str(resolved_worktree)
+    worktree_is_windows = bool(re.match(r"^[A-Za-z]:[\\/]", worktree_text))
+
+    def _is_windows_abs(raw: str) -> bool:
+        return bool(re.match(r"^[A-Za-z]:[\\/]", raw)) or raw.startswith("\\\\")
+
     for token in summary.split():
-        if not token.startswith("/"):
-            continue
         candidate = token.strip(".,:;!\"'`()[]{}")
-        if not candidate.startswith("/"):
+        if not candidate:
             continue
-        path = Path(candidate)
-        try:
-            path.resolve().relative_to(worktree.resolve())
-        except Exception:
-            return True
+        if candidate.startswith("/"):
+            path = Path(candidate)
+            try:
+                path.resolve().relative_to(resolved_worktree)
+            except Exception:
+                return True
+            continue
+        if _is_windows_abs(candidate):
+            if not worktree_is_windows:
+                return True
+            try:
+                PureWindowsPath(candidate).relative_to(PureWindowsPath(worktree_text))
+            except Exception:
+                return True
     return False
 
 

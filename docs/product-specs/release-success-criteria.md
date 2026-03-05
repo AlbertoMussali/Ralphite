@@ -7,7 +7,7 @@ Last verified against commit: 70b0c1f
 
 - Codex backend healthy and default path validated.
 - Cursor backend documented as optional unless selected.
-- v5 schema and template execution stable.
+- v1 schema and template execution stable.
 - Recovery paths produce actionable typed failures.
 - Documentation hub complete and source-aligned.
 

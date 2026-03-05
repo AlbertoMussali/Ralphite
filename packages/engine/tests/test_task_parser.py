@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from ralphite_engine.task_parser import parse_plan_tasks
-from ralphite_schemas.plan_v5 import PlanSpecV5
+from ralphite_schemas.plan import PlanSpec
 
 
-def _plan(tasks: list[dict]) -> PlanSpecV5:
-    return PlanSpecV5.model_validate(
+def _plan(tasks: list[dict]) -> PlanSpec:
+    return PlanSpec.model_validate(
         {
-            "version": 5,
+            "version": 1,
             "plan_id": "parser",
             "name": "parser",
             "materials": {

@@ -71,7 +71,7 @@ def _common_plan_shell(
     *, plan_id: str, name: str, lanes: list[str], loop_unit: str
 ) -> dict[str, Any]:
     return {
-        "version": 5,
+        "version": 1,
         "plan_id": plan_id,
         "name": name,
         "materials": {
@@ -333,7 +333,7 @@ def dump_yaml(plan: dict) -> str:
     return yaml.safe_dump(plan, sort_keys=False, allow_unicode=False)
 
 
-def _is_v5_plan_file(path: Path) -> bool:
+def _is_v1_plan_file(path: Path) -> bool:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     except Exception:
@@ -341,7 +341,7 @@ def _is_v5_plan_file(path: Path) -> bool:
     if not isinstance(raw, dict):
         return False
     try:
-        return int(raw.get("version", 1)) == 5
+        return int(raw.get("version", 0)) == 1
     except (TypeError, ValueError):
         return False
 
@@ -361,7 +361,7 @@ def seed_starter_if_missing(plans_dir: Path) -> Path | None:
         if p.is_file() and p.suffix.lower() in {".yaml", ".yml"}
     ]
 
-    if existing and any(_is_v5_plan_file(path) for path in existing):
+    if existing and any(_is_v1_plan_file(path) for path in existing):
         return None
 
     path = _starter_target_path(plans_dir)

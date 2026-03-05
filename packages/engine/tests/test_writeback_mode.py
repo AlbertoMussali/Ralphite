@@ -12,7 +12,7 @@ def _git(path: Path, *args: str) -> None:
 
 def _plan_content() -> str:
     return """
-version: 5
+version: 1
 plan_id: writeback_mode
 name: writeback_mode
 materials:

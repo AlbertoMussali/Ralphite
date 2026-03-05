@@ -1,4 +1,4 @@
-version: 5
+version: 1
 plan_id: fixture_invalid_routing
 name: Fixture Invalid Routing
 materials:

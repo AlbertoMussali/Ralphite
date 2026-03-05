@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 from typing import Any
@@ -93,15 +94,20 @@ def _run_strict_checks(
 ) -> tuple[bool, list[dict[str, Any]]]:
     results: list[dict[str, Any]] = []
     capture_subprocess_output = machine_mode or quiet
+    runner_env = os.environ.copy()
+    runner_env.pop("RALPHITE_SKIP_BACKEND_CMD_CHECKS", None)
     for suite_name, command in STRICT_SUITES:
         if not quiet and not machine_mode:
-            console.print(f"Running strict check suite [{suite_name}]: {' '.join(command)}")
+            console.print(
+                f"Running strict check suite [{suite_name}]: {' '.join(command)}"
+            )
         result = subprocess.run(
             command,
             cwd=repo_root,
             check=False,
             capture_output=capture_subprocess_output,
             text=True,
+            env=runner_env,
         )
         results.append(
             {
@@ -109,8 +115,12 @@ def _run_strict_checks(
                 "command": " ".join(command),
                 "cwd": str(repo_root),
                 "exit_code": result.returncode,
-                "stdout": result.stdout if capture_subprocess_output and verbose else "",
-                "stderr": result.stderr if capture_subprocess_output and verbose else "",
+                "stdout": result.stdout
+                if capture_subprocess_output and verbose
+                else "",
+                "stderr": result.stderr
+                if capture_subprocess_output and verbose
+                else "",
             }
         )
         if result.returncode != 0:
@@ -127,10 +137,26 @@ def _run_backend_smoke(
     verbose: bool = False,
 ) -> tuple[bool, list[dict[str, Any]]]:
     results: list[dict[str, Any]] = []
+    if os.getenv("RALPHITE_SKIP_BACKEND_CMD_CHECKS") == "1":
+        results.append(
+            {
+                "suite": "backend-smoke-skipped",
+                "command": "",
+                "cwd": str(repo_root),
+                "exit_code": 0,
+                "stdout": "",
+                "stderr": "skipped by RALPHITE_SKIP_BACKEND_CMD_CHECKS=1",
+            }
+        )
+        return True, results
+
     capture_subprocess_output = machine_mode or quiet
     backend = normalize_backend_name(str(orch.config.default_backend or "codex"))
     model = str(orch.config.default_model or "gpt-5.3-codex").strip() or "gpt-5.3-codex"
-    reasoning_effort = str(orch.config.default_reasoning_effort or "medium").strip().lower() or "medium"
+    reasoning_effort = (
+        str(orch.config.default_reasoning_effort or "medium").strip().lower()
+        or "medium"
+    )
     cursor_command = str(orch.config.cursor_command or "agent").strip() or "agent"
 
     if backend == "codex":
@@ -174,7 +200,11 @@ def _run_backend_smoke(
                 if isinstance(msg, str) and msg.strip():
                     errors.append(msg.strip())
             elif ptype == "turn.failed":
-                err = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+                err = (
+                    payload.get("error")
+                    if isinstance(payload.get("error"), dict)
+                    else {}
+                )
                 msg = err.get("message")
                 if isinstance(msg, str) and msg.strip():
                     errors.append(msg.strip())

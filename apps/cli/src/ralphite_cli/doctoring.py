@@ -99,7 +99,9 @@ def _doctor_snapshot(
         status = "OK" if found else "MISSING"
         if not found:
             ok = False
-        checks.append({"check": f"cmd:{cmd}", "status": status, "detail": found or "not in PATH"})
+        checks.append(
+            {"check": f"cmd:{cmd}", "status": status, "detail": found or "not in PATH"}
+        )
 
     default_backend = str(orch.config.default_backend or "codex").strip().lower()
     test_mode = bool(os.getenv("PYTEST_CURRENT_TEST"))
@@ -117,7 +119,13 @@ def _doctor_snapshot(
             else ("MISSING" if codex_required else "WARN")
         )
     )
-    checks.append({"check": "cmd:codex", "status": codex_status, "detail": codex_path or "not in PATH"})
+    checks.append(
+        {
+            "check": "cmd:codex",
+            "status": codex_status,
+            "detail": codex_path or "not in PATH",
+        }
+    )
     if codex_required and not codex_path and not (test_mode or skip_backend_checks):
         ok = False
 
@@ -157,7 +165,13 @@ def _doctor_snapshot(
 
     cfg_path = orch.paths["config"]
     cfg_ok = cfg_path.exists()
-    checks.append({"check": "config", "status": "OK" if cfg_ok else "MISSING", "detail": str(cfg_path)})
+    checks.append(
+        {
+            "check": "config",
+            "status": "OK" if cfg_ok else "MISSING",
+            "detail": str(cfg_path),
+        }
+    )
     if not cfg_ok:
         ok = False
 
@@ -237,7 +251,9 @@ def _doctor_snapshot(
         ok = False
 
     recoverable = orch.list_recoverable_runs()
-    checks.append({"check": "recoverable-runs", "status": "OK", "detail": str(len(recoverable))})
+    checks.append(
+        {"check": "recoverable-runs", "status": "OK", "detail": str(len(recoverable))}
+    )
 
     stale = orch.stale_artifact_report(max_age_hours=24)
     stale_worktrees = stale.get("stale_worktrees", [])
@@ -326,7 +342,11 @@ def _render_doctor_table(snapshot: dict[str, Any]) -> None:
     for row in snapshot.get("checks", []):
         if not isinstance(row, dict):
             continue
-        table.add_row(str(row.get("check", "")), str(row.get("status", "")), str(row.get("detail", "")))
+        table.add_row(
+            str(row.get("check", "")),
+            str(row.get("status", "")),
+            str(row.get("detail", "")),
+        )
     console.print(table)
 
     for failure in snapshot.get("plan_failures", []):
@@ -340,10 +360,14 @@ def _render_doctor_table(snapshot: dict[str, Any]) -> None:
             for issue in issues:
                 if not isinstance(issue, dict):
                     continue
-                console.print(f"  - {issue.get('code')}: {issue.get('message')} ({issue.get('path')})")
+                console.print(
+                    f"  - {issue.get('code')}: {issue.get('message')} ({issue.get('path')})"
+                )
         if summary:
             console.print(f"  Summary: {summary}")
-        recommended = summary.get("recommended_commands", []) if isinstance(summary, dict) else []
+        recommended = (
+            summary.get("recommended_commands", []) if isinstance(summary, dict) else []
+        )
         if isinstance(recommended, list) and recommended:
             console.print("  Recommended commands:")
             for cmd in recommended:
@@ -353,8 +377,16 @@ def _render_doctor_table(snapshot: dict[str, Any]) -> None:
     stale = snapshot.get("stale_artifacts", {})
     if not isinstance(stale, dict):
         return
-    stale_worktrees = stale.get("stale_worktrees", []) if isinstance(stale.get("stale_worktrees"), list) else []
-    stale_branches = stale.get("stale_branches", []) if isinstance(stale.get("stale_branches"), list) else []
+    stale_worktrees = (
+        stale.get("stale_worktrees", [])
+        if isinstance(stale.get("stale_worktrees"), list)
+        else []
+    )
+    stale_branches = (
+        stale.get("stale_branches", [])
+        if isinstance(stale.get("stale_branches"), list)
+        else []
+    )
     if stale_worktrees or stale_branches:
         console.print("\n[bold yellow]Stale managed artifacts[/bold yellow]")
         for item in stale_worktrees[:10]:
@@ -366,5 +398,9 @@ def _render_doctor_table(snapshot: dict[str, Any]) -> None:
         for item in stale_branches[:10]:
             if not isinstance(item, dict):
                 continue
-            console.print(f"  - branch run={item.get('run_id')} branch={item.get('branch')}")
-        console.print("  Action: run cleanup by resolving or resuming stale runs, then re-check doctor.")
+            console.print(
+                f"  - branch run={item.get('run_id')} branch={item.get('branch')}"
+            )
+        console.print(
+            "  Action: run cleanup by resolving or resuming stale runs, then re-check doctor."
+        )

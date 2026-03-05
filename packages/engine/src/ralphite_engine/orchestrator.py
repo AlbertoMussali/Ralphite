@@ -46,14 +46,14 @@ from ralphite_engine.templates import (
     versioned_filename,
 )
 from ralphite_engine.validation import parse_plan_yaml, validate_plan_content
-from ralphite_schemas.plan_v5 import AgentSpec, BehaviorKind, PlanSpecV5
+from ralphite_schemas.plan import AgentSpec, BehaviorKind, PlanSpec
 from ralphite_schemas.validation import compile_plan
 
 
 @dataclass
 class RuntimeHandle:
     run: RunViewState
-    plan: PlanSpecV5
+    plan: PlanSpec
     runtime: RuntimeExecutionPlan
     profile_map: dict[str, AgentSpec]
     permission_snapshot: dict[str, list[str]]
@@ -149,7 +149,7 @@ class LocalOrchestrator:
         if not plans:
             raise FileNotFoundError("no plans found in .ralphite/plans")
 
-        # Prefer the newest parseable v5 plan.
+        # Prefer the newest parseable v1 plan.
         for candidate in plans:
             try:
                 parse_plan_yaml(candidate.read_text(encoding="utf-8"))
@@ -188,7 +188,7 @@ class LocalOrchestrator:
                 behavior_map[node.id] = node.behavior_kind
 
         return {
-            "plan_version": 5,
+            "plan_version": 1,
             "lane_map": lane_map,
             "phase_map": phase_map,
             "role_map": role_map,
@@ -256,7 +256,7 @@ class LocalOrchestrator:
         }
 
     def _materialize_runtime_plan(
-        self, plan: PlanSpecV5
+        self, plan: PlanSpec
     ) -> tuple[RuntimeExecutionPlan, dict[str, Any]]:
         tasks, parse_issues = parse_plan_tasks(plan)
         runtime, compile_issues = compile_execution_structure(
@@ -271,7 +271,7 @@ class LocalOrchestrator:
         return runtime, self._runtime_metadata(runtime)
 
     def _writeback_target(
-        self, source: Path, plan: PlanSpecV5
+        self, source: Path, plan: PlanSpec
     ) -> tuple[str, Path | None]:
         mode = str(self.config.task_writeback_mode or "revision_only")
         if mode == "disabled":
@@ -1005,8 +1005,6 @@ class LocalOrchestrator:
             .strip()
             .lower()
         )
-        if backend_raw == "openai":
-            backend_raw = "codex"
         if backend_raw not in {"codex", "cursor"}:
             backend_raw = "codex"
 

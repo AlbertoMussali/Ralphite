@@ -3,21 +3,21 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ralphite_schemas.plan_v5 import (
+from ralphite_schemas.plan import (
     BehaviorKind,
-    ConstraintsSpecV5,
+    ConstraintsSpec,
     OrchestrationTemplate,
-    PlanSpecV5,
+    PlanSpec,
 )
 
 
 def _load_schema() -> dict:
     root = Path(__file__).resolve().parents[3]
-    schema_path = root / "packages" / "schemas" / "json" / "plan-spec-v5.schema.json"
+    schema_path = root / "packages" / "schemas" / "json" / "plan-spec.schema.json"
     return json.loads(schema_path.read_text(encoding="utf-8"))
 
 
-def test_plan_v5_model_and_json_schema_are_aligned() -> None:
+def test_plan_v1_model_and_json_schema_are_aligned() -> None:
     schema = _load_schema()
     required = schema.get("required")
     assert isinstance(required, list)
@@ -33,7 +33,7 @@ def test_plan_v5_model_and_json_schema_are_aligned() -> None:
         "outputs",
     }
 
-    model_fields = set(PlanSpecV5.model_fields.keys())
+    model_fields = set(PlanSpec.model_fields.keys())
     assert {
         "version",
         "plan_id",
@@ -54,12 +54,17 @@ def test_plan_v5_model_and_json_schema_are_aligned() -> None:
         "kind"
     ]["enum"]
     assert set(behavior_kind_enum) == {item.value for item in BehaviorKind}
+    assert schema["properties"]["version"]["const"] == 1
+    provider_enum = schema["properties"]["agents"]["items"]["properties"]["provider"][
+        "enum"
+    ]
+    assert set(provider_enum) == {"codex", "cursor"}
 
     constraints_props = schema["properties"]["constraints"]["properties"]
     assert constraints_props["acceptance_timeout_seconds"]["default"] == 120
     assert constraints_props["max_retries_per_node"]["default"] == 0
     task_props = schema["properties"]["tasks"]["items"]["properties"]
     assert "parallel_group" not in task_props
-    defaults = ConstraintsSpecV5()
+    defaults = ConstraintsSpec()
     assert defaults.acceptance_timeout_seconds == 120
     assert defaults.max_retries_per_node == 0

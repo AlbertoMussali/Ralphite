@@ -4,12 +4,12 @@ from copy import deepcopy
 
 from ralphite_engine.structure_compiler import compile_execution_structure
 from ralphite_engine.task_parser import parse_plan_tasks
-from ralphite_schemas.plan_v5 import PlanSpecV5
+from ralphite_schemas.plan import PlanSpec
 
 
 def _base_plan() -> dict:
     return {
-        "version": 5,
+        "version": 1,
         "plan_id": "structure",
         "name": "structure",
         "materials": {
@@ -102,7 +102,7 @@ def test_compile_execution_structure_enforces_block_order() -> None:
             "routing": {"cell": "seq_post"},
         },
     ]
-    plan = PlanSpecV5.model_validate(data)
+    plan = PlanSpec.model_validate(data)
 
     tasks, parse_issues = parse_plan_tasks(plan)
     runtime, issues = compile_execution_structure(
@@ -159,7 +159,7 @@ def test_compile_branched_template_builds_split_and_join_cells() -> None:
             "routing": {"cell": "trunk_post"},
         },
     ]
-    plan = PlanSpecV5.model_validate(data)
+    plan = PlanSpec.model_validate(data)
 
     tasks, parse_issues = parse_plan_tasks(plan)
     runtime, issues = compile_execution_structure(
@@ -194,7 +194,7 @@ def test_compile_blue_red_template_emits_blue_and_red_passes() -> None:
             "routing": {"team_mode": "blue_red"},
         },
     ]
-    plan = PlanSpecV5.model_validate(data)
+    plan = PlanSpec.model_validate(data)
 
     tasks, parse_issues = parse_plan_tasks(plan)
     runtime, issues = compile_execution_structure(
@@ -242,7 +242,7 @@ def test_compile_custom_template_uses_explicit_cells() -> None:
             "routing": {"cell": "post"},
         },
     ]
-    plan = PlanSpecV5.model_validate(data)
+    plan = PlanSpec.model_validate(data)
 
     tasks, parse_issues = parse_plan_tasks(plan)
     runtime, issues = compile_execution_structure(
@@ -272,7 +272,7 @@ def test_compile_custom_template_reports_unknown_dep_cell() -> None:
         {"id": "t1", "title": "Prep", "completed": False},
         {"id": "t2", "title": "Finalize", "completed": False},
     ]
-    plan = PlanSpecV5.model_validate(data)
+    plan = PlanSpec.model_validate(data)
 
     tasks, parse_issues = parse_plan_tasks(plan)
     runtime, issues = compile_execution_structure(
