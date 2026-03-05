@@ -4,13 +4,13 @@ Owners: engine, cli
 Last verified against commit: 70b0c1f
 Generated from:
 
-- `packages/engine/src/ralphite_engine/headless_agent.py`
-- `apps/cli/src/ralphite_cli/app.py`
+- `src/ralphite/engine/headless_agent.py`
+- `src/ralphite/cli/app.py`
 
 Verification command:
 
 ```bash
-uv run --with pytest pytest packages/engine/tests/test_docs_knowledge_base.py -q
+uv run --no-sync pytest tests/engine/test_docs_knowledge_base.py -q
 ```
 
 Codex sample command (builder snapshot):

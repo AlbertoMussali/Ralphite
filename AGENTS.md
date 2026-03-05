@@ -11,22 +11,22 @@ This file orients contributors and coding agents to Ralphite's source-of-truth d
 
 - Product entry: [README.md](README.md)
 - Documentation hub: [docs/index.md](docs/index.md)
-- Core engine: `packages/engine/src/ralphite_engine/`
-- CLI: `apps/cli/src/ralphite_cli/`
-- Schemas: `packages/schemas/`
+- Core engine: `src/ralphite/engine/`
+- CLI: `src/ralphite/cli/`
+- Schemas: `src/ralphite/schemas/`
 - Canonical starter plans: `examples/plans/`
 
 ## Documentation Source-of-Truth Policy
 
 1. Runtime behavior must be documented from code and tests, not inferred intent.
 2. Command contracts must align with:
-   - `packages/engine/src/ralphite_engine/headless_agent.py`
-   - `apps/cli/src/ralphite_cli/app.py`
+   - `src/ralphite/engine/headless_agent.py`
+   - `src/ralphite/cli/app.py`
 3. Schema defaults must align with:
-   - `packages/schemas/json/plan-spec.schema.json`
-   - `packages/schemas/python/src/ralphite_schemas/plan.py`
+   - `src/ralphite/schemas/json/plan-spec.schema.json`
+   - `src/ralphite/schemas/plan.py`
 4. Failure taxonomy must align with:
-   - `packages/engine/src/ralphite_engine/taxonomy.py`
+   - `src/ralphite/engine/taxonomy.py`
 
 ## Change Rules
 
@@ -46,6 +46,6 @@ For architecture/runtime contract changes or strict-check policy changes, add/up
 
 ```bash
 uv run ruff check .
-uv run --with pytest pytest -q
-uv run ralphite check --workspace . --strict --output json
+uv run --no-sync pytest -q
+uv run --no-sync ralphite check --workspace /tmp/ralphite-strict-check --strict --output json
 ```

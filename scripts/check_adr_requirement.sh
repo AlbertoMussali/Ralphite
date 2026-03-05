@@ -24,7 +24,7 @@ if [[ -z "${CHANGED}" ]]; then
 fi
 
 if ! echo "${CHANGED}" | rg -q \
-  "^(packages/engine/src/ralphite_engine/(headless_agent|orchestrator)\.py|apps/cli/src/ralphite_cli/.*\.py|packages/schemas/json/plan-spec\.schema\.json|packages/schemas/python/src/ralphite_schemas/plan\.py)$"; then
+  "^(src/ralphite/engine/(headless_agent|orchestrator)\.py|src/ralphite/cli/.*\.py|src/ralphite/schemas/json/plan-spec\.schema\.json|src/ralphite/schemas/plan\.py)$"; then
   echo "ADR requirement check passed: no contract-critical files changed."
   exit 0
 fi

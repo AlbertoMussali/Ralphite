@@ -16,8 +16,8 @@ Update docs in the same PR when changing:
 ## Required Checks
 
 ```bash
-uv run --with pytest pytest packages/engine/tests/test_docs_knowledge_base.py -q
-uv run --with pytest pytest packages/engine/tests/test_headless_agent.py apps/cli/tests/test_cli_ux_commands.py -q
+uv run --no-sync pytest tests/engine/test_docs_knowledge_base.py -q
+uv run --no-sync pytest tests/engine/test_headless_agent.py tests/cli/test_cli_ux_commands.py -q
 ```
 
 ## ADR Trigger

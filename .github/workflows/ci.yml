@@ -34,37 +34,42 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install workspace deps
-        run: uv sync --all-packages --dev --no-editable
+      - name: Install deps
+        run: uv sync --dev --python 3.13 --no-editable
+
+      - name: Ensure required binaries
+        run: |
+          command -v rg >/dev/null || (sudo apt-get update && sudo apt-get install -y ripgrep)
+          rg --version
 
       - name: Ruff format check
-        run: uv run ruff format --check .
+        run: uv run --no-sync ruff format --check .
 
       - name: Ruff lint check
-        run: uv run ruff check .
+        run: uv run --no-sync ruff check .
 
       - name: Ruff autofix cleanliness gate
         run: |
-          uv run ruff check . --fix
+          uv run --no-sync ruff check . --fix
           git diff --exit-code
           git diff --cached --exit-code
 
       - name: Docs contract tests
-        run: uv run --with pytest pytest packages/engine/tests/test_docs_knowledge_base.py -q
+        run: uv run --no-sync pytest tests/engine/test_docs_knowledge_base.py -q
 
       - name: Quick contract tests
         run: |
-          uv run --with pytest pytest \
-            packages/engine/tests/test_headless_agent.py \
-            apps/cli/tests/test_cli_output_contract.py \
-            apps/cli/tests/test_cli_ux_commands.py::test_check_strict_runs_backend_and_strict_checks \
-            apps/cli/tests/test_cli_hard_pivot_contract.py -q
+          uv run --no-sync pytest \
+            tests/engine/test_headless_agent.py \
+            tests/cli/test_cli_output_contract.py \
+            tests/cli/test_cli_ux_commands.py::test_check_strict_runs_backend_and_strict_checks \
+            tests/cli/test_cli_hard_pivot_contract.py -q
 
       - name: CLI smoke
         run: |
           mkdir -p /tmp/ralphite-smoke
-          PYTHONPATH=apps/cli/src:packages/engine/src:packages/schemas/python/src uv run python -m ralphite_cli.main quickstart --workspace /tmp/ralphite-smoke --bootstrap --yes --output json
-          PYTHONPATH=apps/cli/src:packages/engine/src:packages/schemas/python/src uv run python -m ralphite_cli.main run --workspace /tmp/ralphite-smoke --yes --output json
+          uv run --no-sync ralphite quickstart --workspace /tmp/ralphite-smoke --bootstrap --yes --output json
+          uv run --no-sync ralphite run --workspace /tmp/ralphite-smoke --yes --output json
 
   strict-gate:
     name: Strict Gate
@@ -87,16 +92,21 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install workspace deps
-        run: uv sync --all-packages --dev --no-editable
+      - name: Install deps
+        run: uv sync --dev --python 3.13 --no-editable
+
+      - name: Ensure required binaries
+        run: |
+          command -v rg >/dev/null || (sudo apt-get update && sudo apt-get install -y ripgrep)
+          rg --version
 
       - name: Full test suite
-        run: uv run --with pytest pytest -q
+        run: uv run --no-sync pytest -q
 
       - name: Strict CLI check
         run: |
           mkdir -p /tmp/ralphite-strict-check
-          PYTHONPATH=apps/cli/src:packages/engine/src:packages/schemas/python/src uv run python -m ralphite_cli.main check --workspace /tmp/ralphite-strict-check --strict --output json
+          uv run --no-sync ralphite check --workspace /tmp/ralphite-strict-check --strict --output json
 
   perf-baseline:
     name: Perf Baseline
@@ -121,8 +131,13 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install workspace deps
-        run: uv sync --all-packages --dev --no-editable
+      - name: Install deps
+        run: uv sync --dev --python 3.13 --no-editable
+
+      - name: Ensure required binaries
+        run: |
+          command -v rg >/dev/null || (sudo apt-get update && sudo apt-get install -y ripgrep)
+          rg --version
 
       - name: Perf regression gate
-        run: uv run --with pytest pytest apps/cli/tests/perf -q -m perf
+        run: uv run --no-sync pytest tests/perf -q -m perf

@@ -32,4 +32,4 @@ If examples drift, update examples and tests in same PR; do not reintroduce giti
 ## References
 
 - `examples/plans/`
-- `packages/engine/tests/test_examples_plans.py`
+- `tests/engine/test_examples_plans.py`

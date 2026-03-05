@@ -13,6 +13,6 @@ Last verified against commit: 70b0c1f
 
 ## Metrics
 
-- Gate pass rate: `uv run ralphite check --workspace . --full --output json` and `uv run ralphite check --workspace . --strict --output json` pass on `main`.
+- Gate pass rate: `uv run --no-sync ralphite check --workspace /tmp/ralphite-strict-check --full --output json` and `uv run --no-sync ralphite check --workspace /tmp/ralphite-strict-check --strict --output json` pass on `main`.
 - Test coverage confidence: fixture matrix + examples + runtime failure tests pass.
 - Docs freshness: docs checks green and ADR policy satisfied for architecture-impacting changes.

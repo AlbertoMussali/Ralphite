@@ -12,9 +12,9 @@ Ralphite previously mixed a Textual TUI with the CLI package boundary. Runtime c
 
 - Remove all Textual/TUI runtime paths and delete the `tui` command.
 - Remove `--no-tui` flags from `quickstart`, `run`, `recover`, and `replay`.
-- Extract and keep the stable command surface in `apps/cli/src/ralphite_cli/`.
+- Extract and keep the stable command surface in `src/ralphite/cli/`.
 - Keep command envelope schema `cli-output.v1` because payload structure remains compatible.
-- Update strict/full check suites to reference `apps/cli/tests` and no TUI paths.
+- Update strict/full check suites to reference `tests/cli` and no TUI paths.
 
 ## Alternatives Considered
 
@@ -34,6 +34,6 @@ Rollback requires restoring TUI code and CLI options, and updating docs + strict
 
 ## References
 
-- `apps/cli/src/ralphite_cli/app.py`
-- `apps/cli/src/ralphite_cli/commands/check_cmd.py`
-- `apps/cli/tests/test_cli_hard_pivot_contract.py`
+- `src/ralphite/cli/app.py`
+- `src/ralphite/cli/commands/check_cmd.py`
+- `tests/cli/test_cli_hard_pivot_contract.py`

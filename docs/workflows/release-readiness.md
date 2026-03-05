@@ -7,9 +7,9 @@ Last verified against commit: 70b0c1f
 
 ```bash
 uv run ruff check .
-uv run --with pytest pytest -q
-uv run ralphite check --workspace . --full --output json
-uv run ralphite check --workspace . --strict --output json
+uv run --no-sync pytest -q
+uv run --no-sync ralphite check --workspace /tmp/ralphite-strict-check --full --output json
+uv run --no-sync ralphite check --workspace /tmp/ralphite-strict-check --strict --output json
 ```
 
 ## Policy

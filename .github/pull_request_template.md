@@ -5,7 +5,7 @@ Describe what changed and why.
 ## Validation
 
 - [ ] `uv run ruff check .`
-- [ ] `uv run --with pytest pytest -q`
+- [ ] `uv run --no-sync pytest -q`
 - [ ] Relevant `ralphite check` gate(s) executed
 
 ## Documentation Checklist

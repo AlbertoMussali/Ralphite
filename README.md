@@ -6,7 +6,7 @@ Last verified against commit: 70b0c1f
 
 ## 5-Minute Quickstart
 
-Requirements: Python 3.12+, `uv`, `git`, `rg`, and `codex` in PATH.
+Requirements: Python 3.13+, `uv`, `git`, `rg`, and `codex` in PATH.
 
 ```bash
 uv run ralphite init --workspace .

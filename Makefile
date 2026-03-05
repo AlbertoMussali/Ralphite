@@ -2,7 +2,7 @@
 
 install:
 	python3 -m venv .venv
-	. .venv/bin/activate && pip install -e packages/schemas/python -e packages/engine -e apps/cli
+	. .venv/bin/activate && pip install -e .
 
 init:
 	uv run ralphite init --workspace $(WORKSPACE_ROOT)

@@ -4,8 +4,8 @@ Owners: schemas
 Last verified against commit: 70b0c1f
 Generated from:
 
-- `packages/schemas/json/plan-spec.schema.json`
-- `packages/schemas/python/src/ralphite_schemas/plan.py`
+- `src/ralphite/schemas/json/plan-spec.schema.json`
+- `src/ralphite/schemas/plan.py`
 
 ## Agent Schema Snapshot
 

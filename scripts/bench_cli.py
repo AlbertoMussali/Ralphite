@@ -70,10 +70,12 @@ def _summary(samples: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _build_commands(workspace: str) -> dict[str, list[str]]:
-    cli_prefix = ["uv", "run", "python", "-m", "ralphite_cli.main"]
     return {
         "quickstart": [
-            *cli_prefix,
+            "uv",
+            "run",
+            "--no-sync",
+            "ralphite",
             "quickstart",
             "--workspace",
             workspace,
@@ -83,7 +85,10 @@ def _build_commands(workspace: str) -> dict[str, list[str]]:
             "json",
         ],
         "check_strict": [
-            *cli_prefix,
+            "uv",
+            "run",
+            "--no-sync",
+            "ralphite",
             "check",
             "--workspace",
             workspace,
@@ -92,7 +97,10 @@ def _build_commands(workspace: str) -> dict[str, list[str]]:
             "json",
         ],
         "run": [
-            *cli_prefix,
+            "uv",
+            "run",
+            "--no-sync",
+            "ralphite",
             "run",
             "--workspace",
             workspace,
@@ -103,12 +111,11 @@ def _build_commands(workspace: str) -> dict[str, list[str]]:
         "cli_tests": [
             "uv",
             "run",
-            "--with",
+            "--no-sync",
             "pytest",
-            "pytest",
-            "apps/cli/tests/test_cli_output_contract.py",
-            "apps/cli/tests/test_cli_ux_commands.py",
-            "apps/cli/tests/test_cli_recover.py",
+            "tests/cli/test_cli_output_contract.py",
+            "tests/cli/test_cli_ux_commands.py",
+            "tests/cli/test_cli_recover.py",
             "-q",
         ],
     }
@@ -126,16 +133,6 @@ def main() -> int:
     env.setdefault("RALPHITE_DEV_SIMULATED_EXECUTION", "1")
     env.setdefault("RALPHITE_SKIP_BACKEND_CMD_CHECKS", "1")
     env["RALPHITE_PERF"] = "0"
-    repo_root = Path(__file__).resolve().parents[1]
-    py_paths = [
-        str(repo_root / "apps/cli/src"),
-        str(repo_root / "packages/engine/src"),
-        str(repo_root / "packages/schemas/python/src"),
-    ]
-    existing_py_path = env.get("PYTHONPATH", "")
-    if existing_py_path.strip():
-        py_paths.append(existing_py_path)
-    env["PYTHONPATH"] = os.pathsep.join(py_paths)
 
     with tempfile.TemporaryDirectory(prefix="ralphite-bench-") as tmpdir:
         commands = _build_commands(tmpdir)

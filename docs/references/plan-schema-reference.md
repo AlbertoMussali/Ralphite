@@ -5,8 +5,8 @@ Last verified against commit: 70b0c1f
 
 Source files:
 
-- `packages/schemas/json/plan-spec.schema.json`
-- `packages/schemas/python/src/ralphite_schemas/plan.py`
+- `src/ralphite/schemas/json/plan-spec.schema.json`
+- `src/ralphite/schemas/plan.py`
 
 ## Required Top-Level Sections
 

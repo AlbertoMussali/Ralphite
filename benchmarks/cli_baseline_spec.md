@@ -11,15 +11,15 @@ This document defines the stable CLI performance baseline protocol.
 
 ## Commands
 
-- `uv run ralphite quickstart --workspace <tmp> --bootstrap --yes --output json`
-- `uv run ralphite check --workspace <tmp> --strict --output json`
-- `uv run ralphite run --workspace <tmp> --yes --output json`
-- `uv run --with pytest pytest apps/cli/tests/test_cli_output_contract.py apps/cli/tests/test_cli_ux_commands.py apps/cli/tests/test_cli_recover.py -q`
+- `uv run --no-sync ralphite quickstart --workspace <tmp> --bootstrap --yes --output json`
+- `uv run --no-sync ralphite check --workspace <tmp> --strict --output json`
+- `uv run --no-sync ralphite run --workspace <tmp> --yes --output json`
+- `uv run --no-sync pytest tests/cli/test_cli_output_contract.py tests/cli/test_cli_ux_commands.py tests/cli/test_cli_recover.py -q`
 
 ## Procedure
 
 1. Execute each command 5 times.
 2. Record median and p95 runtime.
 3. Record max RSS from `/usr/bin/time -lp` output where available.
-4. Save report JSON to `benchmarks/baseline/pre_pivot_cli.json` before the pivot.
+4. Save report JSON to `benchmarks/baseline/pre_unification_v1.json` before the pivot.
 5. Post-pivot comparisons must remain within 10% runtime and RSS regression.

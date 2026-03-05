@@ -3,7 +3,7 @@
 Owners: cli
 Last verified against commit: 70b0c1f
 
-Source file: `apps/cli/src/ralphite_cli/app.py`
+Source file: `src/ralphite/cli/app.py`
 
 ## Core Commands
 

@@ -1,0 +1,9 @@
+{
+  "captured_at": "2026-03-05T07:21:03.234167+00:00",
+  "machine": "arm64",
+  "processor": "arm",
+  "python3_version": "Python 3.14.3",
+  "system": "macOS-26.3-arm64-arm-64bit-Mach-O",
+  "uname": "Darwin AlmuMini.local 25.3.0 Darwin Kernel Version 25.3.0: Wed Jan 28 20:49:24 PST 2026; root:xnu-12377.81.4~5/RELEASE_ARM64_T8132 arm64 arm",
+  "uv_version": "uv 0.10.2 (a788db7e5 2026-02-10)"
+}

@@ -1,14 +1,21 @@
-[tool.uv.workspace]
-members = [
-  "apps/cli",
-  "packages/engine",
-  "packages/schemas/python"
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ralphite"
+version = "1.0.0"
+description = "Ralphite local-first multi-agent CLI orchestrator"
+requires-python = ">=3.13"
+dependencies = [
+    "typer>=0.12,<1",
+    "rich>=13.9,<14",
+    "pydantic>=2.8,<3",
+    "pyyaml>=6.0,<7",
 ]
 
-[tool.uv.sources]
-ralphite-cli = { workspace = true }
-ralphite-engine = { workspace = true }
-ralphite-schemas = { workspace = true }
+[project.scripts]
+ralphite = "ralphite.cli.main:app"
 
 [dependency-groups]
 dev = [
@@ -16,9 +23,18 @@ dev = [
     "ruff>=0.15.4",
 ]
 
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"ralphite.schemas" = ["json/*.json"]
+
 [tool.pytest.ini_options]
 markers = [
-  "perf: performance baseline checks (opt-in with RALPHITE_PERF=1)"
+    "perf: performance baseline checks (opt-in with RALPHITE_PERF=1)",
 ]
 
 [tool.ruff]

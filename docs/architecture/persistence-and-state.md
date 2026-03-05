@@ -5,9 +5,9 @@ Last verified against commit: 70b0c1f
 
 Source files:
 
-- `packages/engine/src/ralphite_engine/run_store.py`
-- `packages/engine/src/ralphite_engine/recovery.py`
-- `packages/engine/src/ralphite_engine/orchestrator.py`
+- `src/ralphite/engine/run_store.py`
+- `src/ralphite/engine/recovery.py`
+- `src/ralphite/engine/orchestrator.py`
 
 ## Workspace Data Layout
 

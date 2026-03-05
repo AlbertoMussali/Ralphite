@@ -1,0 +1,45 @@
+{
+  "results": {
+    "check_strict": {
+      "post_max_rss": 55312384,
+      "post_median_seconds": 40.201768708997406,
+      "pre_max_rss": 63700992,
+      "pre_median_seconds": 44.61,
+      "rss_pass": true,
+      "rss_regression_ratio": -0.13168724279835392,
+      "runtime_pass": true,
+      "runtime_regression_ratio": -0.09881711031164747
+    },
+    "cli_tests": {
+      "post_max_rss": 53493760,
+      "post_median_seconds": 13.928181249997579,
+      "pre_max_rss": 63209472,
+      "pre_median_seconds": 13.81,
+      "rss_pass": true,
+      "rss_regression_ratio": -0.15370658372213583,
+      "runtime_pass": true,
+      "runtime_regression_ratio": 0.008557657494393777
+    },
+    "quickstart": {
+      "post_max_rss": 42319872,
+      "post_median_seconds": 0.9370862920768559,
+      "pre_max_rss": 52559872,
+      "pre_median_seconds": 1.6,
+      "rss_pass": true,
+      "rss_regression_ratio": -0.19482543640897756,
+      "runtime_pass": true,
+      "runtime_regression_ratio": -0.4143210674519651
+    },
+    "run": {
+      "post_max_rss": 43499520,
+      "post_median_seconds": 0.8750860419822857,
+      "pre_max_rss": 53018624,
+      "pre_median_seconds": 0.89,
+      "rss_pass": true,
+      "rss_regression_ratio": -0.17954264524103833,
+      "runtime_pass": true,
+      "runtime_regression_ratio": -0.01675725619967903
+    }
+  },
+  "threshold": 0.1
+}

@@ -13,7 +13,7 @@ Goals:
 
 Exit criteria:
 
-- `uv run ruff check .`, `uv run --with pytest pytest -q`, `uv run ralphite check --workspace . --full --output json`, and `uv run ralphite check --workspace . --strict --output json` all green.
+- `uv run ruff check .`, `uv run --no-sync pytest -q`, `uv run --no-sync ralphite check --workspace /tmp/ralphite-strict-check --full --output json`, and `uv run --no-sync ralphite check --workspace /tmp/ralphite-strict-check --strict --output json` all green.
 - Docs checks and ADR governance checks green in CI.
 
 ## Milestone 2: Hardening Follow-Through

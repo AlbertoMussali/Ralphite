@@ -6,9 +6,9 @@ Last verified against commit: 70b0c1f
 ## Current Signals
 
 - lint: `uv run ruff check .`
-- tests: `uv run --with pytest pytest -q`
-- full check: `uv run ralphite check --workspace . --full --output json`
-- strict checks: `uv run ralphite check --workspace . --strict --output json`
+- tests: `uv run --no-sync pytest -q`
+- full check: `uv run --no-sync ralphite check --workspace /tmp/ralphite-strict-check --full --output json`
+- strict checks: `uv run --no-sync ralphite check --workspace /tmp/ralphite-strict-check --strict --output json`
 
 ## Scoring Model (Repo Internal)
 

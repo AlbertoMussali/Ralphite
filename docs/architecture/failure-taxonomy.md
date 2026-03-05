@@ -3,7 +3,7 @@
 Owners: engine, release
 Last verified against commit: 70b0c1f
 
-Source file: `packages/engine/src/ralphite_engine/taxonomy.py`
+Source file: `src/ralphite/engine/taxonomy.py`
 
 ## Backend Failures
 

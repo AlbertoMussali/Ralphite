@@ -3,7 +3,7 @@
 Owners: cli
 Last verified against commit: 70b0c1f
 
-Primary frontend surface is the Typer-based CLI in `apps/cli/src/ralphite_cli/`.
+Primary frontend surface is the Typer-based CLI in `src/ralphite/cli/`.
 
 Primary interaction modes:
 
