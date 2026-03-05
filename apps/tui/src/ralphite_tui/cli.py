@@ -27,6 +27,11 @@ from ralphite_engine import (
     suggest_fixes,
     validate_plan_content,
 )
+from ralphite_engine.headless_agent import (
+    build_codex_exec_command,
+    build_cursor_exec_command,
+    normalize_backend_name,
+)
 from ralphite_tui.tui.app_shell import AppShell
 
 app = typer.Typer(
@@ -183,22 +188,12 @@ def _probe_codex_model(model: str, reasoning_effort: str) -> tuple[bool, str]:
         return True, "skipped by RALPHITE_SKIP_MODEL_PROBE"
     if not shutil.which("codex"):
         return False, "codex not found"
-    command = [
-        "codex",
-        "exec",
-        "--json",
-        "--ephemeral",
-        "--skip-git-repo-check",
-        "--model",
-        model,
-        "-c",
-        f'model_reasoning_effort="{reasoning_effort}"',
-        "-c",
-        'approval_policy="never"',
-        "--sandbox",
-        "read-only",
-        "Reply with exactly: OK",
-    ]
+    command = build_codex_exec_command(
+        prompt="Reply with exactly: OK",
+        model=model,
+        reasoning_effort=reasoning_effort,
+        sandbox="read-only",
+    )
     try:
         run = subprocess.run(
             command, check=False, capture_output=True, text=True, timeout=25
@@ -1809,6 +1804,7 @@ def _run_release_gate(
                 "pytest",
                 "packages/engine/tests/test_fixture_plan_matrix.py",
                 "packages/engine/tests/test_dispatched_plan_consistency.py",
+                "packages/engine/tests/test_examples_plans.py",
                 "apps/tui/tests/test_bootstrap_e2e.py",
                 "apps/tui/tests/test_run_setup_resolved_preview_contract.py",
                 "-q",
@@ -1858,7 +1854,7 @@ def _run_backend_smoke(
 ) -> tuple[bool, list[dict[str, Any]]]:
     results: list[dict[str, Any]] = []
     capture_subprocess_output = machine_mode or quiet
-    backend = str(orch.config.default_backend or "codex").strip().lower()
+    backend = normalize_backend_name(str(orch.config.default_backend or "codex"))
     model = str(orch.config.default_model or "gpt-5.3-codex").strip() or "gpt-5.3-codex"
     reasoning_effort = (
         str(orch.config.default_reasoning_effort or "medium").strip().lower()
@@ -1867,22 +1863,13 @@ def _run_backend_smoke(
     cursor_command = str(orch.config.cursor_command or "agent").strip() or "agent"
 
     if backend == "codex":
-        command = [
-            "codex",
-            "exec",
-            "--json",
-            "--ephemeral",
-            "--skip-git-repo-check",
-            "--model",
-            model,
-            "-c",
-            f'model_reasoning_effort="{reasoning_effort}"',
-            "-c",
-            'approval_policy="never"',
-            "--sandbox",
-            "read-only",
-            "Reply with exactly: OK",
-        ]
+        command = build_codex_exec_command(
+            prompt="Reply with exactly: OK",
+            model=model,
+            reasoning_effort=reasoning_effort,
+            worktree=repo_root,
+            sandbox="read-only",
+        )
         result = subprocess.run(
             command,
             cwd=repo_root,
@@ -1929,15 +1916,12 @@ def _run_backend_smoke(
             row["stderr"] = errors[0]
             return False, results
     elif backend == "cursor":
-        command = [
-            cursor_command,
-            "-p",
-            "--output-format",
-            "json",
-            "--model",
-            model,
-            "Reply with exactly: OK",
-        ]
+        command = build_cursor_exec_command(
+            prompt="Reply with exactly: OK",
+            model=model,
+            cursor_command=cursor_command,
+            force=True,
+        )
         result = subprocess.run(
             command,
             cwd=repo_root,

@@ -69,6 +69,7 @@ Ralphite executes agents through local headless CLIs.
 - Optional backend: `agent` (Cursor headless)
 - Default model: `gpt-5.3-codex`
 - Default reasoning effort: `medium`
+- `openai` provider is supported only as a legacy migration alias and is normalized to `codex` at runtime.
 
 Run-time overrides:
 
@@ -77,15 +78,35 @@ uv run ralphite run --workspace . --backend codex --model gpt-5.3-codex --reason
 uv run ralphite quickstart --workspace . --backend cursor --model gpt-5.3-codex --reasoning-effort medium --no-tui --yes
 ```
 
+Exact command contracts:
+
+```bash
+codex exec --json --ephemeral --skip-git-repo-check --cd <worktree> --model gpt-5.3-codex -c 'model_reasoning_effort="medium"' -c 'approval_policy="never"' --sandbox workspace-write "<prompt>"
+agent -p --force --output-format json --model gpt-5.3-codex "<prompt>"
+```
+
+Beta policy:
+
+- Codex backend is required.
+- Cursor backend is optional unless explicitly selected by config/CLI.
+
 Fixture confidence suite (included in `--release-gate`):
 
 ```bash
 uv run --with pytest pytest \
   packages/engine/tests/test_fixture_plan_matrix.py \
   packages/engine/tests/test_dispatched_plan_consistency.py \
+  packages/engine/tests/test_examples_plans.py \
   apps/tui/tests/test_bootstrap_e2e.py \
   apps/tui/tests/test_run_setup_resolved_preview_contract.py -q
 ```
+
+Canonical starter plans are tracked under `examples/plans/` and validated in CI.
+
+CI strategy:
+
+- PR CI stays deterministic (mock/contract-safe checks).
+- Real backend smoke is verified pre-release with local/operator commands from `docs/BETA_RELEASE_CHECKLIST.md`.
 
 ## Canonical Plan (v5)
 

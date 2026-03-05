@@ -26,6 +26,10 @@ jobs:
           pip install pytest
       - name: Run unit and integration suites
         run: pytest packages/engine/tests apps/tui/tests -q
+      - name: Assert no tracked diffs after checks
+        run: |
+          git diff --exit-code
+          git diff --cached --exit-code
 
   fixture-confidence:
     runs-on: ubuntu-latest
@@ -51,6 +55,7 @@ jobs:
           pytest \
             packages/engine/tests/test_fixture_plan_matrix.py \
             packages/engine/tests/test_dispatched_plan_consistency.py \
+            packages/engine/tests/test_examples_plans.py \
             apps/tui/tests/test_bootstrap_e2e.py \
             apps/tui/tests/test_run_setup_resolved_preview_contract.py -q
 

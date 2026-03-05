@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
+from ralphite_engine.headless_agent import (
+    build_codex_exec_command,
+    build_cursor_exec_command,
+)
 from typer.testing import CliRunner
 
 import ralphite_tui.cli as cli_mod
@@ -315,6 +320,9 @@ def test_release_gate_includes_fixture_confidence_suites(
         "packages/engine/tests/test_dispatched_plan_consistency.py" in row
         for row in commands
     )
+    assert any(
+        "packages/engine/tests/test_examples_plans.py" in row for row in commands
+    )
     assert any("apps/tui/tests/test_bootstrap_e2e.py" in row for row in commands)
     assert any(
         "apps/tui/tests/test_run_setup_resolved_preview_contract.py" in row
@@ -433,3 +441,130 @@ def test_check_beta_gate_runs_backend_and_release_checks(
         for row in commands
         if isinstance(row, dict)
     )
+
+
+def test_backend_smoke_codex_command_matches_runtime_builder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    orch = cli_mod._orchestrator(tmp_path)
+    orch.config.default_backend = "codex"
+    orch.config.default_model = "gpt-5.3-codex"
+    orch.config.default_reasoning_effort = "medium"
+    repo_root = Path(__file__).resolve().parents[3]
+    seen: dict[str, list[str]] = {}
+
+    def fake_run(command, cwd, check, capture_output, text):  # noqa: ANN001
+        seen["command"] = list(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout='{"type":"item.completed","item":{"type":"agent_message","text":"OK"}}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr(cli_mod.subprocess, "run", fake_run)
+    ok, _results = cli_mod._run_backend_smoke(
+        orch=orch,
+        repo_root=repo_root,
+        quiet=True,
+        machine_mode=True,
+        verbose=False,
+    )
+    assert ok is True
+    assert seen["command"] == build_codex_exec_command(
+        prompt="Reply with exactly: OK",
+        model="gpt-5.3-codex",
+        reasoning_effort="medium",
+        worktree=repo_root,
+        sandbox="read-only",
+    )
+
+
+def test_backend_smoke_cursor_command_matches_runtime_builder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    orch = cli_mod._orchestrator(tmp_path)
+    orch.config.default_backend = "cursor"
+    orch.config.default_model = "gpt-5.3-codex"
+    orch.config.cursor_command = "agent"
+    repo_root = Path(__file__).resolve().parents[3]
+    seen: dict[str, list[str]] = {}
+
+    def fake_run(command, cwd, check, capture_output, text):  # noqa: ANN001
+        seen["command"] = list(command)
+        return subprocess.CompletedProcess(
+            command, 0, stdout='{"text":"OK"}\n', stderr=""
+        )
+
+    monkeypatch.setattr(cli_mod.subprocess, "run", fake_run)
+    ok, _results = cli_mod._run_backend_smoke(
+        orch=orch,
+        repo_root=repo_root,
+        quiet=True,
+        machine_mode=True,
+        verbose=False,
+    )
+    assert ok is True
+    assert seen["command"] == build_cursor_exec_command(
+        prompt="Reply with exactly: OK",
+        model="gpt-5.3-codex",
+        cursor_command="agent",
+        force=True,
+    )
+    assert "--force" in seen["command"]
+
+
+def test_run_json_propagates_backend_overrides(tmp_path: Path) -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--workspace",
+            str(tmp_path),
+            "--backend",
+            "cursor",
+            "--model",
+            "gpt-5.3-codex",
+            "--reasoning-effort",
+            "high",
+            "--no-tui",
+            "--yes",
+            "--output",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "succeeded"
+    assert payload["data"]["backend"] == "cursor"
+    assert payload["data"]["model"] == "gpt-5.3-codex"
+    assert payload["data"]["reasoning_effort"] == "high"
+
+
+def test_quickstart_json_propagates_backend_overrides(tmp_path: Path) -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "quickstart",
+            "--workspace",
+            str(tmp_path),
+            "--backend",
+            "cursor",
+            "--model",
+            "gpt-5.3-codex",
+            "--reasoning-effort",
+            "high",
+            "--no-tui",
+            "--yes",
+            "--output",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "succeeded"
+    assert payload["data"]["backend"] == "cursor"
+    assert payload["data"]["model"] == "gpt-5.3-codex"
+    assert payload["data"]["reasoning_effort"] == "high"

@@ -21,6 +21,77 @@ class BackendExecutionConfig:
     timeout_seconds: int = 900
 
 
+def normalize_backend_name(raw_backend: str | None) -> str:
+    backend = (raw_backend or "codex").strip().lower()
+    if backend == "openai":
+        return "codex"
+    if backend not in {"codex", "cursor"}:
+        return "codex"
+    return backend
+
+
+def _normalize_reasoning_effort(raw_reasoning_effort: str | None) -> str:
+    reasoning_effort = (raw_reasoning_effort or "medium").strip().lower()
+    if reasoning_effort not in {"low", "medium", "high"}:
+        return "medium"
+    return reasoning_effort
+
+
+def build_codex_exec_command(
+    *,
+    prompt: str,
+    model: str,
+    reasoning_effort: str,
+    worktree: Path | None = None,
+    sandbox: str = "workspace-write",
+) -> list[str]:
+    command = [
+        "codex",
+        "exec",
+        "--json",
+        "--ephemeral",
+        "--skip-git-repo-check",
+    ]
+    if worktree is not None:
+        command.extend(["--cd", str(worktree)])
+    command.extend(
+        [
+            "--model",
+            model.strip() or "gpt-5.3-codex",
+            "-c",
+            f'model_reasoning_effort="{_normalize_reasoning_effort(reasoning_effort)}"',
+            "-c",
+            'approval_policy="never"',
+            "--sandbox",
+            sandbox.strip() or "workspace-write",
+            prompt,
+        ]
+    )
+    return command
+
+
+def build_cursor_exec_command(
+    *,
+    prompt: str,
+    model: str,
+    cursor_command: str,
+    force: bool = True,
+) -> list[str]:
+    command = [(cursor_command or "agent").strip() or "agent", "-p"]
+    if force:
+        command.append("--force")
+    command.extend(
+        [
+            "--output-format",
+            "json",
+            "--model",
+            model.strip() or "gpt-5.3-codex",
+            prompt,
+        ]
+    )
+    return command
+
+
 def _summarize_acceptance(node: RuntimeNodeSpec) -> str:
     acceptance = node.acceptance if isinstance(node.acceptance, dict) else {}
     commands = (
@@ -193,9 +264,9 @@ def execute_headless_agent(
     prompt: str,
     worktree: Path,
 ) -> tuple[bool, dict[str, Any]]:
-    backend = (config.backend or "codex").strip().lower()
+    backend = normalize_backend_name(config.backend)
     model = (config.model or "gpt-5.3-codex").strip() or "gpt-5.3-codex"
-    reasoning_effort = (config.reasoning_effort or "medium").strip().lower() or "medium"
+    reasoning_effort = _normalize_reasoning_effort(config.reasoning_effort)
     cwd = worktree.expanduser().resolve()
     if not cwd.exists():
         return False, {"reason": "backend_worktree_missing", "worktree": str(cwd)}
@@ -213,40 +284,22 @@ def execute_headless_agent(
             "worktree": str(cwd),
         }
 
-    if backend == "openai":
-        backend = "codex"
-
     if backend == "cursor":
-        cmd = [
-            config.cursor_command.strip() or "agent",
-            "-p",
-            "--force",
-            "--output-format",
-            "json",
-            "--model",
-            model,
-            prompt,
-        ]
+        cmd = build_cursor_exec_command(
+            prompt=prompt,
+            model=model,
+            cursor_command=config.cursor_command,
+            force=True,
+        )
     else:
         backend = "codex"
-        cmd = [
-            "codex",
-            "exec",
-            "--json",
-            "--ephemeral",
-            "--skip-git-repo-check",
-            "--cd",
-            str(cwd),
-            "--model",
-            model,
-            "-c",
-            f'model_reasoning_effort="{reasoning_effort}"',
-            "-c",
-            'approval_policy="never"',
-            "--sandbox",
-            "workspace-write",
-            prompt,
-        ]
+        cmd = build_codex_exec_command(
+            prompt=prompt,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            worktree=cwd,
+            sandbox="workspace-write",
+        )
 
     started = time.perf_counter()
     try:
@@ -311,8 +364,13 @@ def execute_headless_agent(
         }
 
     if parse_error:
+        reason = (
+            "backend_output_malformed"
+            if backend == "cursor"
+            else _classify_backend_error(parse_error)
+        )
         return False, {
-            "reason": _classify_backend_error(parse_error),
+            "reason": reason,
             "backend": backend,
             "model": model,
             "reasoning_effort": reasoning_effort,

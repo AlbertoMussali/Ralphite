@@ -251,6 +251,23 @@ def test_conflict_triggers_recovery_and_abort_mode(tmp_path: Path) -> None:
     assert final.status == "failed"
 
 
+def test_start_run_applies_execution_overrides_to_metadata(tmp_path: Path) -> None:
+    orch = LocalOrchestrator(tmp_path)
+    run_id = orch.start_run(
+        plan_content=_single_task_plan(),
+        backend_override="cursor",
+        model_override="gpt-5.3-codex",
+        reasoning_effort_override="high",
+    )
+    run = orch.get_run(run_id)
+    assert run is not None
+    defaults = run.metadata.get("execution_defaults")
+    assert isinstance(defaults, dict)
+    assert defaults.get("backend") == "cursor"
+    assert defaults.get("model") == "gpt-5.3-codex"
+    assert defaults.get("reasoning_effort") == "high"
+
+
 def test_acceptance_timeout_produces_typed_failure(tmp_path: Path) -> None:
     orch = LocalOrchestrator(tmp_path)
     plan = _single_task_plan(

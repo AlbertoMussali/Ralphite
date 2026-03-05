@@ -151,6 +151,19 @@ uv run ralphite run --workspace . --backend codex --model gpt-5.3-codex --reason
 uv run ralphite quickstart --workspace . --backend cursor --model gpt-5.3-codex --reasoning-effort medium --no-tui --yes
 ```
 
+Exact backend command contracts:
+
+```bash
+codex exec --json --ephemeral --skip-git-repo-check --cd <worktree> --model gpt-5.3-codex -c 'model_reasoning_effort="medium"' -c 'approval_policy="never"' --sandbox workspace-write "<prompt>"
+agent -p --force --output-format json --model gpt-5.3-codex "<prompt>"
+```
+
+Beta defaults and compatibility:
+
+- Default execution backend is `codex`.
+- Cursor is optional unless explicitly selected.
+- `provider: openai` is legacy/warn-only and normalized to codex behavior.
+
 Recovery:
 
 ```bash
@@ -210,6 +223,12 @@ Validation failures:
 - inspect `validate --json` issues and resolved execution block
 - use Run Setup badges and safe-fix preview
 
+Canonical starter plans:
+
+- tracked examples live under `examples/plans/`
+- local `.ralphite/plans/` files remain user workspace copies
+
 ## 10) User-Centered Playbook
 
 - See `docs/USER_CENTERED_PLAYBOOK.md` for canonical user flows, automation examples, and troubleshooting language.
+- See `docs/BETA_RELEASE_CHECKLIST.md` for pre-release command gates and sign-off artifact requirements.

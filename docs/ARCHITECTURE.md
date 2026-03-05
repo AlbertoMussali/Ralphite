@@ -13,6 +13,19 @@
 - optional backend: `agent` (Cursor headless command)
 - default model: `gpt-5.3-codex`
 - default reasoning effort: `medium`
+- legacy `openai` provider values are migration aliases, normalized to codex execution
+
+Command contracts:
+
+- codex worker/orchestrator invocation:
+  - `codex exec --json --ephemeral --skip-git-repo-check --cd <worktree> --model <model> -c 'model_reasoning_effort="<effort>"' -c 'approval_policy="never"' --sandbox workspace-write <prompt>`
+- cursor worker/orchestrator invocation:
+  - `agent -p --force --output-format json --model <model> <prompt>`
+
+Beta backend policy:
+
+- codex is required
+- cursor is optional unless selected in config/CLI
 
 ## Plan Contract (v5)
 
@@ -95,8 +108,14 @@ Failures are typed runtime failures and participate in fail-fast/recovery behavi
 Fixture confidence matrix:
 
 - canonical fixture plans live under `packages/engine/tests/fixtures/plans`
+- tracked canonical starter examples live under `examples/plans`
 - confidence suites assert validation/compile/runtime dispatch consistency for all built-in templates
 - release-gate runs this matrix to ensure install-to-run behavior stays stable
+
+CI strategy:
+
+- PR CI uses deterministic checks (simulation + command-contract tests).
+- real backend smoke is executed in pre-release/manual sign-off flow.
 
 Run Setup is v5-native:
 
