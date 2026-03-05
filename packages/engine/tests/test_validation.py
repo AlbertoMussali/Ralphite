@@ -49,8 +49,8 @@ name: old
 """
     valid, issues, summary = validate_plan_content(content)
     assert not valid
-    assert summary.get("supported_versions") == [5]
-    assert any(issue.get("code") == "version.unsupported" for issue in issues)
+    assert summary.get("expected_version") == 5
+    assert any(issue.get("code") == "version.invalid" for issue in issues)
 
     fixes = suggest_fixes({}, issues)
     assert fixes == []
@@ -81,7 +81,6 @@ def test_validate_plan_v5_with_embedded_tasks() -> None:
   - id: t2
     title: Execute work
     completed: false
-    parallel_group: 1
     deps: [t1]
     routing:
       cell: par_core
@@ -264,7 +263,7 @@ outputs:
     assert valid is False
     keys = [(row.get("code"), row.get("path"), row.get("message"), row.get("level")) for row in issues]
     assert len(keys) == len(set(keys))
-    assert summary.get("cell_counts") == summary.get("block_counts")
+    assert isinstance(summary.get("recommended_commands"), list)
 
 
 def test_validation_rejects_out_of_bounds_artifact_glob() -> None:

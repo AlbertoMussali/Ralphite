@@ -53,6 +53,7 @@ class SummaryScreen(Vertical):
         git_state = run.metadata.get("git_state", {}) if isinstance(run.metadata.get("git_state"), dict) else {}
         phase_states = git_state.get("phases", {}) if isinstance(git_state.get("phases"), dict) else {}
         recovery = run.metadata.get("recovery", {}) if isinstance(run.metadata.get("recovery"), dict) else {}
+        metrics = run.metadata.get("run_metrics", {}) if isinstance(run.metadata.get("run_metrics"), dict) else {}
         status = present_run_status(run.status)
 
         failed_nodes = []
@@ -97,10 +98,19 @@ class SummaryScreen(Vertical):
             f"- Final status: {status.label}",
             f"- Nodes: total={len(run.nodes)} succeeded={len([n for n in run.nodes.values() if n.status == 'succeeded'])} "
             f"failed={len([n for n in run.nodes.values() if n.status == 'failed'])} blocked={len([n for n in run.nodes.values() if n.status == 'blocked'])}",
+            f"- Runtime seconds: compile={metrics.get('compile_seconds', 0)} execute={metrics.get('execution_seconds', 0)} "
+            f"cleanup={metrics.get('cleanup_seconds', 0)} total={metrics.get('total_seconds', 0)}",
             f"- Next action: {status.next_action}",
             "",
             "What failed and why:",
             *(failed_nodes or ["- none"]),
+            "",
+            "Failure histogram:",
+            *(
+                [f"- {code}: {count}" for code, count in metrics.get("failure_reason_counts", {}).items()]
+                if isinstance(metrics.get("failure_reason_counts"), dict) and metrics.get("failure_reason_counts")
+                else ["- none"]
+            ),
             "",
             "What changed in git:",
             *(integration_lines or ["- none"]),
@@ -132,12 +142,13 @@ class SummaryScreen(Vertical):
             status.update(f"Run {run_id} not found")
             return
 
-        done_phases = run.metadata.get("phase_done", run.metadata.get("v2_phase_done", []))
+        done_phases = run.metadata.get("phase_done", [])
         cleanup = [evt for evt in run.events if evt.get("event") == "CLEANUP_DONE"]
         run_status = present_run_status(run.status)
+        metrics = run.metadata.get("run_metrics", {}) if isinstance(run.metadata.get("run_metrics"), dict) else {}
         status.update(
             f"Run {run.id} | status={run_status.label} | phases_done={len(done_phases)} | cleanup_events={len(cleanup)}\n"
-            f"Next: {run_status.next_action}"
+            f"Duration={metrics.get('total_seconds', 0)}s | Next: {run_status.next_action}"
         )
         sections.update(self._build_sections(run))
         for artifact in run.artifacts:

@@ -57,7 +57,6 @@ class TaskSpec(BaseModel):
     title: str
     completed: bool
     description: str = ""
-    parallel_group: int = Field(default=0, ge=0)
     deps: list[str] = Field(default_factory=list)
     agent: str | None = None
     routing: TaskRoutingSpec = Field(default_factory=TaskRoutingSpec)

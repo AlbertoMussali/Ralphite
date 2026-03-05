@@ -87,7 +87,6 @@
           "title": { "type": "string", "minLength": 1 },
           "completed": { "type": "boolean" },
           "description": { "type": "string" },
-          "parallel_group": { "type": "integer", "minimum": 0 },
           "deps": { "type": "array", "items": { "type": "string" } },
           "agent": { "type": "string" },
           "routing": {

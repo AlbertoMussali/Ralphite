@@ -55,7 +55,6 @@ tasks:
     title: Build parallel shard
     completed: false
     deps: [t1]
-    parallel_group: 1
     routing:
       cell: par_core
       tags: [build]

@@ -21,6 +21,7 @@ uv sync --all-packages
 
 ```bash
 uv run ralphite init --workspace .
+uv run ralphite init --workspace . --yes --template branched --plan-id starter_branched --name "Starter Branched"
 ```
 
 ### Guided first run
@@ -55,6 +56,8 @@ uv run ralphite validate --workspace . --json
 uv run ralphite check --workspace . --full
 uv run ralphite check --workspace . --release-gate
 ```
+
+`check --release-gate` is repository-deterministic: it executes named suites from repo root regardless of workspace plan state.
 
 Fixture confidence suite (included in `--release-gate`):
 
@@ -119,7 +122,6 @@ tasks:
     title: Implement parser
     completed: false
     deps: [t1]
-    parallel_group: 1
     routing:
       cell: par_core
       tags: [implementation]
@@ -178,8 +180,8 @@ outputs:
 - `summary.resolved_execution.resolved_nodes`
 - `summary.resolved_execution.task_assignment`
 - `summary.resolved_execution.compile_warnings`
-- `summary.cell_counts` (canonical) and `summary.block_counts` (compat alias)
-- `data.recommended_commands` for one-step remediation (for example `migrate` on v4)
+- `summary.cell_counts`
+- `data.recommended_commands` for one-step remediation when available
 
 Run Setup in TUI shows the same resolved run preview before execution.
 
@@ -187,18 +189,7 @@ Dispatch consistency guarantee:
 
 - confidence tests assert that `validate --json` resolved nodes/cells/task assignment match runtime dispatched metadata for canonical fixtures.
 
-## Migration
-
-Use `ralphite migrate` to convert a v4 plan to v5.
-
-```bash
-uv run ralphite migrate --workspace . --plan .ralphite/plans/legacy.yaml
-```
-
-Behavior:
-
-- v4 -> emits v5 plan with `orchestration.template=general_sps`
-- v5 -> idempotent no-op (reports already v5)
+Ralphite is v5-only. Plans must use `version: 5`.
 
 ## Recovery Contract
 

@@ -1,0 +1,41 @@
+version: 5
+plan_id: fixture_invalid_routing
+name: Fixture Invalid Routing
+materials:
+  autodiscover:
+    enabled: false
+    path: .
+    include_globs: []
+  includes: []
+  uploads: []
+constraints:
+  max_parallel: 2
+agents:
+  - id: worker_default
+    role: worker
+    provider: openai
+    model: gpt-4.1-mini
+  - id: orchestrator_default
+    role: orchestrator
+    provider: openai
+    model: gpt-4.1-mini
+orchestration:
+  template: branched
+  inference_mode: mixed
+  behaviors:
+    - id: merge_default
+      kind: merge_and_conflict_resolution
+      agent: orchestrator_default
+      enabled: true
+  branched:
+    lanes: [lane_a, lane_b]
+  blue_red:
+    loop_unit: per_task
+  custom:
+    cells: []
+tasks:
+  - id: t1
+    title: Missing route
+    completed: false
+outputs:
+  required_artifacts: []

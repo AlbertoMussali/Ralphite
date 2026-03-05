@@ -176,18 +176,8 @@ class PhaseTimelineScreen(Vertical):
             table.move_cursor(row=table.row_count - 1, column=0)
 
     def _build_phase_progress(self, run) -> str:
-        phase_nodes = (
-            run.metadata.get("phase_nodes", {})
-            if isinstance(run.metadata.get("phase_nodes"), dict)
-            else run.metadata.get("v2_phase_nodes", {})
-            if isinstance(run.metadata.get("v2_phase_nodes"), dict)
-            else {}
-        )
-        phase_groups = (
-            run.metadata.get("phase_parallel_groups", {})
-            if isinstance(run.metadata.get("phase_parallel_groups"), dict)
-            else {}
-        )
+        phase_nodes = run.metadata.get("phase_nodes", {}) if isinstance(run.metadata.get("phase_nodes"), dict) else {}
+        phase_groups: dict[str, list[dict[str, object]]] = {}
         if not phase_nodes:
             return "No phase metadata available."
 
@@ -232,7 +222,9 @@ class PhaseTimelineScreen(Vertical):
             result = node.result or {}
             reason = result.get("reason", "unknown") if isinstance(result, dict) else "unknown"
             next_action = result.get("next_action", "inspect timeline") if isinstance(result, dict) else "inspect timeline"
-            failures.append(f"- {node_id}: reason={reason}; next={next_action}")
+            command_hint = result.get("command_hint", "") if isinstance(result, dict) else ""
+            suffix = f"; cmd={command_hint}" if command_hint else ""
+            failures.append(f"- {node_id}: reason={reason}; next={next_action}{suffix}")
         if not failures:
             return "No failures."
         return "Failure Summary:\n" + "\n".join(failures[:8])
@@ -288,7 +280,7 @@ class PhaseTimelineScreen(Vertical):
             self._summary().update(f"Run {run_id} not found")
             return
 
-        done_phases = run.metadata.get("phase_done", run.metadata.get("v2_phase_done", []))
+        done_phases = run.metadata.get("phase_done", [])
         recovery = run.metadata.get("recovery", {})
         status = present_run_status(run.status)
         nodes = list(run.nodes.values())

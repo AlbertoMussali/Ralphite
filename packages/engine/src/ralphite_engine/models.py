@@ -89,6 +89,17 @@ class ArtifactIndex(BaseModel):
     items: list[dict[str, str]] = Field(default_factory=list)
 
 
+class RunMetrics(BaseModel):
+    compile_seconds: float = 0.0
+    execution_seconds: float = 0.0
+    cleanup_seconds: float = 0.0
+    total_seconds: float = 0.0
+    node_status_counts: dict[str, int] = Field(default_factory=dict)
+    node_role_counts: dict[str, int] = Field(default_factory=dict)
+    failure_reason_counts: dict[str, int] = Field(default_factory=dict)
+    retry_count: int = 0
+
+
 class HistoryIndex(BaseModel):
     runs: list[RunViewState] = Field(default_factory=list)
 

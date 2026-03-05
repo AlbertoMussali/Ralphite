@@ -13,7 +13,7 @@ This directory contains canonical fixture assets for confidence tests that valid
 - `branched_two_lane.yaml`: branched split/join flow with two lanes and trunk post step.
 - `blue_red_per_task.yaml`: per-task blue/red cycle orchestration.
 - `custom_linear_cells.yaml`: explicit custom cell DSL flow (`pre -> merge -> post`).
-- `invalid_v4_legacy.yaml`: legacy v4 fixture used to assert migrate guidance.
+- `invalid_v5_routing.yaml`: invalid v5 fixture used to assert routing diagnostics.
 
 ## Fixture Contract
 

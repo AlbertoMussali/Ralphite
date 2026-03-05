@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  tui-engine:
+  unit-integration:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +24,60 @@ jobs:
           pip install -e packages/engine
           pip install -e apps/tui
           pip install pytest
-      - name: Run tests
+      - name: Run unit and integration suites
         run: pytest packages/engine/tests apps/tui/tests -q
-      - name: Ralphite check
-        run: ralphite check --workspace . --release-gate
+
+  fixture-confidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv
+          pip install -e packages/schemas/python
+          pip install -e packages/engine
+          pip install -e apps/tui
+          pip install pytest
+      - name: Run fixture confidence suites
+        run: |
+          pytest \
+            packages/engine/tests/test_fixture_plan_matrix.py \
+            packages/engine/tests/test_dispatched_plan_consistency.py \
+            apps/tui/tests/test_bootstrap_e2e.py \
+            apps/tui/tests/test_run_setup_resolved_preview_contract.py -q
+
+  bootstrap-release-gate-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv
+          pip install -e packages/schemas/python
+          pip install -e packages/engine
+          pip install -e apps/tui
+          pip install pytest
+      - name: Quickstart bootstrap smoke
+        run: |
+          mkdir -p /tmp/ralphite-smoke
+          ralphite quickstart --workspace /tmp/ralphite-smoke --bootstrap --no-tui --yes --output json
+      - name: Release gate smoke (repo deterministic)
+        run: |
+          mkdir -p /tmp/ralphite-release-gate
+          ralphite check --workspace /tmp/ralphite-release-gate --release-gate --output json

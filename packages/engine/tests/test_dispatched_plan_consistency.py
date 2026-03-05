@@ -72,6 +72,7 @@ def test_runtime_dispatched_graph_matches_validate_resolved_graph(tmp_path: Path
     assert bundle_path.exists()
     bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
     assert bundle.get("plan_path") == run.plan_path
+    assert isinstance(bundle.get("metrics"), dict)
     nodes = bundle.get("nodes", {})
     assert isinstance(nodes, dict)
     assert set(nodes.keys()) == expected_node_ids

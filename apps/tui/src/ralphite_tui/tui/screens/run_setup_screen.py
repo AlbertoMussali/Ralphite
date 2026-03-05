@@ -435,7 +435,7 @@ class RunSetupScreen(Vertical):
         self._latest_validation_issues = [issue for issue in issues if isinstance(issue, dict)]
         self._rebuild_task_badges()
         task_counts = summary.get("task_counts", {})
-        cell_counts = summary.get("cell_counts", summary.get("block_counts", {}))
+        cell_counts = summary.get("cell_counts", {})
         recommended_commands = summary.get("recommended_commands", []) if isinstance(summary, dict) else []
         if not isinstance(recommended_commands, list):
             recommended_commands = []

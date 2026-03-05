@@ -79,8 +79,8 @@ class RecoveryScreen(Vertical):
         unresolved = preflight.get("unresolved_conflict_files", []) if isinstance(preflight.get("unresolved_conflict_files"), list) else []
         next_commands = preflight.get("next_commands", []) if isinstance(preflight.get("next_commands"), list) else []
 
-        lines = [f"Preflight: {'PASS' if preflight.get('ok') else 'FAIL'}", "", "Checks:"]
-        lines.extend([f"- {'OK' if check.get('ok') else 'FAIL'} {check.get('name')}: {check.get('detail')}" for check in checks])
+        lines = [f"Preflight: {'PASS' if preflight.get('ok') else 'FAIL'}", "", "Blocking reasons:"]
+        lines.extend([f"- {item}" for item in blocking] or ["- none"])
         lines.append("")
         lines.append("Conflict files:")
         lines.extend([f"- {item}" for item in conflict_files] or ["- none"])
@@ -91,10 +91,18 @@ class RecoveryScreen(Vertical):
         lines.append("Next commands:")
         lines.extend([f"- {item}" for item in next_commands] or ["- none"])
         lines.append("")
-        lines.append("Blocking reasons:")
-        lines.extend([f"- {item}" for item in blocking] or ["- none"])
+        lines.append("Checks:")
+        lines.extend([f"- {'OK' if check.get('ok') else 'FAIL'} {check.get('name')}: {check.get('detail')}" for check in checks])
 
         self._guidance().update("\n".join(lines))
+
+    def _recommended_mode(self, run) -> tuple[str, str]:
+        recovery = run.metadata.get("recovery", {}) if isinstance(run.metadata.get("recovery"), dict) else {}
+        details = recovery.get("details", {}) if isinstance(recovery.get("details"), dict) else {}
+        conflict_files = details.get("conflict_files", []) if isinstance(details.get("conflict_files"), list) else []
+        if conflict_files:
+            return "manual", "conflict files detected"
+        return "agent_best_effort", "no explicit conflict files detected"
 
     def _resume_ready(self, selected_mode: str, prompt: str | None) -> tuple[bool, str]:
         if selected_mode not in {"manual", "agent_best_effort", "abort_phase"}:
@@ -118,10 +126,12 @@ class RecoveryScreen(Vertical):
         conflict_files = details.get("conflict_files", []) if isinstance(details.get("conflict_files"), list) else []
         status = present_run_status(run.status)
         mode_label = present_recovery_mode(recovery.get("selected_mode"))
+        recommended_mode, recommended_reason = self._recommended_mode(run)
         ready, reason = self._resume_ready(str(recovery.get("selected_mode") or ""), self._prompt())
         self._status().update(
             f"Run {run.id} | status={status.label} | recovery={recovery.get('status', 'none')} | "
             f"mode={mode_label} | conflicts={len(conflict_files)}\n"
+            f"Recommended mode: {present_recovery_mode(recommended_mode)} ({recommended_reason})\n"
             f"Next: {status.next_action}\nResume gate: {'ready' if ready else 'blocked'} ({reason})"
         )
 

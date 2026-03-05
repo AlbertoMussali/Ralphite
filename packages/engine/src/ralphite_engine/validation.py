@@ -17,7 +17,7 @@ from ralphite_schemas.validation import ValidationError, compile_plan, validate_
 
 
 UNSUPPORTED_VERSION_MESSAGE = (
-    "Unsupported plan version. Use version 5 unified YAML (tasks + orchestration + agents)."
+    "Invalid plan version. Ralphite executes only version: 5 unified YAML (tasks + orchestration + agents)."
 )
 
 
@@ -136,11 +136,9 @@ def _recommended_commands(
     *,
     plan_path: str | Path | None = None,
 ) -> list[str]:
-    commands: list[str] = []
-    if any(str(issue.get("code") or "") == "version.unsupported" for issue in issues):
-        suffix = f" --plan {Path(plan_path).as_posix()}" if plan_path else " --plan <PLAN_PATH>"
-        commands.append(f"uv run ralphite migrate{suffix}")
-    return commands
+    _ = issues
+    _ = plan_path
+    return []
 
 
 def validate_plan_content(
@@ -165,7 +163,7 @@ def validate_plan_content(
     if version != 5:
         issues = [
             {
-                "code": "version.unsupported",
+                "code": "version.invalid",
                 "message": UNSUPPORTED_VERSION_MESSAGE,
                 "path": "version",
                 "level": "error",
@@ -174,7 +172,7 @@ def validate_plan_content(
         issues = _dedupe_and_sort_issues(issues)
         return False, issues, {
             "version": version,
-            "supported_versions": [5],
+            "expected_version": 5,
             "recommended_commands": _recommended_commands(issues, plan_path=plan_path),
         }
 
@@ -207,7 +205,7 @@ def validate_plan_content(
     )
 
     pending_tasks = [task for task in tasks if not task.completed]
-    block_counts = {
+    cell_counts = {
         "sequential": 0,
         "parallel": 0,
         "orchestrator": 0,
@@ -216,10 +214,10 @@ def validate_plan_content(
     if runtime is not None:
         for block in runtime.blocks:
             kind = str(block.kind or "other")
-            if kind in block_counts:
-                block_counts[kind] += 1
+            if kind in cell_counts:
+                cell_counts[kind] += 1
             else:
-                block_counts["other"] += 1
+                cell_counts["other"] += 1
     tools, mcps = _collect_profile_tools(plan)
     runtime_nodes = len(runtime.nodes) if runtime is not None else 0
     runtime_edges = (
@@ -287,8 +285,7 @@ def validate_plan_content(
             "pending": len(pending_tasks),
             "completed": len([task for task in tasks if task.completed]),
         },
-        "cell_counts": block_counts,
-        "block_counts": dict(block_counts),
+        "cell_counts": cell_counts,
         "tasks_status": {"status": "ok" if not parse_issues else "issues"},
         "task_parse_issues": parse_issues,
         "recovery_readiness": _git_recovery_readiness(workspace_root),

@@ -76,5 +76,5 @@ Examples:
 1. Validate plan in `Run Setup`.
 2. Use `Apply Safe Fixes` to generate preview diff.
 3. Choose `Accept Fixes` or `Reject Fixes`.
-4. Confirm row badges (`Title`, `Deps`, `Agent`, `Group`) are `OK`.
+4. Confirm row badges (`Title`, `Deps`, `Agent`, `Routing`, `Acceptance`) are `OK`.
 5. Save revision and start run.

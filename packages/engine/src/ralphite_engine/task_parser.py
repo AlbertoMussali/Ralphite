@@ -12,7 +12,6 @@ class ParsedTask:
     title: str
     description: str
     order: int
-    parallel_group: int
     depends_on: list[str]
     agent: str | None
     completed: bool
@@ -37,11 +36,6 @@ def parse_plan_tasks(plan: PlanSpecV5) -> tuple[list[ParsedTask], list[str]]:
             continue
         seen_ids.add(task.id)
 
-        group = int(task.parallel_group or 0)
-        if group < 0:
-            issues.append(f"task '{task.id}' has invalid parallel_group '{group}'")
-            group = 0
-
         required_artifacts: list[dict[str, str]] = []
         for artifact in task.acceptance.required_artifacts:
             required_artifacts.append(
@@ -58,7 +52,6 @@ def parse_plan_tasks(plan: PlanSpecV5) -> tuple[list[ParsedTask], list[str]]:
                 title=task.title,
                 description=(task.description or "").strip(),
                 order=idx,
-                parallel_group=group,
                 depends_on=list(task.deps or []),
                 agent=task.agent,
                 completed=bool(task.completed),

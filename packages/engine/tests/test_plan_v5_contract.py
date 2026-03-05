@@ -41,6 +41,8 @@ def test_plan_v5_model_and_json_schema_are_aligned() -> None:
     constraints_props = schema["properties"]["constraints"]["properties"]
     assert constraints_props["acceptance_timeout_seconds"]["default"] == 120
     assert constraints_props["max_retries_per_node"]["default"] == 0
+    task_props = schema["properties"]["tasks"]["items"]["properties"]
+    assert "parallel_group" not in task_props
     defaults = ConstraintsSpecV5()
     assert defaults.acceptance_timeout_seconds == 120
     assert defaults.max_retries_per_node == 0

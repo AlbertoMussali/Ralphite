@@ -54,7 +54,6 @@ def test_parse_plan_tasks_reads_yaml_tasks() -> None:
                 "id": "t2",
                 "title": "Build",
                 "completed": False,
-                "parallel_group": 1,
                 "deps": ["t1"],
                 "routing": {"lane": "lane_a", "cell": "par_core", "team_mode": None, "group": None, "tags": ["core"]},
                 "acceptance": {
@@ -71,7 +70,6 @@ def test_parse_plan_tasks_reads_yaml_tasks() -> None:
     assert issues == []
     assert len(tasks) == 3
     assert tasks[0].id == "t1"
-    assert tasks[1].parallel_group == 1
     assert tasks[1].depends_on == ["t1"]
     assert tasks[1].routing_cell == "par_core"
     assert tasks[1].routing_lane == "lane_a"
@@ -83,7 +81,7 @@ def test_parse_plan_tasks_reads_yaml_tasks() -> None:
 def test_parse_plan_tasks_enforces_duplicate_ids_and_deps() -> None:
     plan = _plan(
         [
-            {"id": "t1", "title": "A", "completed": False, "parallel_group": 1},
+            {"id": "t1", "title": "A", "completed": False},
             {"id": "t1", "title": "B", "completed": False, "deps": ["missing"]},
             {"id": "t2", "title": "C", "completed": False, "deps": ["missing"]},
         ]

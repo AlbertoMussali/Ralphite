@@ -1,4 +1,4 @@
-.PHONY: install test init doctor run recover history replay migrate check tui
+.PHONY: install test init doctor run recover history replay check tui
 
 install:
 	python3 -m venv .venv
@@ -21,9 +21,6 @@ history:
 
 replay:
 	uv run ralphite replay $(RUN_ID) --workspace $(WORKSPACE_ROOT)
-
-migrate:
-	uv run ralphite migrate --workspace $(WORKSPACE_ROOT) --strict
 
 check:
 	uv run ralphite check --workspace $(WORKSPACE_ROOT) --full

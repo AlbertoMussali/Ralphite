@@ -17,9 +17,10 @@ Requirements:
 
 ```bash
 uv run ralphite init --workspace .
+uv run ralphite init --workspace . --yes --template blue_red --plan-id starter_blue_red --name "Starter Blue Red"
 ```
 
-This creates `.ralphite/` folders and seeds a starter v5 YAML plan.
+This creates `.ralphite/` folders and bootstraps a v5 plan using the selected template.
 
 Quick onboarding path:
 
@@ -61,7 +62,7 @@ Default built-in flow:
 Inference mode is mixed:
 
 - explicit `routing.cell` wins
-- otherwise SPS can infer using task order + `parallel_group`
+- otherwise SPS defaults unmatched tasks into `seq_pre`
 
 ### `branched`
 
@@ -136,10 +137,10 @@ uv run --with pytest pytest \
   apps/tui/tests/test_run_setup_resolved_preview_contract.py -q
 ```
 
-Migrate legacy plan:
+Run deterministic release gate (repo-root suites, independent of workspace plan state):
 
 ```bash
-uv run ralphite migrate --workspace . --plan .ralphite/plans/legacy.yaml
+uv run ralphite check --workspace . --release-gate --output json
 ```
 
 Recovery:
@@ -151,7 +152,7 @@ uv run ralphite recover --workspace . --run-id <RUN_ID> --mode agent_best_effort
 
 Machine-readable JSON envelopes (`schema_version: cli-output.v1`) are available for:
 
-- `quickstart`, `validate`, `migrate`, `doctor`, `run`, `recover`, `history`, `replay`, `check`
+- `quickstart`, `validate`, `doctor`, `run`, `recover`, `history`, `replay`, `check`
 - `tui` supports JSON only with `--dry-run`
 
 Recover exit codes:
@@ -173,8 +174,8 @@ Recover exit codes:
 - behavior resolution issues (unknown behavior/agent)
 - routing issues (unmapped tasks for template requirements)
 - `summary.resolved_execution` with resolved cells/nodes/assignment/warnings
-- `data.recommended_commands` with direct fix commands (for example migrate v4 -> v5)
-- `summary.cell_counts` and compatibility alias `summary.block_counts`
+- `data.recommended_commands` with direct fix commands when applicable
+- `summary.cell_counts`
 - dispatched-plan consistency is covered in fixture E2E tests (validation graph == runtime metadata graph)
 
 ## 8) Completion Write-Back
@@ -190,7 +191,7 @@ After successful run completion, task completion write-back follows `[run].task_
 Unsupported plan version:
 
 - runtime accepts only `version: 5`
-- convert with `ralphite migrate`
+- re-author the plan in `version: 5` format
 
 Recovery blocked:
 

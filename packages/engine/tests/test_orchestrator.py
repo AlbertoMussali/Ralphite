@@ -55,14 +55,12 @@ tasks:
   - id: t2
     title: Build A
     completed: false
-    parallel_group: 1
     deps: [t1]
     routing:
       cell: par_core
   - id: t3
     title: Build B
     completed: false
-    parallel_group: 1
     deps: [t1]
     routing:
       cell: par_core
@@ -190,6 +188,8 @@ def test_goal_plan_run_succeeds(tmp_path: Path) -> None:
     assert run is not None
     assert run.status in {"succeeded", "failed"}
     assert any(item["id"] == "final_report" for item in run.artifacts)
+    assert any(item["id"] == "run_metrics" for item in run.artifacts)
+    assert isinstance(run.metadata.get("run_metrics"), dict)
 
 
 def test_cancel_run(tmp_path: Path) -> None:

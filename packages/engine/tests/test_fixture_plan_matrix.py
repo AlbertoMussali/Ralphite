@@ -33,17 +33,15 @@ def test_valid_plan_fixtures_resolve_cells_and_nodes(fixture_name: str) -> None:
     nodes = resolved.get("resolved_nodes", [])
     assert isinstance(cells, list) and len(cells) > 0
     assert isinstance(nodes, list) and len(nodes) > 0
-    assert summary.get("cell_counts") == summary.get("block_counts")
+    assert isinstance(summary.get("cell_counts"), dict)
 
 
-def test_invalid_v4_fixture_surfaces_migrate_guidance() -> None:
-    plan_path = PLAN_FIXTURES / "invalid_v4_legacy.yaml"
+def test_invalid_v5_fixture_surfaces_routing_diagnostics() -> None:
+    plan_path = PLAN_FIXTURES / "invalid_v5_routing.yaml"
     valid, issues, summary = validate_plan_content(plan_path.read_text(encoding="utf-8"), plan_path=str(plan_path))
     assert valid is False
-    assert any(str(issue.get("code")) == "version.unsupported" for issue in issues)
-    recommended = summary.get("recommended_commands", [])
-    assert isinstance(recommended, list)
-    assert any("ralphite migrate" in command for command in recommended)
+    assert any(str(issue.get("code")) in {"tasks.unassigned", "tasks.routing.missing"} for issue in issues)
+    assert summary.get("expected_version", 5) == 5
 
 
 @pytest.mark.parametrize("name", ["default_profile.toml", "strict_profile.toml"])

@@ -62,11 +62,11 @@ def _base_plan() -> dict:
 def test_compile_execution_structure_enforces_block_order() -> None:
     data = _base_plan()
     data["tasks"] = [
-        {"id": "t1", "title": "Prep", "completed": False},
-        {"id": "t2", "title": "Exec A", "completed": False, "parallel_group": 1, "deps": ["t1"]},
-        {"id": "t3", "title": "Exec B", "completed": False, "parallel_group": 1, "deps": ["t1"]},
-        {"id": "t4", "title": "Exec C", "completed": False, "parallel_group": 2, "deps": ["t2", "t3"]},
-        {"id": "t5", "title": "Verify", "completed": False, "deps": ["t4"]},
+        {"id": "t1", "title": "Prep", "completed": False, "routing": {"cell": "seq_pre"}},
+        {"id": "t2", "title": "Exec A", "completed": False, "deps": ["t1"], "routing": {"cell": "par_core"}},
+        {"id": "t3", "title": "Exec B", "completed": False, "deps": ["t1"], "routing": {"cell": "par_core"}},
+        {"id": "t4", "title": "Exec C", "completed": False, "deps": ["t2", "t3"], "routing": {"cell": "seq_post"}},
+        {"id": "t5", "title": "Verify", "completed": False, "deps": ["t4"], "routing": {"cell": "seq_post"}},
     ]
     plan = PlanSpecV5.model_validate(data)
 
@@ -87,7 +87,6 @@ def test_compile_execution_structure_enforces_block_order() -> None:
     assert [block.kind for block in runtime.blocks] == [
         "sequential",
         "orchestrator",
-        "parallel",
         "parallel",
         "orchestrator",
         "sequential",

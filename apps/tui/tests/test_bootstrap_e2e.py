@@ -2,18 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import shutil
 
 import pytest
 from typer.testing import CliRunner
 
 import ralphite_tui.cli as cli_mod
 from ralphite_tui.cli import app
-
-
-def _legacy_fixture_path() -> Path:
-    root = Path(__file__).resolve().parents[3]
-    return root / "packages" / "engine" / "tests" / "fixtures" / "plans" / "invalid_v4_legacy.yaml"
 
 
 def test_quickstart_bootstrap_succeeds_and_initializes_workspace(tmp_path: Path) -> None:
@@ -38,6 +32,9 @@ def test_quickstart_bootstrap_succeeds_and_initializes_workspace(tmp_path: Path)
     assert (tmp_path / ".ralphite" / "config.toml").exists()
     plans = list((tmp_path / ".ralphite" / "plans").glob("*.yaml"))
     assert plans
+    data = payload.get("data", {})
+    assert isinstance(data.get("bootstrap_paths"), list)
+    assert isinstance(data.get("total_elapsed_seconds"), (int, float))
 
 
 def test_quickstart_no_bootstrap_fails_with_doctor_guidance(tmp_path: Path) -> None:
@@ -113,17 +110,43 @@ def test_quickstart_surfaces_step_timing_and_artifacts(tmp_path: Path) -> None:
     step_timing = data.get("step_timing", [])
     assert isinstance(step_timing, list) and step_timing
     steps = [str(item.get("step")) for item in step_timing if isinstance(item, dict)]
-    assert {"Doctor", "Plan Selection", "Capability Approval", "Run"}.issubset(set(steps))
+    assert {"Doctor", "Bootstrap", "Plan Selection", "Capability Approval", "Run"}.issubset(set(steps))
     artifacts = data.get("artifacts", [])
     assert isinstance(artifacts, list)
     assert any(isinstance(item, dict) and item.get("id") == "machine_bundle" for item in artifacts)
 
 
-def test_validate_v4_fixture_returns_explicit_migrate_command(tmp_path: Path) -> None:
+@pytest.mark.parametrize("template", ["general_sps", "branched", "blue_red", "custom"])
+def test_init_bootstrap_generates_v5_plan_for_template(tmp_path: Path, template: str) -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "init",
+            "--workspace",
+            str(tmp_path),
+            "--yes",
+            "--template",
+            template,
+            "--plan-id",
+            f"plan_{template}",
+            "--name",
+            f"Plan {template}",
+        ],
+    )
+    assert result.exit_code == 0
+    plan_path = tmp_path / ".ralphite" / "plans" / f"plan_{template}.yaml"
+    assert plan_path.exists()
+    content = plan_path.read_text(encoding="utf-8")
+    assert "version: 5" in content
+    assert f"template: {template}" in content
+
+
+def test_validate_non_v5_returns_version_invalid(tmp_path: Path) -> None:
     plans = tmp_path / ".ralphite" / "plans"
     plans.mkdir(parents=True, exist_ok=True)
-    legacy = plans / "legacy_v4.yaml"
-    shutil.copy2(_legacy_fixture_path(), legacy)
+    invalid = plans / "legacy.yaml"
+    invalid.write_text("version: 4\nplan_id: x\nname: x\n", encoding="utf-8")
 
     runner = CliRunner()
     result = runner.invoke(
@@ -133,13 +156,10 @@ def test_validate_v4_fixture_returns_explicit_migrate_command(tmp_path: Path) ->
             "--workspace",
             str(tmp_path),
             "--plan",
-            str(legacy),
+            str(invalid),
             "--json",
         ],
     )
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    commands = payload.get("data", {}).get("recommended_commands", [])
-    actions = payload.get("next_actions", [])
-    assert any("ralphite migrate" in item for item in commands)
-    assert any("ralphite migrate" in item for item in actions)
+    assert any(item.get("code") == "version.invalid" for item in payload.get("issues", []))

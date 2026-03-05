@@ -17,7 +17,7 @@ from uuid import uuid4
 
 from ralphite_engine.config import LocalConfig, ensure_workspace_layout, load_config
 from ralphite_engine.git_worktree import GitWorktreeManager
-from ralphite_engine.models import ArtifactIndex, NodeRuntimeState, RunCheckpoint, RunPersistenceState, RunViewState
+from ralphite_engine.models import ArtifactIndex, NodeRuntimeState, RunCheckpoint, RunMetrics, RunPersistenceState, RunViewState
 from ralphite_engine.recovery import recoverable_run_ids, to_paused_for_recovery
 from ralphite_engine.run_store import RunStore
 from ralphite_engine.store import HistoryStore
@@ -142,7 +142,6 @@ class LocalOrchestrator:
         phase_map: dict[str, str] = {}
         role_map: dict[str, str] = {}
         phase_nodes: dict[str, list[str]] = defaultdict(list)
-        parallel_group_map: dict[str, int] = {}
         cell_map: dict[str, str] = {}
         team_map: dict[str, str] = {}
         behavior_map: dict[str, str] = {}
@@ -157,8 +156,6 @@ class LocalOrchestrator:
                 team_map[node.id] = node.team
             if node.behavior_kind:
                 behavior_map[node.id] = node.behavior_kind
-            if node.parallel_group is not None:
-                parallel_group_map[node.id] = int(node.parallel_group)
 
         return {
             "plan_version": 5,
@@ -170,7 +167,6 @@ class LocalOrchestrator:
             "behavior_map": behavior_map,
             "phase_nodes": dict(phase_nodes),
             "parallel_limit": int(runtime.parallel_limit),
-            "parallel_group_map": parallel_group_map,
             "task_blocks": [
                 {
                     "index": block.index,
@@ -179,7 +175,6 @@ class LocalOrchestrator:
                     "lane": block.lane,
                     "team": block.team,
                     "behavior_id": block.behavior_id,
-                    "parallel_group": block.parallel_group,
                     "node_ids": list(block.node_ids),
                     "task_ids": list(block.task_ids),
                 }
@@ -293,6 +288,7 @@ class LocalOrchestrator:
         permission_snapshot: dict[str, list[str]] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> str:
+        compile_started = time.perf_counter()
         if plan_content is None:
             source_path = self._resolve_plan_path(plan_ref)
             content = source_path.read_text(encoding="utf-8")
@@ -312,6 +308,7 @@ class LocalOrchestrator:
         plan_document = parse_plan_yaml(content)
         compile_plan(plan_document)
         runtime, runtime_meta = self._materialize_runtime_plan(plan_document)
+        compile_seconds = round(max(0.0, time.perf_counter() - compile_started), 3)
 
         profile_map = {profile.id: profile for profile in plan_document.agents}
         nodes = {
@@ -337,6 +334,7 @@ class LocalOrchestrator:
             nodes=nodes,
             metadata={
                 "plan": summary,
+                "compile_seconds": compile_seconds,
                 "permission_snapshot": snapshot,
                 "task_writeback_mode": self.config.task_writeback_mode,
                 **runtime_meta,
@@ -469,7 +467,6 @@ class LocalOrchestrator:
         run.metadata.setdefault("team_map", runtime_meta.get("team_map", {}))
         run.metadata.setdefault("behavior_map", runtime_meta.get("behavior_map", {}))
         run.metadata.setdefault("phase_nodes", runtime_meta.get("phase_nodes", {}))
-        run.metadata.setdefault("parallel_group_map", runtime_meta.get("parallel_group_map", {}))
         run.metadata.setdefault("task_blocks", runtime_meta.get("task_blocks", []))
         run.metadata.setdefault("resolved_execution", runtime_meta.get("resolved_execution", {}))
         run.metadata.setdefault("task_order_map", runtime_meta.get("task_order_map", {}))
@@ -851,7 +848,7 @@ class LocalOrchestrator:
                 message="worker task started",
                 group=phase,
                 task_id=node.id,
-                meta={"lane": lane, "parallel_group": node.parallel_group},
+                meta={"lane": lane},
             )
         elif node.role == "orchestrator":
             self._emit(
@@ -878,7 +875,7 @@ class LocalOrchestrator:
                 message="worker output integrated to phase branch",
                 group=phase,
                 task_id=node.id,
-                meta={"lane": node.lane, "parallel_group": node.parallel_group},
+                meta={"lane": node.lane},
             )
         elif node.role == "orchestrator":
             self._emit(
@@ -1021,24 +1018,66 @@ class LocalOrchestrator:
             return
 
         rec.status = "failed"
-        rec.result = result
         advice = classify_failure(reason)
+        enriched_result = dict(result)
+        enriched_result.setdefault("reason", reason)
+        enriched_result.setdefault("failure_title", advice.title)
+        enriched_result.setdefault("next_action", advice.next_action)
+        enriched_result.setdefault("command_hint", advice.command_hint)
+        rec.result = enriched_result
         self._emit(
             handle,
             stage="task",
             event="NODE_RESULT",
             level="error",
-                message=f"{advice.title}: {advice.message}",
-                group=node.group,
-                task_id=node.id,
-                meta={"status": rec.status, "reason": reason, "next_action": advice.next_action},
-            )
+            message=f"{advice.title}: {advice.message}",
+            group=node.group,
+            task_id=node.id,
+            meta={
+                "status": rec.status,
+                "reason": reason,
+                "next_action": advice.next_action,
+                "command_hint": advice.command_hint,
+            },
+        )
         self._emit_node_completed(handle, node, False)
 
         if fail_fast:
             for queued in handle.run.nodes.values():
                 if queued.status == "queued":
                     queued.status = "blocked"
+
+    def _build_run_metrics(
+        self,
+        run: RunViewState,
+        *,
+        execution_seconds: float,
+        cleanup_seconds: float,
+        total_seconds: float,
+    ) -> RunMetrics:
+        node_status_counts: dict[str, int] = {}
+        node_role_counts: dict[str, int] = {}
+        failure_reason_counts: dict[str, int] = {}
+        role_map = run.metadata.get("role_map", {}) if isinstance(run.metadata.get("role_map"), dict) else {}
+
+        for node_id, node in run.nodes.items():
+            node_status_counts[node.status] = int(node_status_counts.get(node.status, 0)) + 1
+            role = str(role_map.get(node_id) or "unknown")
+            node_role_counts[role] = int(node_role_counts.get(role, 0)) + 1
+            if node.status == "failed" and isinstance(node.result, dict):
+                reason = str(node.result.get("reason") or "runtime_error")
+                failure_reason_counts[reason] = int(failure_reason_counts.get(reason, 0)) + 1
+
+        return RunMetrics(
+            compile_seconds=round(float(run.metadata.get("compile_seconds", 0.0) or 0.0), 3),
+            execution_seconds=round(max(0.0, execution_seconds), 3),
+            cleanup_seconds=round(max(0.0, cleanup_seconds), 3),
+            total_seconds=round(max(0.0, total_seconds), 3),
+            node_status_counts=node_status_counts,
+            node_role_counts=node_role_counts,
+            failure_reason_counts=failure_reason_counts,
+            retry_count=int(run.retry_count or 0),
+        )
 
     def _write_artifacts(self, run: RunViewState) -> ArtifactIndex:
         artifacts_dir = self.paths["artifacts"] / run.id
@@ -1048,7 +1087,7 @@ class LocalOrchestrator:
         failed = len([n for n in run.nodes.values() if n.status == "failed"])
         blocked = len([n for n in run.nodes.values() if n.status == "blocked"])
 
-        phase_done = run.metadata.get("phase_done", run.metadata.get("v2_phase_done", []))
+        phase_done = run.metadata.get("phase_done", [])
         recovery = run.metadata.get("recovery", {})
         git_state = run.metadata.get("git_state", {})
         phase_states = git_state.get("phases", {}) if isinstance(git_state, dict) else {}
@@ -1060,6 +1099,29 @@ class LocalOrchestrator:
             cleanup_items.extend(str(item) for item in items)
         unresolved_conflicts = recovery.get("details", {}).get("conflict_files", []) if isinstance(recovery.get("details"), dict) else []
         recovery_history = [evt for evt in run.events if str(evt.get("event", "")).startswith("RECOVERY_")]
+
+        metrics_payload = run.metadata.get("run_metrics", {}) if isinstance(run.metadata.get("run_metrics"), dict) else {}
+        failure_histogram = (
+            metrics_payload.get("failure_reason_counts")
+            if isinstance(metrics_payload.get("failure_reason_counts"), dict)
+            else {}
+        )
+        top_failures = sorted(
+            [(str(code), int(count)) for code, count in failure_histogram.items()],
+            key=lambda item: item[1],
+            reverse=True,
+        )[:5]
+        remediation_items: list[str] = []
+        for node in run.nodes.values():
+            if node.status != "failed" or not isinstance(node.result, dict):
+                continue
+            next_action = str(node.result.get("next_action") or "").strip()
+            command_hint = str(node.result.get("command_hint") or "").strip()
+            if next_action:
+                remediation_items.append(next_action)
+            if command_hint:
+                remediation_items.append(command_hint)
+        remediation_items = sorted(dict.fromkeys(remediation_items))
 
         report = "\n".join(
             [
@@ -1095,6 +1157,16 @@ class LocalOrchestrator:
             + ([f"- unresolved conflict: {item}" for item in unresolved_conflicts] or ["- none"])
             + [
                 "",
+                "## Failure Histogram",
+            ]
+            + ([f"- {code}: {count}" for code, count in top_failures] or ["- none"])
+            + [
+                "",
+                "## Remediation Checklist",
+            ]
+            + ([f"- {item}" for item in remediation_items] or ["- none"])
+            + [
+                "",
                 "## Recovery History",
             ]
             + (
@@ -1110,6 +1182,9 @@ class LocalOrchestrator:
         report_path = artifacts_dir / "final_report.md"
         report_path.write_text(report, encoding="utf-8")
 
+        metrics_path = artifacts_dir / "run_metrics.json"
+        metrics_path.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
+
         bundle = {
             "run_id": run.id,
             "status": run.status,
@@ -1117,12 +1192,14 @@ class LocalOrchestrator:
             "retry_count": run.retry_count,
             "nodes": {k: v.model_dump(mode="json") for k, v in run.nodes.items()},
             "metadata": run.metadata,
+            "metrics": metrics_payload,
         }
         bundle_path = artifacts_dir / "machine_bundle.json"
         bundle_path.write_text(json.dumps(bundle, indent=2), encoding="utf-8")
 
         items = [
             {"id": "final_report", "path": str(report_path), "format": "markdown"},
+            {"id": "run_metrics", "path": str(metrics_path), "format": "json"},
             {"id": "machine_bundle", "path": str(bundle_path), "format": "json"},
         ]
         run.artifacts = items
@@ -1502,8 +1579,7 @@ class LocalOrchestrator:
         fail_fast = bool(handle.plan.constraints.fail_fast)
 
         steps = 0
-        started_at = time.time()
-        node_by_id = {node.id: node for node in runtime.nodes}
+        run_started = time.perf_counter()
 
         if run.status != "running":
             run.status = "running"
@@ -1522,7 +1598,7 @@ class LocalOrchestrator:
                             node.status = "blocked"
                     break
 
-                if time.time() - started_at > max_runtime:
+                if time.perf_counter() - run_started > max_runtime:
                     run.status = "failed"
                     self._emit(handle, stage="summary", event="RUN_TIMEOUT", level="error", message="run exceeded max runtime")
                     break
@@ -1620,6 +1696,7 @@ class LocalOrchestrator:
                 handle.finished_event.set()
                 return
 
+            cleanup_started = time.perf_counter()
             cleanup_notes = git_manager.cleanup_all(run.metadata.setdefault("git_state", {}))
             if cleanup_notes:
                 self._emit(
@@ -1634,6 +1711,15 @@ class LocalOrchestrator:
                 active_run_ids=self.list_active_run_ids(),
                 max_age_hours=24,
             )
+            cleanup_seconds = max(0.0, time.perf_counter() - cleanup_started)
+            total_seconds = max(0.0, time.perf_counter() - run_started)
+            execution_seconds = max(0.0, total_seconds - cleanup_seconds)
+            run.metadata["run_metrics"] = self._build_run_metrics(
+                run,
+                execution_seconds=execution_seconds,
+                cleanup_seconds=cleanup_seconds,
+                total_seconds=total_seconds,
+            ).model_dump(mode="json")
             self._finalize_terminal_run(handle, git_manager)
         except Exception as exc:  # noqa: BLE001
             run.status = "failed"
@@ -1645,4 +1731,11 @@ class LocalOrchestrator:
                 message=f"run crashed: {exc}",
                 meta={"error": str(exc)},
             )
+            total_seconds = max(0.0, time.perf_counter() - run_started)
+            run.metadata["run_metrics"] = self._build_run_metrics(
+                run,
+                execution_seconds=total_seconds,
+                cleanup_seconds=0.0,
+                total_seconds=total_seconds,
+            ).model_dump(mode="json")
             self._finalize_terminal_run(handle, git_manager)

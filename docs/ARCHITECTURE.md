@@ -45,6 +45,7 @@ Compilation stages:
 Runtime node metadata includes:
 
 - `cell_id`, `lane`, `team`, `phase`, `behavior_id`
+- run-level metrics (`compile_seconds`, `execution_seconds`, `cleanup_seconds`, `total_seconds`, failure histogram)
 
 Execution remains DAG/block-aware with:
 
@@ -81,7 +82,7 @@ Failures are typed runtime failures and participate in fail-fast/recovery behavi
 - `resolved_nodes`
 - `task_assignment`
 - `compile_warnings`
-- `cell_counts` (canonical summary metric) with `block_counts` alias retained in v5 cycle
+- `cell_counts` (canonical summary metric)
 - `recommended_commands` for direct remediation actions
 
 Fixture confidence matrix:
@@ -96,11 +97,10 @@ Run Setup is v5-native:
 - routing-aware task table (`lane`, `cell`, `team_mode`)
 - resolved run preview before execution
 
-## Migration Strategy
+## Version Policy
 
-- `ralphite migrate` performs v4 -> v5 conversion
-- conversion is idempotent for existing v5 plans
-- runtime does not execute v4 directly
+- runtime executes only `version: 5` plans
+- no non-v5 runtime path is supported
 
 ## Persistence
 
@@ -112,6 +112,8 @@ Per-run state lives in `.ralphite/runs/<run_id>/`:
 - `lock`
 
 Artifacts live in `.ralphite/artifacts/<run_id>/`.
+
+Generated artifacts include `final_report.md`, `run_metrics.json`, and `machine_bundle.json`.
 
 ## Operator Playbook
 

@@ -18,7 +18,7 @@ from ralphite_engine import (
     LocalConfig,
     LocalOrchestrator,
     apply_fix,
-    migrate_v4_to_v5,
+    make_bootstrap_plan,
     present_event,
     present_run_status,
     save_config,
@@ -109,6 +109,55 @@ def _normalize_output(output: str, json_mode: bool = False) -> str:
     if normalized in {"json", "table", "stream"}:
         return normalized
     return "table"
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[4]
+
+
+def _parse_csv_items(raw: str | None, *, default: list[str]) -> list[str]:
+    if raw is None:
+        return list(default)
+    items = [item.strip() for item in str(raw).split(",") if item.strip()]
+    return items or list(default)
+
+
+def _find_first_valid_v5_plan(orch: LocalOrchestrator) -> Path | None:
+    for plan_path in orch.list_plans():
+        valid, _issues, _summary = validate_plan_content(
+            plan_path.read_text(encoding="utf-8"),
+            workspace_root=orch.workspace_root,
+            plan_path=str(plan_path),
+        )
+        if valid:
+            return plan_path
+    return None
+
+
+def _bootstrap_plan_file(
+    orch: LocalOrchestrator,
+    *,
+    template: str,
+    goal: str | None,
+    plan_id: str | None,
+    name: str | None,
+    lanes: list[str] | None = None,
+    loop_unit: str = "per_task",
+) -> Path:
+    normalized_id = (plan_id or "starter_loop").strip() or "starter_loop"
+    normalized_name = (name or "Starter Loop").strip() or "Starter Loop"
+    plan_data = make_bootstrap_plan(
+        template=template,
+        plan_id=normalized_id,
+        name=normalized_name,
+        goal=goal,
+        branched_lanes=lanes or ["lane_a", "lane_b"],
+        blue_red_loop_unit=loop_unit,
+    )
+    base_path = orch.paths["plans"] / f"{normalized_id}.yaml"
+    target = base_path if not base_path.exists() else orch.paths["plans"] / f"{normalized_id}.{int(time.time())}.yaml"
+    target.write_text(yaml.safe_dump(plan_data, sort_keys=False, allow_unicode=False), encoding="utf-8")
+    return target
 
 
 def _doctor_snapshot(orch: LocalOrchestrator, include_fix_suggestions: bool = False) -> dict[str, Any]:
@@ -291,13 +340,10 @@ def _render_doctor_table(snapshot: dict[str, Any]) -> None:
         issues = failure.get("issues", [])
         summary = failure.get("summary", {})
         console.print(f"\n[bold red]Invalid plan:[/bold red] {plan_path}")
-        has_unsupported = False
         if isinstance(issues, list):
             for issue in issues:
                 if not isinstance(issue, dict):
                     continue
-                if str(issue.get("code")) == "version.unsupported":
-                    has_unsupported = True
                 console.print(f"  - {issue.get('code')}: {issue.get('message')} ({issue.get('path')})")
         if summary:
             console.print(f"  Summary: {summary}")
@@ -307,8 +353,6 @@ def _render_doctor_table(snapshot: dict[str, Any]) -> None:
             for cmd in recommended:
                 if isinstance(cmd, str):
                     console.print(f"  - {cmd}")
-        elif has_unsupported:
-            console.print(f"  - uv run ralphite migrate --plan {plan_path}")
 
     stale = snapshot.get("stale_artifacts", {})
     if not isinstance(stale, dict):
@@ -403,14 +447,43 @@ def _emit_payload(output: str, payload: dict[str, Any], *, title: str | None = N
 def init(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
     profile: Annotated[str | None, typer.Option(help="Profile name for local policy")] = None,
+    template: Annotated[
+        str,
+        typer.Option("--template", help="Bootstrap template: general_sps | branched | blue_red | custom"),
+    ] = "general_sps",
+    plan_id: Annotated[str | None, typer.Option(help="Optional plan_id for generated bootstrap plan")] = None,
+    name: Annotated[str | None, typer.Option(help="Optional name for generated bootstrap plan")] = None,
+    goal: Annotated[str | None, typer.Option(help="Optional goal text for bootstrap plan tasks")] = None,
+    branched_lanes: Annotated[str | None, typer.Option(help="Comma-separated branched lane names")] = None,
+    blue_red_loop_unit: Annotated[str, typer.Option(help="blue_red.loop_unit value")] = "per_task",
     yes: Annotated[bool, typer.Option("--yes", help="Use defaults without prompts")] = False,
 ) -> None:
-    """Initialize a local-first Ralphite workspace."""
-    orch = _orchestrator(workspace)
+    """Initialize a local-first Ralphite workspace and bootstrap a v5 plan."""
+    orch = _orchestrator(workspace, bootstrap=False)
 
     profile_name = profile or orch.config.profile_name
     if not yes and profile is None:
         profile_name = typer.prompt("Profile name", default=orch.config.profile_name)
+    effective_template = (template or "general_sps").strip()
+    if not yes and template == "general_sps":
+        effective_template = typer.prompt(
+            "Template",
+            default="general_sps",
+        ).strip() or "general_sps"
+    allowed_templates = {"general_sps", "branched", "blue_red", "custom"}
+    if effective_template not in allowed_templates:
+        raise typer.BadParameter(f"template must be one of: {', '.join(sorted(allowed_templates))}")
+
+    effective_plan_id = (plan_id or "starter_loop").strip() or "starter_loop"
+    effective_name = (name or "Starter Loop").strip() or "Starter Loop"
+    if not yes and plan_id is None:
+        effective_plan_id = typer.prompt("Plan ID", default=effective_plan_id).strip() or effective_plan_id
+    if not yes and name is None:
+        effective_name = typer.prompt("Plan name", default=effective_name).strip() or effective_name
+    lanes = _parse_csv_items(branched_lanes, default=["lane_a", "lane_b"])
+    if not yes and effective_template == "branched" and branched_lanes is None:
+        lane_prompt = typer.prompt("Branched lanes (comma-separated)", default="lane_a,lane_b")
+        lanes = _parse_csv_items(lane_prompt, default=lanes)
 
     config = LocalConfig(
         workspace_root=str(orch.workspace_root),
@@ -426,12 +499,37 @@ def init(
     cfg_path = save_config(orch.workspace_root, config)
     seeded = seed_starter_if_missing(orch.paths["plans"])
 
+    reused_plan = _find_first_valid_v5_plan(orch)
+    create_new = (
+        reused_plan is None
+        or goal is not None
+        or plan_id is not None
+        or name is not None
+        or template != "general_sps"
+        or branched_lanes is not None
+        or blue_red_loop_unit != "per_task"
+    )
+    generated_plan: Path | None = None
+    if create_new:
+        generated_plan = _bootstrap_plan_file(
+            orch,
+            template=effective_template,
+            goal=goal,
+            plan_id=effective_plan_id,
+            name=effective_name,
+            lanes=lanes,
+            loop_unit=blue_red_loop_unit,
+        )
+    selected_plan = generated_plan or reused_plan or seeded
+
     console.print(f"Initialized workspace: [bold]{orch.workspace_root}[/bold]")
     console.print(f"Config: {cfg_path}")
-    if seeded:
-        console.print(f"Seeded starter plan: {seeded}")
+    if generated_plan:
+        console.print(f"Generated bootstrap plan: {generated_plan}")
+    elif selected_plan:
+        console.print(f"Bootstrap plan: {selected_plan}")
     else:
-        console.print("Starter plan already present.")
+        console.print("Bootstrap plan already present.")
 
 @app.command()
 def quickstart(
@@ -449,6 +547,7 @@ def quickstart(
     verbose: Annotated[bool, typer.Option("--verbose", help="Show extra event guidance")] = False,
 ) -> None:
     """Run guided first-run flow: doctor -> plan -> run."""
+    flow_started = time.perf_counter()
     mode = _normalize_output(output)
     if mode == "json" and not no_tui:
         payload = _result_payload(
@@ -468,6 +567,7 @@ def quickstart(
     plans_dir = workspace_root / ".ralphite" / "plans"
     plans_before = plans_dir.exists() and any(path.suffix.lower() in {".yaml", ".yml"} for path in plans_dir.glob("*"))
     orch = _orchestrator(workspace, bootstrap=bootstrap)
+    bootstrap_paths: list[str] = []
 
     step_index = 0
     steps: list[dict[str, Any]] = []
@@ -509,6 +609,7 @@ def quickstart(
                         "strict_doctor": strict_doctor,
                         "warnings": warning_checks,
                         "step_timing": steps,
+                        "total_elapsed_seconds": round(max(0.0, time.perf_counter() - flow_started), 3),
                     },
                 ),
                 title="Quickstart",
@@ -521,23 +622,59 @@ def quickstart(
                     console.print(f"- {cmd}")
         raise typer.Exit(code=1)
 
-    if bootstrap and mode != "json" and not quiet:
+    bootstrap_started = time.perf_counter()
+    selected_bootstrap_plan = _find_first_valid_v5_plan(orch)
+    if bootstrap and selected_bootstrap_plan is None:
+        selected_bootstrap_plan = _bootstrap_plan_file(
+            orch,
+            template="general_sps",
+            goal=goal,
+            plan_id="starter_loop",
+            name="Starter Loop",
+            lanes=["lane_a", "lane_b"],
+            loop_unit="per_task",
+        )
+        bootstrap_paths.append(str(selected_bootstrap_plan))
+    if bootstrap:
         config_after = orch.paths["config"].exists()
         plans_after = bool(orch.list_plans())
-        created: list[str] = []
         if not config_before and config_after:
-            created.append(str(orch.paths["config"]))
+            bootstrap_paths.append(str(orch.paths["config"]))
         if not plans_before and plans_after:
-            created.append(str(orch.paths["plans"]))
-        if created:
-            console.print(f"Bootstrap: initialized {', '.join(created)}")
+            bootstrap_paths.append(str(orch.paths["plans"]))
+    record_step(
+        "Bootstrap",
+        bootstrap_started,
+        "created" if bootstrap_paths else "ready",
+    )
+    if bootstrap and mode != "json" and not quiet and bootstrap_paths:
+        console.print(f"Bootstrap: initialized {', '.join(dict.fromkeys(bootstrap_paths))}")
 
     plan_started = time.perf_counter()
     plan_ref: str | None = None
     if goal:
         plan_ref = str(orch.goal_to_plan(goal))
     else:
-        plan_ref = str(_resolve_plan_ref(orch, None))
+        preferred = selected_bootstrap_plan or _find_first_valid_v5_plan(orch)
+        if preferred is None:
+            issue_message = "no valid v5 plan found"
+            payload = _result_payload(
+                command="quickstart",
+                ok=False,
+                status="failed",
+                run_id=None,
+                exit_code=1,
+                issues=[{"code": "quickstart.no_valid_plan", "message": issue_message}],
+                next_actions=["Run `ralphite init --workspace . --yes` to generate a valid v5 plan."],
+                data={
+                    "step_timing": steps,
+                    "bootstrap_paths": list(dict.fromkeys(bootstrap_paths)),
+                    "total_elapsed_seconds": round(max(0.0, time.perf_counter() - flow_started), 3),
+                },
+            )
+            _emit_payload(mode, payload, title="Quickstart")
+            raise typer.Exit(code=1)
+        plan_ref = str(preferred)
     record_step("Plan Selection", plan_started, Path(plan_ref).name if isinstance(plan_ref, str) else "none")
 
     approval_started = time.perf_counter()
@@ -558,7 +695,11 @@ def quickstart(
                 run_id=None,
                 exit_code=1,
                 issues=[{"code": "quickstart.cancelled", "message": "run aborted by user"}],
-                data={"step_timing": steps},
+                data={
+                    "step_timing": steps,
+                    "bootstrap_paths": list(dict.fromkeys(bootstrap_paths)),
+                    "total_elapsed_seconds": round(max(0.0, time.perf_counter() - flow_started), 3),
+                },
             )
             _emit_payload(mode, payload, title="Quickstart")
             raise typer.Exit(code=1)
@@ -584,7 +725,10 @@ def quickstart(
                 status=status,
                 run_id=run_id,
                 exit_code=0 if status == "succeeded" else 1,
-                next_actions=[present_run_status(status).next_action],
+                next_actions=[
+                    present_run_status(status).next_action,
+                    "Use `ralphite history --workspace . --output table` to inspect run history.",
+                ],
                 data={
                     "artifacts": run.artifacts if run else [],
                     "plan_path": str(plan_ref) if plan_ref else "",
@@ -592,6 +736,8 @@ def quickstart(
                     "required_mcps": requirements["mcps"],
                     "step_timing": steps,
                     "doctor_warnings": warning_checks,
+                    "bootstrap_paths": list(dict.fromkeys(bootstrap_paths)),
+                    "total_elapsed_seconds": round(max(0.0, time.perf_counter() - flow_started), 3),
                 },
             )
             _emit_payload(mode, payload, title="Quickstart")
@@ -631,11 +777,6 @@ def validate(
     recommended_commands = summary.get("recommended_commands", []) if isinstance(summary, dict) else []
     if not isinstance(recommended_commands, list):
         recommended_commands = []
-    if any(str(issue.get("code")) == "version.unsupported" for issue in issues):
-        recommended_commands = [
-            f"uv run ralphite migrate --workspace {orch.workspace_root} --plan {path}",
-            *[item for item in recommended_commands if isinstance(item, str)],
-        ]
     recommended_commands = [item for item in recommended_commands if isinstance(item, str) and item.strip()]
     recommended_commands = list(dict.fromkeys(recommended_commands))
     payload: dict[str, Any] = {
@@ -698,104 +839,6 @@ def validate(
         if apply_safe_fixes and payload.get("fixed_revision"):
             console.print(f"Wrote fixed revision: {payload['fixed_revision']}")
 
-    raise typer.Exit(code=0 if valid else 1)
-
-
-@app.command()
-def migrate(
-    workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
-    plan: Annotated[str | None, typer.Option(help="Plan file path or name")] = None,
-    output: Annotated[str, typer.Option("--output", help="Output mode: table | json")] = "table",
-    json_mode: Annotated[bool, typer.Option("--json", help="Emit machine-readable output")] = False,
-    strict: Annotated[bool, typer.Option("--strict", help="Fail when converted plan still has validation issues")] = False,
-    in_place: Annotated[bool, typer.Option("--in-place", help="Overwrite original plan path")] = False,
-) -> None:
-    """Migrate a v4 plan to v5 orchestration format."""
-    orch = _orchestrator(workspace)
-    mode = _normalize_output(output, json_mode=json_mode)
-    path = _resolve_plan_ref(orch, plan)
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        payload = _result_payload(
-            command="migrate",
-            ok=False,
-            status="failed",
-            run_id=None,
-            exit_code=1,
-            issues=[{"code": "yaml.invalid", "message": "plan content must be a YAML object"}],
-        )
-        _emit_payload(mode, payload, title="Migrate")
-        raise typer.Exit(code=1)
-
-    version = int(raw.get("version", 1) or 1)
-    if version == 5:
-        envelope = _result_payload(
-            command="migrate",
-            ok=True,
-            status="succeeded",
-            run_id=None,
-            exit_code=0,
-            next_actions=["Plan is already v5; no migration required."],
-            data={"source_plan": str(path), "version": 5, "migrated": False, "target_plan": str(path)},
-        )
-        _emit_payload(mode, envelope, title="Migrate")
-        return
-    if version != 4:
-        envelope = _result_payload(
-            command="migrate",
-            ok=False,
-            status="failed",
-            run_id=None,
-            exit_code=1,
-            issues=[{"code": "version.unsupported", "message": "migrate only supports version 4 -> 5"}],
-            data={"source_plan": str(path), "version": version},
-        )
-        _emit_payload(mode, envelope, title="Migrate")
-        raise typer.Exit(code=1)
-
-    migrated = migrate_v4_to_v5(raw)
-    content = yaml.safe_dump(migrated, sort_keys=False, allow_unicode=False)
-    valid, issues, summary = validate_plan_content(
-        content,
-        workspace_root=orch.workspace_root,
-        plan_path=str(path),
-    )
-    if strict and not valid:
-        envelope = _result_payload(
-            command="migrate",
-            ok=False,
-            status="failed",
-            run_id=None,
-            exit_code=1,
-            issues=issues,
-            data={"source_plan": str(path), "version": version, "summary": summary},
-        )
-        _emit_payload(mode, envelope, title="Migrate")
-        raise typer.Exit(code=1)
-
-    if in_place:
-        target = path
-    else:
-        target = path.with_name(f"{path.stem}.v5.yaml")
-    target.write_text(content, encoding="utf-8")
-
-    envelope = _result_payload(
-        command="migrate",
-        ok=valid,
-        status="succeeded" if valid else "failed",
-        run_id=None,
-        exit_code=0 if valid else 1,
-        issues=issues,
-        next_actions=["Run `ralphite validate --plan <target>` to review diagnostics."],
-        data={
-            "source_plan": str(path),
-            "target_plan": str(target),
-            "version": 5,
-            "migrated": True,
-            "summary": summary,
-        },
-    )
-    _emit_payload(mode, envelope, title="Migrate")
     raise typer.Exit(code=0 if valid else 1)
 
 
@@ -1124,6 +1167,17 @@ def history(
                 "plan": run.plan_path,
                 "created_at": run.created_at,
                 "completed_at": run.completed_at,
+                "duration_seconds": (
+                    run.metadata.get("run_metrics", {}).get("total_seconds")
+                    if isinstance(run.metadata.get("run_metrics"), dict)
+                    else None
+                ),
+                "retry_count": int(run.retry_count or 0),
+                "failure_reasons": (
+                    run.metadata.get("run_metrics", {}).get("failure_reason_counts")
+                    if isinstance(run.metadata.get("run_metrics"), dict)
+                    else {}
+                ),
             }
             for run in rows
         ]
@@ -1149,9 +1203,22 @@ def history(
     table.add_column("Plan")
     table.add_column("Created")
     table.add_column("Completed")
+    table.add_column("Duration(s)")
+    table.add_column("Retries")
     for run in rows:
         status = present_run_status(run.status)
-        table.add_row(run.id, status.label, status.next_action, run.plan_path, run.created_at, run.completed_at or "-")
+        metrics = run.metadata.get("run_metrics", {}) if isinstance(run.metadata.get("run_metrics"), dict) else {}
+        duration = metrics.get("total_seconds", "-")
+        table.add_row(
+            run.id,
+            status.label,
+            status.next_action,
+            run.plan_path,
+            run.created_at,
+            run.completed_at or "-",
+            str(duration),
+            str(run.retry_count),
+        )
     console.print(table)
 
 
@@ -1207,80 +1274,97 @@ def replay(
 
 
 def _run_release_gate(
-    orch: LocalOrchestrator,
     *,
+    repo_root: Path,
     quiet: bool = False,
     machine_mode: bool = False,
     verbose: bool = False,
 ) -> tuple[bool, list[dict[str, Any]]]:
-    suites = [
-        [
-            "uv",
-            "run",
-            "--with",
-            "pytest",
-            "pytest",
-            "packages/engine/tests/test_task_parser.py",
-            "packages/engine/tests/test_structure_compiler.py",
-            "-q",
-        ],
-        [
-            "uv",
-            "run",
-            "--with",
-            "pytest",
-            "pytest",
-            "packages/engine/tests/test_git_worktree_integration.py",
-            "packages/engine/tests/test_orchestrator.py",
-            "packages/engine/tests/test_recovery.py",
-            "-q",
-        ],
-        [
-            "uv",
-            "run",
-            "--with",
-            "pytest",
-            "pytest",
-            "apps/tui/tests",
-            "-q",
-        ],
-        [
-            "uv",
-            "run",
-            "--with",
-            "pytest",
-            "pytest",
-            "packages/engine/tests/test_e2e_recovery.py",
-            "-q",
-        ],
-        [
-            "uv",
-            "run",
-            "--with",
-            "pytest",
-            "pytest",
-            "packages/engine/tests/test_fixture_plan_matrix.py",
-            "packages/engine/tests/test_dispatched_plan_consistency.py",
-            "apps/tui/tests/test_bootstrap_e2e.py",
-            "apps/tui/tests/test_run_setup_resolved_preview_contract.py",
-            "-q",
-        ],
+    suites: list[tuple[str, list[str]]] = [
+        (
+            "parser-compiler",
+            [
+                "uv",
+                "run",
+                "--with",
+                "pytest",
+                "pytest",
+                "packages/engine/tests/test_task_parser.py",
+                "packages/engine/tests/test_structure_compiler.py",
+                "-q",
+            ],
+        ),
+        (
+            "engine-runtime",
+            [
+                "uv",
+                "run",
+                "--with",
+                "pytest",
+                "pytest",
+                "packages/engine/tests/test_git_worktree_integration.py",
+                "packages/engine/tests/test_orchestrator.py",
+                "packages/engine/tests/test_recovery.py",
+                "-q",
+            ],
+        ),
+        (
+            "tui",
+            [
+                "uv",
+                "run",
+                "--with",
+                "pytest",
+                "pytest",
+                "apps/tui/tests",
+                "-q",
+            ],
+        ),
+        (
+            "e2e-recovery",
+            [
+                "uv",
+                "run",
+                "--with",
+                "pytest",
+                "pytest",
+                "packages/engine/tests/test_e2e_recovery.py",
+                "-q",
+            ],
+        ),
+        (
+            "fixtures-bootstrap",
+            [
+                "uv",
+                "run",
+                "--with",
+                "pytest",
+                "pytest",
+                "packages/engine/tests/test_fixture_plan_matrix.py",
+                "packages/engine/tests/test_dispatched_plan_consistency.py",
+                "apps/tui/tests/test_bootstrap_e2e.py",
+                "apps/tui/tests/test_run_setup_resolved_preview_contract.py",
+                "-q",
+            ],
+        ),
     ]
     results: list[dict[str, Any]] = []
     capture_subprocess_output = machine_mode or quiet
-    for command in suites:
+    for suite_name, command in suites:
         if not quiet and not machine_mode:
-            console.print(f"Running release gate suite: {' '.join(command)}")
+            console.print(f"Running release gate suite [{suite_name}]: {' '.join(command)}")
         result = subprocess.run(
             command,
-            cwd=orch.workspace_root,
+            cwd=repo_root,
             check=False,
             capture_output=capture_subprocess_output,
             text=True,
         )
         results.append(
             {
+                "suite": suite_name,
                 "command": " ".join(command),
+                "cwd": str(repo_root),
                 "exit_code": result.returncode,
                 "stdout": result.stdout if capture_subprocess_output and verbose else "",
                 "stderr": result.stderr if capture_subprocess_output and verbose else "",
@@ -1302,15 +1386,16 @@ def check(
 ) -> None:
     """Run baseline quality gates for local UX reliability."""
     orch = _orchestrator(workspace)
+    repo_root = _repo_root()
     mode = _normalize_output(output)
     machine_mode = mode == "json"
     capture_subprocess_output = machine_mode or quiet
 
     snapshot = _doctor_snapshot(orch, include_fix_suggestions=False)
-    if not machine_mode and not quiet:
+    if not machine_mode and not quiet and not release_gate:
         _render_doctor_table(snapshot)
     command_results: list[dict[str, Any]] = []
-    if not bool(snapshot.get("ok")):
+    if not release_gate and not bool(snapshot.get("ok")):
         envelope = _result_payload(
             command="check",
             ok=False,
@@ -1325,14 +1410,14 @@ def check(
 
     compile_targets = []
     for relative in ("packages/engine/src", "apps/tui/src"):
-        target = orch.workspace_root / relative
+        target = repo_root / relative
         if target.exists():
             compile_targets.append(relative)
     if compile_targets:
         compile_cmd = [sys.executable, "-m", "compileall", *compile_targets]
         compile_result = subprocess.run(
             compile_cmd,
-            cwd=orch.workspace_root,
+            cwd=repo_root,
             check=False,
             capture_output=capture_subprocess_output,
             text=True,
@@ -1364,7 +1449,7 @@ def check(
             console.print(f"Running: {' '.join(command)}")
         result = subprocess.run(
             command,
-            cwd=orch.workspace_root,
+            cwd=repo_root,
             check=False,
             capture_output=capture_subprocess_output,
             text=True,
@@ -1391,7 +1476,12 @@ def check(
             raise typer.Exit(code=1)
 
     if release_gate:
-        gate_ok, gate_results = _run_release_gate(orch, quiet=quiet, machine_mode=machine_mode, verbose=verbose)
+        gate_ok, gate_results = _run_release_gate(
+            repo_root=repo_root,
+            quiet=quiet,
+            machine_mode=machine_mode,
+            verbose=verbose,
+        )
         command_results.extend(gate_results)
         if not gate_ok:
             envelope = _result_payload(

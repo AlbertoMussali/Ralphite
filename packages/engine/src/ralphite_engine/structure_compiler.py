@@ -25,7 +25,6 @@ class RuntimeNodeSpec:
     behavior_id: str | None = None
     behavior_kind: str | None = None
     source_task_id: str | None = None
-    parallel_group: int | None = None
     block_index: int = 0
     acceptance: dict[str, Any] | None = None
 
@@ -40,7 +39,6 @@ class RuntimeBlockSpec:
     behavior_id: str | None
     node_ids: list[str]
     task_ids: list[str]
-    parallel_group: int
 
 
 @dataclass(slots=True)
@@ -76,29 +74,6 @@ class _BehaviorChoice:
     behavior_id: str | None
     behavior_kind: str
     agent_id: str
-
-
-def _segment_tasks(tasks: list[ParsedTask]) -> list[tuple[str, list[ParsedTask], int]]:
-    segments: list[tuple[str, list[ParsedTask], int]] = []
-    idx = 0
-    while idx < len(tasks):
-        current = tasks[idx]
-        if int(current.parallel_group or 0) > 0:
-            group = int(current.parallel_group or 0)
-            bucket: list[ParsedTask] = []
-            while idx < len(tasks) and int(tasks[idx].parallel_group or 0) == group:
-                bucket.append(tasks[idx])
-                idx += 1
-            segments.append(("parallel", bucket, group))
-            continue
-
-        bucket = [current]
-        idx += 1
-        while idx < len(tasks) and int(tasks[idx].parallel_group or 0) <= 0:
-            bucket.append(tasks[idx])
-            idx += 1
-        segments.append(("sequential", bucket, 0))
-    return segments
 
 
 def compile_execution_structure(
@@ -206,7 +181,6 @@ def compile_execution_structure(
         behavior_id: str | None,
         node_ids: list[str],
         task_ids: list[str],
-        parallel_group: int,
     ) -> None:
         blocks.append(
             RuntimeBlockSpec(
@@ -218,7 +192,6 @@ def compile_execution_structure(
                 behavior_id=behavior_id,
                 node_ids=list(node_ids),
                 task_ids=list(task_ids),
-                parallel_group=parallel_group,
             )
         )
         resolved_cells.append(
@@ -254,7 +227,6 @@ def compile_execution_structure(
         node_ids: list[str] = []
         task_ids: list[str] = []
         local_anchor = list(active_anchor)
-        pg = int(segment_tasks[0].parallel_group or 0) if segment_kind == "parallel" else 0
 
         for task in segment_tasks:
             agent_id = task.agent or first_worker
@@ -276,7 +248,6 @@ def compile_execution_structure(
                 cell_id=cell_id,
                 team=team,
                 source_task_id=task.id,
-                parallel_group=int(task.parallel_group or 0) if segment_kind == "parallel" else None,
                 block_index=block_index,
                 acceptance=task_acceptance_payload(task),
             )
@@ -296,7 +267,6 @@ def compile_execution_structure(
             behavior_id=None,
             node_ids=node_ids,
             task_ids=task_ids,
-            parallel_group=pg,
         )
         block_index += 1
         if base_anchor is None:
@@ -353,7 +323,6 @@ def compile_execution_structure(
             behavior_id=choice.behavior_id,
             node_ids=[node_id],
             task_ids=[],
-            parallel_group=0,
         )
         block_index += 1
         if base_anchor is None:
@@ -361,13 +330,12 @@ def compile_execution_structure(
         return [node_id]
 
     if plan.orchestration.template == OrchestrationTemplate.GENERAL_SPS:
-        first_parallel_idx = next((idx for idx, row in enumerate(pending_tasks) if int(row.parallel_group or 0) > 0), -1)
         explicit_cell_map = {task.id: (task.routing_cell or "").strip() for task in pending_tasks}
 
         seq_pre: list[ParsedTask] = []
         par_core: list[ParsedTask] = []
         seq_post: list[ParsedTask] = []
-        for idx, task in enumerate(pending_tasks):
+        for task in pending_tasks:
             explicit = explicit_cell_map.get(task.id)
             if explicit:
                 if explicit in {"seq_pre", "seq_prelude"}:
@@ -377,14 +345,10 @@ def compile_execution_structure(
                 elif explicit in {"seq_post", "seq_postlude"}:
                     seq_post.append(task)
                 else:
-                    warnings.append(f"task '{task.id}' has unknown routing.cell '{explicit}', defaulting by inference")
-            else:
-                if int(task.parallel_group or 0) > 0:
-                    par_core.append(task)
-                elif first_parallel_idx < 0 or idx < first_parallel_idx:
+                    warnings.append(f"task '{task.id}' has unknown routing.cell '{explicit}', defaulting to seq_pre")
                     seq_pre.append(task)
-                else:
-                    seq_post.append(task)
+            else:
+                seq_pre.append(task)
 
         if seq_pre:
             append_worker_segment(
@@ -394,12 +358,14 @@ def compile_execution_structure(
                 lane="sequential",
             )
         append_orchestrator_cell(cell_id="orch_merge_1", fallback_kind=BehaviorKind.MERGE_AND_CONFLICT_RESOLUTION)
-        for seg_idx, (kind, seg_tasks, _group) in enumerate(_segment_tasks(par_core), start=1):
+        if not par_core:
+            warnings.append("general_sps has no tasks mapped to par_core; continuing with orchestrator merge cells only")
+        for seg_idx, seg_tasks in enumerate([par_core] if par_core else [], start=1):
             append_worker_segment(
                 cell_id=f"par_core_{seg_idx}",
-                segment_kind=kind,
+                segment_kind="parallel",
                 segment_tasks=seg_tasks,
-                lane="parallel" if kind == "parallel" else "sequential",
+                lane="parallel",
             )
         append_orchestrator_cell(cell_id="orch_merge_2", fallback_kind=BehaviorKind.MERGE_AND_CONFLICT_RESOLUTION)
         if seq_post:
@@ -439,12 +405,12 @@ def compile_execution_structure(
         lane_merge_nodes: list[str] = []
         for lane in lanes:
             lane_anchor = list(split_anchor)
-            segments = _segment_tasks(sorted(lane_tasks.get(lane, []), key=lambda row: row.order))
-            for seg_idx, (kind, seg_tasks, _group) in enumerate(segments, start=1):
+            lane_rows = sorted(lane_tasks.get(lane, []), key=lambda row: row.order)
+            if lane_rows:
                 lane_anchor = append_worker_segment(
-                    cell_id=f"{lane}_seg_{seg_idx}",
-                    segment_kind=kind,
-                    segment_tasks=seg_tasks,
+                    cell_id=f"{lane}_seg_1",
+                    segment_kind="sequential",
+                    segment_tasks=lane_rows,
                     lane=lane,
                     base_anchor=lane_anchor,
                 )
@@ -567,6 +533,7 @@ def compile_execution_structure(
             )
 
     node_by_id = {node.id: node for node in nodes}
+    node_position = {node.id: idx for idx, node in enumerate(nodes)}
     for node in nodes:
         if node.role != "worker" or not node.source_task_id:
             continue
@@ -582,9 +549,18 @@ def compile_execution_structure(
                 issues.append(f"task '{task.id}' has self dependency")
                 continue
             dep_node = node_by_id.get(dep_node_id)
-            if dep_node and dep_node.block_index >= node.block_index and dep_node.id != node.id:
+            if dep_node and dep_node.block_index > node.block_index and dep_node.id != node.id:
                 issues.append(
-                    f"task '{task.id}' depends on '{dep_task_id}' from same or later block; forward dependencies are not allowed"
+                    f"task '{task.id}' depends on '{dep_task_id}' from a later block; forward dependencies are not allowed"
+                )
+                continue
+            if (
+                dep_node
+                and dep_node.block_index == node.block_index
+                and node_position.get(dep_node_id, -1) >= node_position.get(node.id, -1)
+            ):
+                issues.append(
+                    f"task '{task.id}' depends on '{dep_task_id}' from the same block but non-prior order"
                 )
                 continue
             if dep_node_id not in node.depends_on:
@@ -639,7 +615,6 @@ def compile_execution_structure(
             "behavior_id": node.behavior_id,
             "behavior_kind": node.behavior_kind,
             "source_task_id": node.source_task_id,
-            "parallel_group": node.parallel_group,
             "block_index": node.block_index,
             "acceptance": node.acceptance or {},
         }
