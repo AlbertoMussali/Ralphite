@@ -115,6 +115,23 @@ def _assert_matches_cli_schema(payload: dict[str, Any]) -> None:
     assert isinstance(payload["data"], dict)
 
 
+def _assert_execution_summary(summary: dict[str, Any]) -> None:
+    assert isinstance(summary.get("plan_path"), str)
+    assert isinstance(summary.get("backend"), str)
+    assert isinstance(summary.get("model"), str)
+    assert isinstance(summary.get("reasoning_effort"), str)
+    assert isinstance(summary.get("duration_seconds"), (int, float))
+    assert isinstance(summary.get("artifacts_count"), int)
+    capabilities = summary.get("capabilities")
+    assert isinstance(capabilities, dict)
+    tools = capabilities.get("tools")
+    mcps = capabilities.get("mcps")
+    assert isinstance(tools, dict)
+    assert isinstance(mcps, dict)
+    assert isinstance(tools.get("summary"), str)
+    assert isinstance(mcps.get("summary"), str)
+
+
 def test_check_json_envelope_contains_schema_version(tmp_path: Path) -> None:
     LocalOrchestrator(tmp_path)
     runner = CliRunner()
@@ -127,6 +144,24 @@ def test_check_json_envelope_contains_schema_version(tmp_path: Path) -> None:
     assert payload["schema_version"] == "cli-output.v1"
     assert payload["command"] == "check"
     assert isinstance(payload["data"].get("doctor"), dict)
+
+
+def test_execution_summary_present_for_doctor_run_and_quickstart(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    invocations = [
+        ["doctor", "--workspace", str(tmp_path), "--output", "json"],
+        ["run", "--workspace", str(tmp_path), "--yes", "--output", "json"],
+        ["quickstart", "--workspace", str(tmp_path), "--yes", "--output", "json"],
+    ]
+    for args in invocations:
+        result = runner.invoke(app, args)
+        assert result.exit_code in {0, 1}
+        payload = json.loads(result.stdout)
+        summary = payload.get("data", {}).get("execution_summary")
+        assert isinstance(summary, dict)
+        _assert_execution_summary(summary)
 
 
 def test_replay_json_envelope_contains_schema_version(tmp_path: Path) -> None:

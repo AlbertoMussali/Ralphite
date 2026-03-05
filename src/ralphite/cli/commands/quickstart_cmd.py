@@ -9,11 +9,14 @@ import typer
 from ralphite.engine import present_run_status
 
 from ..core import (
+    _build_capability_summary,
+    _build_execution_summary,
     _bootstrap_plan_file,
     _emit_payload,
     _find_first_valid_plan,
     _normalize_output,
     _orchestrator,
+    _print_preflight_summary,
     _print_run_stream,
     _result_payload,
     console,
@@ -75,6 +78,10 @@ def quickstart_command(
     )
     orch = _orchestrator(workspace, bootstrap=bootstrap)
     bootstrap_paths: list[str] = []
+    selected_backend = backend or orch.config.default_backend
+    selected_model = model or orch.config.default_model
+    selected_reasoning_effort = reasoning_effort or orch.config.default_reasoning_effort
+    empty_capabilities = _build_capability_summary({"tools": [], "mcps": []})
 
     step_index = 0
     steps: list[dict[str, Any]] = []
@@ -124,6 +131,17 @@ def quickstart_command(
                         "doctor": snapshot,
                         "strict_doctor": strict_doctor,
                         "warnings": warning_checks,
+                        "execution_summary": _build_execution_summary(
+                            plan_path="",
+                            backend=selected_backend,
+                            model=selected_model,
+                            reasoning_effort=selected_reasoning_effort,
+                            capabilities=empty_capabilities,
+                            duration_seconds=round(
+                                max(0.0, time.perf_counter() - flow_started), 3
+                            ),
+                            artifacts_count=0,
+                        ),
                         "step_timing": steps,
                         "total_elapsed_seconds": round(
                             max(0.0, time.perf_counter() - flow_started), 3
@@ -193,6 +211,17 @@ def quickstart_command(
                 data={
                     "step_timing": steps,
                     "bootstrap_paths": list(dict.fromkeys(bootstrap_paths)),
+                    "execution_summary": _build_execution_summary(
+                        plan_path=str(plan_ref or ""),
+                        backend=selected_backend,
+                        model=selected_model,
+                        reasoning_effort=selected_reasoning_effort,
+                        capabilities=empty_capabilities,
+                        duration_seconds=round(
+                            max(0.0, time.perf_counter() - flow_started), 3
+                        ),
+                        artifacts_count=0,
+                    ),
                     "total_elapsed_seconds": round(
                         max(0.0, time.perf_counter() - flow_started), 3
                     ),
@@ -209,10 +238,17 @@ def quickstart_command(
 
     approval_started = time.perf_counter()
     requirements = orch.collect_requirements(plan_ref=plan_ref)
+    capabilities = _build_capability_summary(requirements)
     approved = True
     if not quiet and mode != "json":
-        console.print(f"Required tools: {requirements['tools'] or ['none']}")
-        console.print(f"Required mcps: {requirements['mcps'] or ['none']}")
+        _print_preflight_summary(
+            title="Quickstart Preflight",
+            plan_path=str(plan_ref or ""),
+            backend=selected_backend,
+            model=selected_model,
+            reasoning_effort=selected_reasoning_effort,
+            capabilities=capabilities,
+        )
 
     if not yes:
         approved = typer.confirm(
@@ -232,6 +268,17 @@ def quickstart_command(
                 data={
                     "step_timing": steps,
                     "bootstrap_paths": list(dict.fromkeys(bootstrap_paths)),
+                    "execution_summary": _build_execution_summary(
+                        plan_path="",
+                        backend=selected_backend,
+                        model=selected_model,
+                        reasoning_effort=selected_reasoning_effort,
+                        capabilities=empty_capabilities,
+                        duration_seconds=round(
+                            max(0.0, time.perf_counter() - flow_started), 3
+                        ),
+                        artifacts_count=0,
+                    ),
                     "total_elapsed_seconds": round(
                         max(0.0, time.perf_counter() - flow_started), 3
                     ),
@@ -242,6 +289,8 @@ def quickstart_command(
     record_step(
         "Capability Approval", approval_started, "approved" if approved else "cancelled"
     )
+    if mode != "json" and not quiet:
+        console.print("Starting execution...")
 
     run_started = time.perf_counter()
     run_id = orch.start_run(
@@ -262,7 +311,6 @@ def quickstart_command(
     orch.wait_for_run(run_id, timeout=60.0)
     run = orch.get_run(run_id)
     status = run.status if run else "unknown"
-    run_status = status
     record_step("Run", run_started, status)
     payload = _result_payload(
         command="quickstart",
@@ -282,10 +330,20 @@ def quickstart_command(
             "step_timing": steps,
             "doctor_warnings": warning_checks,
             "bootstrap_paths": list(dict.fromkeys(bootstrap_paths)),
-            "backend": backend or orch.config.default_backend,
-            "model": model or orch.config.default_model,
-            "reasoning_effort": reasoning_effort
-            or orch.config.default_reasoning_effort,
+            "backend": selected_backend,
+            "model": selected_model,
+            "reasoning_effort": selected_reasoning_effort,
+            "execution_summary": _build_execution_summary(
+                plan_path=str(plan_ref) if plan_ref else "",
+                backend=selected_backend,
+                model=selected_model,
+                reasoning_effort=selected_reasoning_effort,
+                capabilities=capabilities,
+                duration_seconds=round(
+                    max(0.0, time.perf_counter() - flow_started), 3
+                ),
+                artifacts_count=len(run.artifacts) if run else 0,
+            ),
             "total_elapsed_seconds": round(
                 max(0.0, time.perf_counter() - flow_started), 3
             ),

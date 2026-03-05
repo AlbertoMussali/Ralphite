@@ -28,3 +28,19 @@ Source file: `src/ralphite/cli/app.py`
 
 - `schema_version: cli-output.v1`
 - `command`, `ok`, `status`, `run_id`, `exit_code`, `issues`, `next_actions`, `data`
+
+## Additive `data` Fields
+
+The envelope version remains `cli-output.v1`. New product polish fields are additive under `data`.
+
+For `doctor`, `quickstart`, and `run`, `data.execution_summary` may include:
+
+- `plan_path`
+- `backend`
+- `model`
+- `reasoning_effort`
+- `capabilities`
+- `duration_seconds`
+- `artifacts_count`
+
+`capabilities` is a summary object intended for operator-facing UX and may include per-group summaries for tools and MCP servers.

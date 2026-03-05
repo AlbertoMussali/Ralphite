@@ -19,12 +19,138 @@ from ralphite.engine import (
     LocalOrchestrator,
     make_bootstrap_plan,
     present_event,
+    present_recovery_mode,
     present_run_status,
     validate_plan_content,
 )
 
 CLI_OUTPUT_SCHEMA_VERSION = "cli-output.v1"
 console = Console()
+
+
+def _dedupe_strings(items: list[str]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        cleaned = str(item).strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        unique.append(cleaned)
+    return unique
+
+
+def _summarize_capability_group(
+    kind: str, entries: list[str]
+) -> dict[str, object]:
+    normalized = _dedupe_strings(entries)
+    singular = "tool" if kind == "tool" else "MCP server"
+    plural = "tools" if kind == "tool" else "MCP servers"
+    wildcard = f"{kind}:*"
+    named = [item.split(":", 1)[1] for item in normalized if ":" in item]
+
+    if not normalized:
+        summary = f"No {plural} requested by the selected plan."
+        scope = "none"
+    elif wildcard in normalized:
+        summary = f"All {plural} declared by the selected plan."
+        scope = "all"
+    elif len(named) == 1:
+        summary = f"1 {singular}: {named[0]}"
+        scope = "selected"
+    else:
+        preview = ", ".join(named[:3])
+        if len(named) > 3:
+            preview = f"{preview}, +{len(named) - 3} more"
+        summary = f"{len(named)} {plural}: {preview}"
+        scope = "selected"
+
+    return {
+        "entries": normalized,
+        "count": len(normalized),
+        "scope": scope,
+        "summary": summary,
+    }
+
+
+def _build_capability_summary(
+    requirements: dict[str, list[str]] | None = None,
+) -> dict[str, object]:
+    payload = requirements or {"tools": [], "mcps": []}
+    tools = payload.get("tools", []) if isinstance(payload, dict) else []
+    mcps = payload.get("mcps", []) if isinstance(payload, dict) else []
+    tool_summary = _summarize_capability_group(
+        "tool",
+        tools if isinstance(tools, list) else [],
+    )
+    mcp_summary = _summarize_capability_group(
+        "mcp",
+        mcps if isinstance(mcps, list) else [],
+    )
+    return {
+        "tools": tool_summary,
+        "mcps": mcp_summary,
+        "approval_scope": (
+            "Approval covers the tool and MCP access declared by the selected plan "
+            "for this run."
+        ),
+    }
+
+
+def _build_execution_summary(
+    *,
+    plan_path: str,
+    backend: str,
+    model: str,
+    reasoning_effort: str,
+    capabilities: dict[str, object],
+    duration_seconds: float | int,
+    artifacts_count: int,
+) -> dict[str, object]:
+    return {
+        "plan_path": plan_path,
+        "backend": backend,
+        "model": model,
+        "reasoning_effort": reasoning_effort,
+        "capabilities": capabilities,
+        "duration_seconds": round(max(0.0, float(duration_seconds)), 3),
+        "artifacts_count": max(0, int(artifacts_count)),
+    }
+
+
+def _print_preflight_summary(
+    *,
+    title: str,
+    plan_path: str,
+    backend: str,
+    model: str,
+    reasoning_effort: str,
+    capabilities: dict[str, object],
+) -> None:
+    tool_summary = capabilities.get("tools", {})
+    mcp_summary = capabilities.get("mcps", {})
+    lines = [
+        f"Plan: {plan_path or 'No plan selected'}",
+        f"Backend: {backend}",
+        f"Model: {model}",
+        f"Reasoning effort: {reasoning_effort}",
+        str(tool_summary.get("summary", "No tools requested.")),
+        str(mcp_summary.get("summary", "No MCP servers requested.")),
+        str(
+            capabilities.get(
+                "approval_scope",
+                "Approval covers the capabilities declared by the plan.",
+            )
+        ),
+    ]
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title=f"[bold]{title}[/bold]",
+            border_style="blue",
+            expand=False,
+        )
+    )
 
 
 def _orchestrator(workspace: Path, *, bootstrap: bool = True) -> LocalOrchestrator:
@@ -189,9 +315,11 @@ def _emit_payload(
 
     lines: list[str] = []
     status = present_run_status(str(payload.get("status", "")))
-    status_color = "green" if status.severity == "info" else ("yellow" if status.severity == "warn" else "red")
+    status_color = (
+        "green" if status.severity == "info" else "yellow" if status.severity == "warn" else "red"
+    )
     lines.append(f"Status: [{status_color}]{status.label}[/{status_color}]")
-    
+
     run_id = payload.get("run_id")
     if isinstance(run_id, str) and run_id.strip():
         lines.append(f"Run ID: {run_id}")
@@ -201,24 +329,116 @@ def _emit_payload(
         plan_path = data.get("plan_path")
         if isinstance(plan_path, str) and plan_path.strip():
             lines.append(f"Plan: {plan_path}")
-            
+
+    execution_summary = (
+        data.get("execution_summary")
+        if isinstance(data, dict) and isinstance(data.get("execution_summary"), dict)
+        else {}
+    )
+    if execution_summary:
+        backend = execution_summary.get("backend")
+        model = execution_summary.get("model")
+        reasoning_effort = execution_summary.get("reasoning_effort")
+        duration_seconds = execution_summary.get("duration_seconds")
+        artifacts_count = execution_summary.get("artifacts_count")
+        if isinstance(backend, str) and backend.strip():
+            lines.append(f"Backend: {backend}")
+        if isinstance(model, str) and model.strip():
+            lines.append(f"Model: {model}")
+        if isinstance(reasoning_effort, str) and reasoning_effort.strip():
+            lines.append(f"Reasoning effort: {reasoning_effort}")
+        if isinstance(duration_seconds, (int, float)):
+            lines.append(f"Duration: {round(float(duration_seconds), 3)}s")
+        if isinstance(artifacts_count, int):
+            lines.append(f"Artifacts found: {artifacts_count}")
+
     content = "\n".join(lines)
-    
-    artifacts = data.get("artifacts") if isinstance(data, dict) and isinstance(data.get("artifacts"), list) else []
-    
+
+    artifacts = (
+        data.get("artifacts")
+        if isinstance(data, dict) and isinstance(data.get("artifacts"), list)
+        else []
+    )
+
     renderables = [Text.from_markup(content)]
-    
+
+    capabilities = execution_summary.get("capabilities", {})
+    if isinstance(capabilities, dict):
+        tool_summary = capabilities.get("tools", {})
+        mcp_summary = capabilities.get("mcps", {})
+        capability_lines: list[str] = []
+        if isinstance(tool_summary, dict) and tool_summary.get("summary"):
+            capability_lines.append(str(tool_summary["summary"]))
+        if isinstance(mcp_summary, dict) and mcp_summary.get("summary"):
+            capability_lines.append(str(mcp_summary["summary"]))
+        if capability_lines:
+            renderables.append(Text("\nCapability scope:", style="bold"))
+            for line in capability_lines:
+                renderables.append(Text(f"- {line}"))
+
+    issues = payload.get("issues", [])
+    if isinstance(issues, list) and issues:
+        top_issue = issues[0]
+        if isinstance(top_issue, dict):
+            renderables.append(Text(""))
+            renderables.append(Text("Top issue:", style="bold red"))
+            renderables.append(
+                Text(
+                    f"{top_issue.get('code')}: {top_issue.get('message')}",
+                    style="red",
+                )
+            )
+
+    actions = payload.get("next_actions", [])
+    if isinstance(actions, list) and actions:
+        next_action = actions[0]
+        renderables.append(Text(""))
+        renderables.append(Text("Next action:", style="bold blue"))
+        renderables.append(Text(str(next_action)))
+
+    if isinstance(data, dict):
+        primary_failure_reason = data.get("primary_failure_reason")
+        if isinstance(primary_failure_reason, str) and primary_failure_reason.strip():
+            renderables.append(Text(""))
+            renderables.append(Text("Failure signal:", style="bold"))
+            renderables.append(Text(primary_failure_reason))
+
+        recovery_mode = data.get("recovery_mode")
+        if isinstance(recovery_mode, str) and recovery_mode.strip():
+            renderables.append(Text(""))
+            renderables.append(Text("Recovery mode:", style="bold"))
+            display_mode = present_recovery_mode(recovery_mode)
+            renderables.append(
+                Text(display_mode if display_mode != "Not Selected" else recovery_mode)
+            )
+
+        preflight = data.get("preflight")
+        if isinstance(preflight, dict):
+            blockers = preflight.get("blocking_reasons", [])
+            if isinstance(blockers, list) and blockers:
+                renderables.append(Text(""))
+                renderables.append(Text("Recovery blockers:", style="bold yellow"))
+                for item in blockers:
+                    renderables.append(Text(f"- {item}"))
+            next_commands = preflight.get("next_commands", [])
+            if isinstance(next_commands, list) and next_commands:
+                renderables.append(Text(""))
+                renderables.append(Text("Suggested commands:", style="bold blue"))
+                for item in next_commands:
+                    renderables.append(Text(f"- {item}"))
+
     if artifacts:
         tree = Tree(f"[bold]Artifacts ({len(artifacts)})[/bold]")
         shown = 0
         for item in artifacts:
             if not isinstance(item, dict):
                 continue
+            artifact_id = str(item.get("id") or "artifact")
             path = item.get("path")
             if not isinstance(path, str) or not path:
                 continue
             shown += 1
-            tree.add(path)
+            tree.add(f"{artifact_id}: {path}")
             if shown >= 5:
                 break
         if len(artifacts) > shown:
@@ -226,25 +446,10 @@ def _emit_payload(
         renderables.append(Text(""))
         renderables.append(tree)
 
-    issues = payload.get("issues", [])
-    if isinstance(issues, list) and issues:
-        renderables.append(Text("\nIssues:", style="bold red"))
-        for issue in issues:
-            if isinstance(issue, dict):
-                renderables.append(Text(f"- {issue.get('code')}: {issue.get('message')}"))
-            else:
-                renderables.append(Text(f"- {issue}"))
-
-    actions = payload.get("next_actions", [])
-    if isinstance(actions, list) and actions:
-        renderables.append(Text("\nNext actions:", style="bold blue"))
-        for item in actions:
-            renderables.append(Text(f"- {item}"))
-
     panel = Panel(
         Group(*renderables),
         title=f"[bold]{title}[/bold]" if title else "[bold]Result Payload[/bold]",
         expand=False,
-        border_style="blue"
+        border_style="blue",
     )
     console.print(panel)

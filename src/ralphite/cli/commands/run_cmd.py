@@ -8,10 +8,14 @@ import typer
 from ralphite.engine import present_run_status
 
 from ..core import (
+    _build_capability_summary,
+    _build_execution_summary,
     _emit_payload,
     _normalize_output,
     _orchestrator,
+    _print_preflight_summary,
     _print_run_stream,
+    _resolve_plan_ref,
     _result_payload,
     console,
 )
@@ -48,18 +52,27 @@ def run_command(
     """Run a plan immediately in headless mode."""
     orch = _orchestrator(workspace)
     output_mode = _normalize_output(output)
+    selected_backend = backend or orch.config.default_backend
+    selected_model = model or orch.config.default_model
+    selected_reasoning_effort = reasoning_effort or orch.config.default_reasoning_effort
 
     plan_ref = plan
     if goal:
         generated = orch.goal_to_plan(goal)
         plan_ref = str(generated)
-        if not quiet and output_mode != "json":
-            console.print(f"Generated plan from goal: {generated}")
+    selected_plan_path = str(_resolve_plan_ref(orch, plan_ref))
 
     requirements = orch.collect_requirements(plan_ref=plan_ref)
+    capabilities = _build_capability_summary(requirements)
     if not quiet and output_mode != "json":
-        console.print(f"Required tools: {requirements['tools'] or ['none']}")
-        console.print(f"Required mcps: {requirements['mcps'] or ['none']}")
+        _print_preflight_summary(
+            title="Run Preflight",
+            plan_path=selected_plan_path,
+            backend=selected_backend,
+            model=selected_model,
+            reasoning_effort=selected_reasoning_effort,
+            capabilities=capabilities,
+        )
 
     if not yes:
         approved = typer.confirm(
@@ -96,13 +109,28 @@ def run_command(
         next_actions=[present_run_status(status).next_action],
         data={
             "artifacts": run_state.artifacts if run_state else [],
-            "plan_path": str(plan_ref or ""),
+            "plan_path": selected_plan_path,
             "required_tools": requirements["tools"],
             "required_mcps": requirements["mcps"],
-            "backend": backend or orch.config.default_backend,
-            "model": model or orch.config.default_model,
-            "reasoning_effort": reasoning_effort
-            or orch.config.default_reasoning_effort,
+            "backend": selected_backend,
+            "model": selected_model,
+            "reasoning_effort": selected_reasoning_effort,
+            "execution_summary": _build_execution_summary(
+                plan_path=selected_plan_path,
+                backend=selected_backend,
+                model=selected_model,
+                reasoning_effort=selected_reasoning_effort,
+                capabilities=capabilities,
+                duration_seconds=(
+                    run_state.metadata.get("run_metrics", {}).get("total_seconds", 0.0)
+                    if run_state
+                    and isinstance(run_state.metadata.get("run_metrics"), dict)
+                    else 0.0
+                ),
+                artifacts_count=(
+                    len(run_state.artifacts) if run_state else 0
+                ),
+            ),
         },
     )
     _emit_payload(output_mode, payload, title="Run Result")

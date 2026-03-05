@@ -4,18 +4,31 @@ Ralphite is a local-first, CLI-first multi-agent execution system for **v1 YAML 
 
 Last verified against commit: 70b0c1f
 
-## 5-Minute Quickstart
+## Codex-First Happy Path
 
-Requirements: Python 3.13+, `uv`, `git`, `rg`, and `codex` in PATH.
+Requirements: Python 3.13+, `uv`, `git`, `rg`, and `codex` in `PATH`.
 
 ```bash
 uv run ralphite init --workspace .
-uv run ralphite quickstart --workspace . --yes --output stream
-uv run ralphite run --workspace . --yes --output stream
+uv run ralphite quickstart --workspace . --yes --output table
+uv run ralphite run --workspace . --yes --output table
 ```
+
+What this should do:
+
+- `init` creates `.ralphite/config.toml` and a starter v1 plan.
+- `quickstart` runs `doctor`, bootstraps missing workspace state, shows the selected plan/backend/model/capability scope, and starts a first run.
+- `run` executes the selected plan directly and returns a result with run id, next action, and artifact paths.
+
+If the happy path fails:
+
+- `uv run ralphite doctor --workspace . --output table`
+- `uv run ralphite history --workspace . --output table`
+- `uv run ralphite recover --workspace . --output table`
 
 ## What To Read Next
 
+- First-run operator guide: [docs/workflows/first-run.md](docs/workflows/first-run.md)
 - Doc hub: [docs/index.md](docs/index.md)
 - User workflows: [docs/workflows/index.md](docs/workflows/index.md)
 - Architecture detail: [docs/architecture/index.md](docs/architecture/index.md)

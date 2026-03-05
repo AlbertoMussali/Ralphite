@@ -22,6 +22,22 @@ uv run --no-sync ralphite check --workspace /tmp/ralphite-strict-check --strict 
 
 Run without skip env flags and capture command outputs.
 
+## Manual Cold-Start Verification
+
+Run a fresh temp-workspace walkthrough:
+
+```bash
+tmpdir="$(mktemp -d /tmp/ralphite-release-XXXXXX)"
+uv run ralphite quickstart --workspace "$tmpdir" --yes --output table
+```
+
+Confirm that:
+
+- `doctor` shows a healthy readiness table
+- `quickstart` prints plan/backend/model/capability preflight details
+- non-JSON output surfaces run id, next action, and artifact paths
+- raw wildcard literals such as `tool:*` / `mcp:*` do not leak into operator-facing CLI text
+
 ## Sign-Off Artifact
 
 Record in release notes:
@@ -30,4 +46,5 @@ Record in release notes:
 - commit SHA
 - executed command list
 - pass/fail outcomes
+- cold-start verification outcome
 - any waived warnings + rationale

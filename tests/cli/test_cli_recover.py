@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -8,6 +9,7 @@ from ralphite.engine import LocalOrchestrator
 from ralphite.cli.cli import (
     RECOVER_EXIT_INVALID_INPUT,
     RECOVER_EXIT_NO_RECOVERABLE,
+    RECOVER_EXIT_PREFLIGHT_FAILED,
     RECOVER_EXIT_SUCCESS,
     app,
 )
@@ -96,3 +98,35 @@ def test_cli_recover_preflight_only_success(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == RECOVER_EXIT_SUCCESS
+    payload = json.loads(result.stdout)
+    assert payload["data"]["recovery_mode"] == "Manual"
+    assert payload["data"]["preflight"]["ok"] is True
+
+
+def test_cli_recover_preflight_reports_blockers_and_mode(tmp_path: Path) -> None:
+    orch = LocalOrchestrator(tmp_path)
+    marker = tmp_path / ".ralphite" / "force_merge_conflict"
+    marker.write_text("phase-1", encoding="utf-8")
+    run_id = orch.start_run(plan_content=_plan_content())
+    assert orch.wait_for_run(run_id, timeout=8.0)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "recover",
+            "--workspace",
+            str(tmp_path),
+            "--run-id",
+            run_id,
+            "--mode",
+            "agent_best_effort",
+            "--preflight-only",
+            "--json",
+        ],
+    )
+    assert result.exit_code == RECOVER_EXIT_PREFLIGHT_FAILED
+    payload = json.loads(result.stdout)
+    assert payload["data"]["recovery_mode"] == "Best Effort Agent"
+    blockers = payload["data"]["preflight"]["blocking_reasons"]
+    assert any("requires a non-empty prompt" in item for item in blockers)

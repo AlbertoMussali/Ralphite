@@ -5,7 +5,7 @@ from typing import Annotated
 
 import typer
 
-from ralphite.engine import present_run_status
+from ralphite.engine import present_recovery_mode, present_run_status
 
 from ..core import (
     _emit_payload,
@@ -25,6 +25,27 @@ from ..exit_codes import (
     RECOVER_EXIT_TERMINAL_FAILURE,
     RECOVER_EXIT_UNRECOVERABLE,
 )
+
+
+def _primary_failure_reason(run: object) -> str:
+    metadata = (
+        getattr(run, "metadata", {})
+        if isinstance(getattr(run, "metadata", {}), dict)
+        else {}
+    )
+    metrics = metadata.get("run_metrics", {})
+    if not isinstance(metrics, dict):
+        return ""
+    histogram = metrics.get("failure_reason_counts", {})
+    if not isinstance(histogram, dict) or not histogram:
+        return ""
+    ranked = sorted(
+        [(str(code), int(count)) for code, count in histogram.items()],
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    code, count = ranked[0]
+    return f"{code} ({count})"
 
 
 def recover_command(
@@ -133,6 +154,8 @@ def recover_command(
         raise typer.Exit(code=RECOVER_EXIT_INVALID_INPUT)
 
     preflight = orch.recovery_preflight(target)
+    recovery_label = present_recovery_mode(mode)
+    recovered_run = orch.get_run(target)
     if preflight_only:
         exit_code = (
             RECOVER_EXIT_SUCCESS
@@ -154,7 +177,12 @@ def recover_command(
             next_actions=list(preflight.get("blocking_reasons", []))
             if isinstance(preflight, dict)
             else [],
-            data={"preflight": preflight},
+            data={
+                "preflight": preflight,
+                "plan_path": recovered_run.plan_path if recovered_run else "",
+                "recovery_mode": recovery_label,
+                "primary_failure_reason": _primary_failure_reason(recovered_run),
+            },
         )
         _emit_payload(output_mode, payload, title="Recovery Preflight")
         raise typer.Exit(code=exit_code)
@@ -175,7 +203,12 @@ def recover_command(
             next_actions=list(preflight.get("blocking_reasons", []))
             if isinstance(preflight, dict)
             else [],
-            data={"preflight": preflight},
+            data={
+                "preflight": preflight,
+                "plan_path": recovered_run.plan_path if recovered_run else "",
+                "recovery_mode": recovery_label,
+                "primary_failure_reason": _primary_failure_reason(recovered_run),
+            },
         )
         _emit_payload(output_mode, payload, title="Recovery")
         raise typer.Exit(code=RECOVER_EXIT_PREFLIGHT_FAILED)
@@ -188,7 +221,12 @@ def recover_command(
             run_id=target,
             exit_code=RECOVER_EXIT_PENDING,
             next_actions=["Run `ralphite recover --resume` to continue."],
-            data={"preflight": preflight},
+            data={
+                "preflight": preflight,
+                "plan_path": recovered_run.plan_path if recovered_run else "",
+                "recovery_mode": recovery_label,
+                "primary_failure_reason": _primary_failure_reason(recovered_run),
+            },
         )
         _emit_payload(output_mode, payload, title="Recovery")
         raise typer.Exit(code=RECOVER_EXIT_PENDING)
@@ -208,7 +246,12 @@ def recover_command(
                 if isinstance(latest_preflight, dict)
                 else []
             ),
-            data={"preflight": latest_preflight},
+            data={
+                "preflight": latest_preflight,
+                "plan_path": recovered_run.plan_path if recovered_run else "",
+                "recovery_mode": recovery_label,
+                "primary_failure_reason": _primary_failure_reason(recovered_run),
+            },
         )
         _emit_payload(output_mode, payload, title="Recovery")
         raise typer.Exit(code=RECOVER_EXIT_PENDING)
@@ -234,11 +277,27 @@ def recover_command(
         status=status,
         run_id=target,
         exit_code=exit_code,
-        next_actions=[present_run_status(status).next_action],
-        data={"artifacts": run.artifacts if run else []},
+        next_actions=[
+            present_run_status(status).next_action,
+            *(
+                list(preflight.get("next_commands", []))
+                if isinstance(preflight, dict)
+                and isinstance(preflight.get("next_commands"), list)
+                else []
+            ),
+        ],
+        data={
+            "artifacts": run.artifacts if run else [],
+            "plan_path": run.plan_path if run else "",
+            "preflight": preflight,
+            "recovery_mode": recovery_label,
+            "primary_failure_reason": _primary_failure_reason(run),
+        },
     )
     _emit_payload(output_mode, payload, title="Recovery Result")
     if exit_code != RECOVER_EXIT_SUCCESS and output_mode != "stream":
         raise typer.Exit(code=exit_code)
     if not quiet and output_mode != "json":
-        console.print(f"Recovery mode set and resumed for run: [bold]{target}[/bold]")
+        console.print(
+            f"Recovery mode set and resumed for run: [bold]{target}[/bold] ({recovery_label})"
+        )

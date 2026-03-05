@@ -36,6 +36,28 @@ def history_command(
     rows = orch.list_history(limit=limit, query=query)
     mode = _normalize_output(output)
 
+    def primary_failure_reason(run) -> str:
+        metrics = (
+            run.metadata.get("run_metrics", {})
+            if isinstance(run.metadata.get("run_metrics"), dict)
+            else {}
+        )
+        counts = (
+            metrics.get("failure_reason_counts")
+            if isinstance(metrics.get("failure_reason_counts"), dict)
+            else {}
+        )
+        if counts:
+            return str(
+                max(
+                    counts.items(),
+                    key=lambda item: int(item[1]) if isinstance(item[1], int) else 0,
+                )[0]
+            )
+        if int(run.retry_count or 0) > 0:
+            return f"retried {int(run.retry_count)} time(s)"
+        return "-"
+
     rows_payload = [
         {
             "run_id": run.id,
@@ -56,6 +78,7 @@ def history_command(
                 if isinstance(run.metadata.get("run_metrics"), dict)
                 else {}
             ),
+            "primary_failure_reason": primary_failure_reason(run),
         }
         for run in rows
     ]
@@ -83,6 +106,7 @@ def history_command(
     table.add_column("Completed")
     table.add_column("Duration(s)")
     table.add_column("Retries")
+    table.add_column("Failure Signal")
     for run in rows:
         status = present_run_status(run.status)
         metrics = (
@@ -100,5 +124,6 @@ def history_command(
             run.completed_at or "-",
             str(duration),
             str(run.retry_count),
+            primary_failure_reason(run),
         )
     console.print(table)
