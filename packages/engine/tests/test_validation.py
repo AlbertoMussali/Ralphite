@@ -321,4 +321,3 @@ def test_validation_rejects_out_of_bounds_artifact_glob() -> None:
         issue.get("code") == "tasks.acceptance.path_glob_out_of_bounds"
         for issue in issues
     )
-

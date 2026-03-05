@@ -69,7 +69,7 @@ def _summary(samples: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _build_commands(workspace: str, repo_root: Path) -> dict[str, list[str]]:
+def _build_commands(workspace: str) -> dict[str, list[str]]:
     cli_prefix = ["uv", "run", "python", "-m", "ralphite_cli.main"]
     return {
         "quickstart": [
@@ -86,7 +86,7 @@ def _build_commands(workspace: str, repo_root: Path) -> dict[str, list[str]]:
             *cli_prefix,
             "check",
             "--workspace",
-            str(repo_root),
+            workspace,
             "--strict",
             "--output",
             "json",
@@ -138,7 +138,7 @@ def main() -> int:
     env["PYTHONPATH"] = os.pathsep.join(py_paths)
 
     with tempfile.TemporaryDirectory(prefix="ralphite-bench-") as tmpdir:
-        commands = _build_commands(tmpdir, repo_root)
+        commands = _build_commands(tmpdir)
         report: dict[str, Any] = {"repeats": args.repeats, "results": {}}
         for name, command in commands.items():
             samples: list[dict[str, Any]] = []

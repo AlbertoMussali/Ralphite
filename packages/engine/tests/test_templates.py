@@ -40,7 +40,9 @@ def test_orchestrator_prefers_parseable_v1_default_plan(tmp_path: Path) -> None:
     plans_dir.mkdir(parents=True, exist_ok=True)
 
     plan_candidate = make_starter_plan()
-    (plans_dir / "valid-v1.yaml").write_text(dump_yaml(plan_candidate), encoding="utf-8")
+    (plans_dir / "valid-v1.yaml").write_text(
+        dump_yaml(plan_candidate), encoding="utf-8"
+    )
     (plans_dir / "sample.yaml").write_text(
         yaml.safe_dump(
             {"version": 4, "plan_id": "invalid_input", "name": "invalid_input"},

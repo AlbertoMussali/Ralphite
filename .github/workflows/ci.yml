@@ -94,7 +94,9 @@ jobs:
         run: uv run --with pytest pytest -q
 
       - name: Strict CLI check
-        run: PYTHONPATH=apps/cli/src:packages/engine/src:packages/schemas/python/src uv run python -m ralphite_cli.main check --workspace . --strict --output json
+        run: |
+          mkdir -p /tmp/ralphite-strict-check
+          PYTHONPATH=apps/cli/src:packages/engine/src:packages/schemas/python/src uv run python -m ralphite_cli.main check --workspace /tmp/ralphite-strict-check --strict --output json
 
   perf-baseline:
     name: Perf Baseline

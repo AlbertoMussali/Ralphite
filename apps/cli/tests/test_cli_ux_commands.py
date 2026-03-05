@@ -172,7 +172,14 @@ tasks: []
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["validate", "--workspace", str(tmp_path), "--plan", str(invalid_plan), "--json"],
+        [
+            "validate",
+            "--workspace",
+            str(tmp_path),
+            "--plan",
+            str(invalid_plan),
+            "--json",
+        ],
     )
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
