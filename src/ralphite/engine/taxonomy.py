@@ -90,6 +90,13 @@ FAILURE_MAP: dict[str, FailureAdvice] = {
         next_action="Recreate run/worktree by replaying failed run.",
         command_hint="uv run ralphite replay <RUN_ID> --workspace . --output table",
     ),
+    "defaults.placeholder_invalid": FailureAdvice(
+        code="defaults.placeholder_invalid",
+        title="Prompt Template Invalid",
+        message="Agent defaults prompt template used an invalid placeholder token.",
+        next_action="Fix invalid placeholders in system_prompt/prompt_template and rerun validate.",
+        command_hint="uv run ralphite validate --workspace . --json",
+    ),
     "unknown_node_kind": FailureAdvice(
         code="unknown_node_kind",
         title="Unsupported Node",

@@ -36,6 +36,7 @@ from ralphite.engine.templates import (
 from ralphite.engine.validation import (
     apply_fix,
     parse_plan_yaml,
+    parse_plan_with_defaults,
     suggest_fixes,
     validate_plan_content,
 )
@@ -60,6 +61,7 @@ __all__ = [
     "make_goal_plan",
     "make_starter_plan",
     "parse_plan_yaml",
+    "parse_plan_with_defaults",
     "present_event",
     "present_recovery_mode",
     "present_run_status",

@@ -5,6 +5,7 @@ Last verified against commit: 70b0c1f
 Generated from:
 
 - `src/ralphite/schemas/json/plan-spec.schema.json`
+- `src/ralphite/schemas/json/agent-defaults.schema.json`
 - `src/ralphite/schemas/plan.py`
 
 ## Agent Schema Snapshot
@@ -16,3 +17,8 @@ Generated from:
 ## Runtime Version Snapshot
 
 - runtime execution contract: `version: 1`
+
+## Agent Defaults Snapshot
+
+- defaults schema: `AgentDefaultsSpec` (`version`, `agents`, `behaviors`)
+- plan-level defaults reference: optional `agent_defaults_ref`

@@ -9,7 +9,6 @@
     "name",
     "materials",
     "constraints",
-    "agents",
     "tasks",
     "orchestration",
     "outputs"
@@ -18,6 +17,7 @@
     "version": { "type": "integer", "const": 1 },
     "plan_id": { "type": "string", "minLength": 1 },
     "name": { "type": "string", "minLength": 1 },
+    "agent_defaults_ref": { "type": ["string", "null"] },
     "workspace": {
       "type": "object",
       "properties": {

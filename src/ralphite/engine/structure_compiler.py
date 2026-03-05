@@ -24,6 +24,7 @@ class RuntimeNodeSpec:
     team: str | None = None
     behavior_id: str | None = None
     behavior_kind: str | None = None
+    behavior_prompt_template: str | None = None
     source_task_id: str | None = None
     block_index: int = 0
     acceptance: dict[str, Any] | None = None
@@ -74,6 +75,7 @@ class _BehaviorChoice:
     behavior_id: str | None
     behavior_kind: str
     agent_id: str
+    prompt_template: str | None
 
 
 def compile_execution_structure(
@@ -140,6 +142,7 @@ def compile_execution_structure(
                     behavior_id=behavior.id,
                     behavior_kind=behavior.kind.value,
                     agent_id=agent_id,
+                    prompt_template=behavior.prompt_template,
                 )
 
         for behavior in behavior_by_id.values():
@@ -153,6 +156,7 @@ def compile_execution_structure(
                     behavior_id=behavior.id,
                     behavior_kind=behavior.kind.value,
                     agent_id=agent_id,
+                    prompt_template=behavior.prompt_template,
                 )
 
         warnings.append(
@@ -162,6 +166,7 @@ def compile_execution_structure(
             behavior_id=None,
             behavior_kind=fallback_kind.value,
             agent_id=first_orchestrator,
+            prompt_template=None,
         )
 
     nodes: list[RuntimeNodeSpec] = []
@@ -328,6 +333,7 @@ def compile_execution_structure(
             cell_id=cell_id,
             behavior_id=choice.behavior_id,
             behavior_kind=choice.behavior_kind,
+            behavior_prompt_template=choice.prompt_template,
             block_index=block_index,
         )
         add_node(node)
@@ -666,6 +672,7 @@ def compile_execution_structure(
             "team": node.team,
             "behavior_id": node.behavior_id,
             "behavior_kind": node.behavior_kind,
+            "behavior_prompt_template": node.behavior_prompt_template,
             "source_task_id": node.source_task_id,
             "block_index": node.block_index,
             "acceptance": node.acceptance or {},

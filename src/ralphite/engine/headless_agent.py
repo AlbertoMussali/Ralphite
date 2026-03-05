@@ -12,6 +12,11 @@ import time
 from typing import Any
 
 from ralphite.engine.structure_compiler import RuntimeNodeSpec
+from ralphite.schemas.prompt_templates import (
+    ORCHESTRATOR_PLACEHOLDER_TOKENS,
+    WORKER_PLACEHOLDER_TOKENS,
+    render_prompt_template,
+)
 
 
 @dataclass(frozen=True)
@@ -120,10 +125,55 @@ def build_node_prompt(
     *,
     worktree: Path,
     permission_snapshot: dict[str, list[str]],
+    plan_id: str,
+    plan_name: str,
+    agent_id: str,
+    agent_role: str,
+    system_prompt: str | None = None,
+    behavior_prompt_template: str | None = None,
 ) -> str:
     role_name = "worker" if node.role == "worker" else "orchestrator"
+    acceptance_summary = _summarize_acceptance(node)
+    render_context = {
+        "plan_id": str(plan_id),
+        "plan_name": str(plan_name),
+        "agent_id": str(agent_id),
+        "agent_role": str(agent_role),
+        "node_id": str(node.id),
+        "task_id": str(node.source_task_id or "-"),
+        "task_title": str(node.task or ""),
+        "phase": str(node.phase or ""),
+        "lane": str(node.lane or ""),
+        "cell_id": str(node.cell_id or ""),
+        "worktree": str(worktree),
+        "acceptance_summary": acceptance_summary,
+        "behavior_id": str(node.behavior_id or "-"),
+        "behavior_kind": str(node.behavior_kind or "-"),
+    }
+    prompt_tokens = (
+        WORKER_PLACEHOLDER_TOKENS
+        if node.role == "worker"
+        else ORCHESTRATOR_PLACEHOLDER_TOKENS
+    )
+    rendered_system_prompt = render_prompt_template(
+        system_prompt or "",
+        context=render_context,
+        allowed_tokens=prompt_tokens,
+    ).strip()
+    rendered_behavior_prompt = ""
+    if node.role == "orchestrator":
+        rendered_behavior_prompt = render_prompt_template(
+            behavior_prompt_template or "",
+            context=render_context,
+            allowed_tokens=ORCHESTRATOR_PLACEHOLDER_TOKENS,
+        ).strip()
+
     base = [
         f"You are executing a Ralphite {role_name} node.",
+        f"Plan id: {plan_id}",
+        f"Plan name: {plan_name}",
+        f"Agent id: {agent_id}",
+        f"Agent role: {agent_role}",
         f"Node id: {node.id}",
         f"Task id: {node.source_task_id or '-'}",
         f"Task title: {node.task}",
@@ -144,12 +194,20 @@ def build_node_prompt(
         f"- allow_mcps={permission_snapshot.get('allow_mcps', [])}",
         f"- deny_mcps={permission_snapshot.get('deny_mcps', [])}",
     ]
+    if rendered_system_prompt:
+        base.extend(
+            [
+                "",
+                "Role system prompt:",
+                rendered_system_prompt,
+            ]
+        )
     if node.role == "worker":
         base.extend(
             [
                 "",
                 "Worker requirements:",
-                f"- Acceptance summary: {_summarize_acceptance(node)}",
+                f"- Acceptance summary: {acceptance_summary}",
                 "- Ensure implementation can pass acceptance commands and artifact checks.",
             ]
         )
@@ -162,6 +220,14 @@ def build_node_prompt(
                 "- Summarize any unresolved risks explicitly.",
             ]
         )
+        if rendered_behavior_prompt:
+            base.extend(
+                [
+                    "",
+                    "Behavior prompt template:",
+                    rendered_behavior_prompt,
+                ]
+            )
     return "\n".join(base)
 
 

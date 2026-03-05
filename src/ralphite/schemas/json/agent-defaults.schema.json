@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ralphite.dev/schemas/agent-defaults.json",
+  "title": "AgentDefaultsSpec",
+  "type": "object",
+  "required": ["version", "agents", "behaviors"],
+  "properties": {
+    "version": { "type": "integer", "const": 1 },
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "role", "provider", "model"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "role": { "type": "string", "enum": ["worker", "orchestrator"] },
+          "provider": { "type": "string", "enum": ["codex", "cursor"], "default": "codex" },
+          "model": { "type": "string", "default": "gpt-5.3-codex" },
+          "reasoning_effort": { "type": "string", "enum": ["low", "medium", "high"], "default": "medium" },
+          "system_prompt": { "type": "string" },
+          "tools_allow": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "behaviors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "enabled"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "merge_and_conflict_resolution",
+              "summarize_work",
+              "prepare_dispatch",
+              "custom"
+            ]
+          },
+          "agent": { "type": ["string", "null"] },
+          "prompt_template": { "type": ["string", "null"] },
+          "enabled": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

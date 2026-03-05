@@ -45,7 +45,11 @@ from ralphite.engine.templates import (
     seed_starter_if_missing,
     versioned_filename,
 )
-from ralphite.engine.validation import parse_plan_yaml, validate_plan_content
+from ralphite.engine.validation import (
+    parse_plan_with_defaults,
+    parse_plan_yaml,
+    validate_plan_content,
+)
 from ralphite.schemas.plan import AgentSpec, BehaviorKind, PlanSpec
 from ralphite.schemas.validation import compile_plan
 
@@ -152,7 +156,11 @@ class LocalOrchestrator:
         # Prefer the newest parseable v1 plan.
         for candidate in plans:
             try:
-                parse_plan_yaml(candidate.read_text(encoding="utf-8"))
+                parse_plan_yaml(
+                    candidate.read_text(encoding="utf-8"),
+                    workspace_root=self.workspace_root,
+                    plan_path=str(candidate),
+                )
                 return candidate
             except Exception:
                 continue
@@ -238,6 +246,7 @@ class LocalOrchestrator:
                         "source_task_id": node.source_task_id,
                         "behavior_id": node.behavior_id,
                         "behavior_kind": node.behavior_kind,
+                        "behavior_prompt_template": node.behavior_prompt_template,
                     }
                     for node in runtime.nodes
                 ],
@@ -284,10 +293,15 @@ class LocalOrchestrator:
     def collect_requirements(
         self, plan_ref: str | None = None, plan_content: str | None = None
     ) -> dict[str, list[str]]:
+        path: Path | None = None
         if plan_content is None:
             path = self._resolve_plan_path(plan_ref)
             plan_content = path.read_text(encoding="utf-8")
-        plan = parse_plan_yaml(plan_content)
+        plan = parse_plan_yaml(
+            plan_content,
+            workspace_root=self.workspace_root,
+            plan_path=str(path) if path is not None else None,
+        )
         tools = sorted(
             {
                 item
@@ -367,7 +381,11 @@ class LocalOrchestrator:
         if not valid:
             raise ValueError(f"validation_error: {json.dumps(issues)}")
 
-        plan_document = parse_plan_yaml(content)
+        plan_document, defaults_meta = parse_plan_with_defaults(
+            content,
+            workspace_root=self.workspace_root,
+            plan_path=str(source_path),
+        )
         compile_plan(plan_document)
         runtime, runtime_meta = self._materialize_runtime_plan(plan_document)
         compile_seconds = round(max(0.0, time.perf_counter() - compile_started), 3)
@@ -415,6 +433,7 @@ class LocalOrchestrator:
             nodes=nodes,
             metadata={
                 "plan": summary,
+                "defaults_resolution": defaults_meta,
                 "compile_seconds": compile_seconds,
                 "permission_snapshot": snapshot,
                 "task_writeback_mode": self.config.task_writeback_mode,
@@ -575,9 +594,14 @@ class LocalOrchestrator:
         run.events = events
 
         plan_content = Path(run.plan_path).read_text(encoding="utf-8")
-        plan_document = parse_plan_yaml(plan_content)
+        plan_document, defaults_meta = parse_plan_with_defaults(
+            plan_content,
+            workspace_root=self.workspace_root,
+            plan_path=run.plan_path,
+        )
         compile_plan(plan_document)
         runtime, runtime_meta = self._materialize_runtime_plan(plan_document)
+        run.metadata.setdefault("defaults_resolution", defaults_meta)
 
         run.metadata.setdefault("plan_version", runtime_meta.get("plan_version", 5))
 
@@ -1064,9 +1088,25 @@ class LocalOrchestrator:
         backend, model, reasoning_effort, cursor_command = (
             self._resolve_execution_defaults(handle, profile)
         )
-        prompt = build_node_prompt(
-            node, worktree=worktree, permission_snapshot=snapshot
-        )
+        try:
+            prompt = build_node_prompt(
+                node,
+                worktree=worktree,
+                permission_snapshot=snapshot,
+                plan_id=handle.plan.plan_id,
+                plan_name=handle.plan.name,
+                agent_id=profile.id,
+                agent_role=profile.role.value,
+                system_prompt=profile.system_prompt,
+                behavior_prompt_template=node.behavior_prompt_template,
+            )
+        except ValueError as exc:
+            return False, {
+                "reason": "defaults.placeholder_invalid",
+                "error": str(exc),
+                "agent_id": profile.id,
+                "role": node.role,
+            }
         ok, result = execute_headless_agent(
             config=BackendExecutionConfig(
                 backend=backend,
@@ -1304,6 +1344,7 @@ class LocalOrchestrator:
             "backend_output_malformed",
             "backend_out_of_worktree_claim",
             "backend_worktree_missing",
+            "defaults.placeholder_invalid",
         }
         if reason not in non_retryable and rec.attempt_count <= max_retries:
             rec.status = "queued"

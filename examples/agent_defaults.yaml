@@ -1,0 +1,36 @@
+version: 1
+agents:
+  - id: worker_default
+    role: worker
+    provider: codex
+    model: gpt-5.3-codex
+    reasoning_effort: medium
+    system_prompt: |
+      Execute task {{task_id}} ("{{task_title}}") in worktree {{worktree}}.
+      Keep scope narrow to plan {{plan_id}} and satisfy {{acceptance_summary}}.
+    tools_allow: [tool:*, mcp:*]
+  - id: orchestrator_default
+    role: orchestrator
+    provider: codex
+    model: gpt-5.3-codex
+    reasoning_effort: medium
+    system_prompt: |
+      Coordinate plan {{plan_id}} ({{plan_name}}) for node {{node_id}} in cell {{cell_id}}.
+      Prioritize safe merges, clear handoffs, and explicit risk reporting.
+    tools_allow: [tool:*, mcp:*]
+behaviors:
+  - id: prepare_dispatch_default
+    kind: prepare_dispatch
+    agent: orchestrator_default
+    prompt_template: Prepare dispatch context for {{plan_id}} in lane {{lane}}.
+    enabled: true
+  - id: merge_and_conflict_resolution_default
+    kind: merge_and_conflict_resolution
+    agent: orchestrator_default
+    prompt_template: Resolve merge/conflict flow for {{behavior_kind}} in cell {{cell_id}}.
+    enabled: true
+  - id: summarize_work_default
+    kind: summarize_work
+    agent: orchestrator_default
+    prompt_template: Summarize outcomes for {{plan_name}} and identify unresolved risks.
+    enabled: true

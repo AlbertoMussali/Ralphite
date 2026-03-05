@@ -10,6 +10,10 @@ import yaml
 from pydantic import ValidationError as PydanticValidationError
 
 from ralphite.engine.models import ValidationFix
+from ralphite.engine.plan_defaults import (
+    PlanDefaultsResolutionError,
+    resolve_plan_defaults,
+)
 from ralphite.engine.structure_compiler import (
     RuntimeExecutionPlan,
     compile_execution_structure,
@@ -19,16 +23,13 @@ from ralphite.schemas.plan import PlanSpec
 from ralphite.schemas.validation import ValidationError, compile_plan, validate_plan
 
 
-UNSUPPORTED_VERSION_MESSAGE = "Invalid plan version. Ralphite executes only version: 1 unified YAML (tasks + orchestration + agents)."
+UNSUPPORTED_VERSION_MESSAGE = "Invalid plan version. Ralphite executes only version: 1 unified YAML (tasks + orchestration + optional agent defaults reference)."
 
 
 PlanDocument = PlanSpec
 
 
-def parse_plan_yaml(content: str) -> PlanDocument:
-    data = yaml.safe_load(content)
-    if not isinstance(data, dict):
-        raise ValueError("plan content must be a YAML object")
+def _validate_plan_version(data: dict[str, Any]) -> None:
     if "version" not in data:
         raise ValueError(UNSUPPORTED_VERSION_MESSAGE)
     try:
@@ -37,7 +38,37 @@ def parse_plan_yaml(content: str) -> PlanDocument:
         raise ValueError(UNSUPPORTED_VERSION_MESSAGE) from exc
     if version != 1:
         raise ValueError(UNSUPPORTED_VERSION_MESSAGE)
-    return PlanSpec.model_validate(data)
+
+
+def parse_plan_with_defaults(
+    content: str,
+    *,
+    workspace_root: str | Path | None = None,
+    plan_path: str | Path | None = None,
+) -> tuple[PlanDocument, dict[str, Any]]:
+    data = yaml.safe_load(content)
+    if not isinstance(data, dict):
+        raise ValueError("plan content must be a YAML object")
+    _validate_plan_version(data)
+    resolved, defaults_meta = resolve_plan_defaults(
+        data, workspace_root=workspace_root, plan_path=plan_path
+    )
+    return PlanSpec.model_validate(resolved), defaults_meta
+
+
+def parse_plan_yaml(
+    content: str,
+    *,
+    workspace_root: str | Path | None = None,
+    plan_path: str | Path | None = None,
+) -> PlanDocument:
+    try:
+        plan, _defaults_meta = parse_plan_with_defaults(
+            content, workspace_root=workspace_root, plan_path=plan_path
+        )
+    except PlanDefaultsResolutionError as exc:
+        raise ValueError(str(exc)) from exc
+    return plan
 
 
 def _collect_profile_tools(plan: PlanSpec) -> tuple[list[str], list[str]]:
@@ -171,6 +202,10 @@ def _recommended_commands(
         commands.append(
             "Open Run Setup and assign routing.lane / routing.cell for pending tasks, then validate again."
         )
+    if any(code.startswith("defaults.") for code in codes):
+        commands.append(
+            f"Fix agent_defaults_ref / defaults schema and rerun: uv run ralphite validate --workspace . --plan {target} --json"
+        )
     return list(dict.fromkeys(commands))
 
 
@@ -212,10 +247,8 @@ def validate_plan_content(
 
     version_raw = raw.get("version")
     try:
-        version = int(version_raw)
-    except (TypeError, ValueError):
-        version = 0
-    if version != 1:
+        _validate_plan_version(raw)
+    except ValueError:
         issues = [
             {
                 "code": "version.invalid",
@@ -237,8 +270,47 @@ def validate_plan_content(
             },
         )
 
+    defaults_resolution: dict[str, Any] = {
+        "agent_defaults_ref": None,
+        "resolved_path": None,
+        "agents_source": "inline",
+        "behaviors_source": "inline",
+    }
+    resolved_raw = raw
     try:
-        plan = PlanSpec.model_validate(raw)
+        resolved_raw, defaults_resolution = resolve_plan_defaults(
+            raw, workspace_root=workspace_root, plan_path=plan_path
+        )
+    except PlanDefaultsResolutionError as exc:
+        issues = [
+            {
+                "code": exc.code,
+                "message": exc.message,
+                "path": exc.path,
+                "level": "error",
+            }
+        ]
+        issues = _dedupe_and_sort_issues(issues)
+        return (
+            False,
+            issues,
+            {
+                "version": version_raw,
+                "expected_version": 1,
+                "defaults_resolution": {
+                    **defaults_resolution,
+                    "status": "error",
+                    "error": exc.message,
+                    "code": exc.code,
+                },
+                "recommended_commands": _recommended_commands(
+                    issues, plan_path=plan_path
+                ),
+            },
+        )
+
+    try:
+        plan = PlanSpec.model_validate(resolved_raw)
     except PydanticValidationError as exc:
         issues = [
             {
@@ -337,6 +409,7 @@ def validate_plan_content(
                     "source_task_id": node.source_task_id,
                     "behavior_id": node.behavior_id,
                     "behavior_kind": node.behavior_kind,
+                    "behavior_prompt_template": node.behavior_prompt_template,
                 }
                 for node in runtime.nodes
             ],
@@ -368,6 +441,10 @@ def validate_plan_content(
         "tasks_status": {"status": "ok" if not parse_issues else "issues"},
         "task_parse_issues": parse_issues,
         "recovery_readiness": _git_recovery_readiness(workspace_root),
+        "defaults_resolution": {
+            **defaults_resolution,
+            "status": "ok",
+        },
         "resolved_execution": resolved_execution,
         "recommended_commands": _recommended_commands(issues, plan_path=plan_path),
     }

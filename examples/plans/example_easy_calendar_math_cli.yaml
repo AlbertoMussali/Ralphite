@@ -20,19 +20,7 @@ constraints:
   max_parallel: 3
   acceptance_timeout_seconds: 120
   max_retries_per_node: 0
-agents:
-  - id: worker_default
-    role: worker
-    provider: codex
-    model: gpt-5.3-codex
-    reasoning_effort: medium
-    tools_allow: [tool:*, mcp:*]
-  - id: orchestrator_default
-    role: orchestrator
-    provider: codex
-    model: gpt-5.3-codex
-    reasoning_effort: medium
-    tools_allow: [tool:*, mcp:*]
+agent_defaults_ref: ../agent_defaults.yaml
 tasks:
   - id: task_requirements
     title: Define calendar math scope, interactive UX flow, and date edge-case rules.
@@ -124,22 +112,7 @@ tasks:
 orchestration:
   template: general_sps
   inference_mode: mixed
-  behaviors:
-    - id: prepare_dispatch_default
-      kind: prepare_dispatch
-      agent: orchestrator_default
-      prompt_template: Prepare the next dispatch cell and summarize prerequisites.
-      enabled: true
-    - id: merge_and_conflict_resolution_default
-      kind: merge_and_conflict_resolution
-      agent: orchestrator_default
-      prompt_template: Merge outputs, resolve conflicts safely, and report unresolved risks.
-      enabled: true
-    - id: summarize_work_default
-      kind: summarize_work
-      agent: orchestrator_default
-      prompt_template: Summarize work completed, validation status, and next handoff context.
-      enabled: true
+  behaviors: []
   branched:
     lanes: [lane_a, lane_b]
   blue_red:

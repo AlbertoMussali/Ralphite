@@ -3,12 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-import yaml
-from ralphite.schemas.plan import PlanSpec
 
 from ralphite.engine.structure_compiler import compile_execution_structure
 from ralphite.engine.task_parser import parse_plan_tasks
-from ralphite.engine.validation import validate_plan_content
+from ralphite.engine.validation import parse_plan_with_defaults, validate_plan_content
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -34,8 +32,11 @@ def test_examples_plans_validate_and_compile(plan_path: Path) -> None:
     assert isinstance(resolved.get("resolved_nodes"), list)
     assert resolved.get("resolved_nodes")
 
-    raw = yaml.safe_load(content)
-    plan = PlanSpec.model_validate(raw)
+    plan, _defaults_meta = parse_plan_with_defaults(
+        content,
+        workspace_root=REPO_ROOT,
+        plan_path=str(plan_path),
+    )
     tasks, parse_issues = parse_plan_tasks(plan)
     assert parse_issues == []
 

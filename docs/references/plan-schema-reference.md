@@ -10,13 +10,23 @@ Source files:
 
 ## Required Top-Level Sections
 
-- `version`, `plan_id`, `name`, `materials`, `constraints`, `agents`, `tasks`, `orchestration`, `outputs`
+- `version`, `plan_id`, `name`, `materials`, `constraints`, `tasks`, `orchestration`, `outputs`
+
+## Optional Top-Level Sections
+
+- `agent_defaults_ref`: path to a defaults document (`version: 1`) with `agents` + `behaviors`
+- `agents`: inline agent overrides (authoritative when non-empty)
 
 ## Agent Defaults
 
 - `provider: codex` (supported providers: `codex`, `cursor`)
 - `model: gpt-5.3-codex`
 - `reasoning_effort: medium`
+
+## Resolution Precedence
+
+1. If `agents` is non-empty, use inline `agents`; otherwise inject from `agent_defaults_ref`.
+2. If `orchestration.behaviors` is non-empty, use inline behaviors; otherwise inject from `agent_defaults_ref`.
 
 ## Orchestration Templates
 

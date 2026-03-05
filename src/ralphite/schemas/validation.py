@@ -5,6 +5,11 @@ from dataclasses import dataclass
 import re
 
 from .plan import CustomCellKind, OrchestrationTemplate, PlanSpec
+from .prompt_templates import (
+    ORCHESTRATOR_PLACEHOLDER_TOKENS,
+    WORKER_PLACEHOLDER_TOKENS,
+    validate_prompt_template,
+)
 
 
 @dataclass(slots=True)
@@ -119,6 +124,35 @@ def validate_plan(plan: PlanSpec) -> list[ValidationIssue]:
                     "orchestration.behavior.unknown_agent",
                     f"behavior '{behavior.id}' references unknown agent '{behavior.agent}'",
                     f"{path_prefix}.agent",
+                )
+            )
+        for detail in validate_prompt_template(
+            behavior.prompt_template,
+            allowed_tokens=ORCHESTRATOR_PLACEHOLDER_TOKENS,
+        ):
+            issues.append(
+                ValidationIssue(
+                    "defaults.placeholder_invalid",
+                    f"behavior '{behavior.id}' prompt_template invalid: {detail}",
+                    f"{path_prefix}.prompt_template",
+                )
+            )
+
+    for idx, agent in enumerate(plan.agents):
+        allowed = (
+            WORKER_PLACEHOLDER_TOKENS
+            if agent.role.value == "worker"
+            else ORCHESTRATOR_PLACEHOLDER_TOKENS
+        )
+        for detail in validate_prompt_template(
+            agent.system_prompt,
+            allowed_tokens=allowed,
+        ):
+            issues.append(
+                ValidationIssue(
+                    "defaults.placeholder_invalid",
+                    f"agent '{agent.id}' system_prompt invalid: {detail}",
+                    f"agents[{idx}].system_prompt",
                 )
             )
 

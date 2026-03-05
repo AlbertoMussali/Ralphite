@@ -6,6 +6,7 @@ Last verified against commit: a7aaeed
 ## Canonical Plan Sources
 
 - tracked examples: `examples/plans/*.yaml`
+- centralized defaults: `examples/agent_defaults.yaml`
 - schema contracts: `src/ralphite/schemas/json/plan-spec.schema.json`
 
 ## Canonical Tracked Examples

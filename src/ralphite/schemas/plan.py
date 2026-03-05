@@ -146,6 +146,7 @@ class PlanSpec(BaseModel):
     version: Literal[1]
     plan_id: str
     name: str
+    agent_defaults_ref: str | None = None
     workspace: WorkspaceSpec = Field(default_factory=WorkspaceSpec)
     materials: MaterialsSpec = Field(default_factory=MaterialsSpec)
     constraints: ConstraintsSpec = Field(default_factory=ConstraintsSpec)
@@ -153,3 +154,9 @@ class PlanSpec(BaseModel):
     tasks: list[TaskSpec] = Field(default_factory=list)
     orchestration: OrchestrationSpec
     outputs: OutputsSpec = Field(default_factory=OutputsSpec)
+
+
+class AgentDefaultsSpec(BaseModel):
+    version: Literal[1]
+    agents: list[AgentSpec] = Field(default_factory=list)
+    behaviors: list[BehaviorSpec] = Field(default_factory=list)

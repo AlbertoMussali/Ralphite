@@ -4,16 +4,55 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from ralphite.engine.headless_agent import (
     BackendExecutionConfig,
     build_codex_exec_command,
     build_cursor_exec_command,
+    build_node_prompt,
     execute_headless_agent,
 )
+from ralphite.engine.structure_compiler import RuntimeNodeSpec
 
 
 def _disable_sim(monkeypatch) -> None:  # noqa: ANN001
     monkeypatch.delenv("RALPHITE_DEV_SIMULATED_EXECUTION", raising=False)
+
+
+def _sample_worker_node() -> RuntimeNodeSpec:
+    return RuntimeNodeSpec(
+        id="phase-1::task::t1",
+        kind="agent",
+        group="phase-1",
+        depends_on=[],
+        task="Task title",
+        agent_profile_id="worker_default",
+        role="worker",
+        phase="phase-1",
+        lane="lane_a",
+        cell_id="seq_pre",
+        source_task_id="t1",
+        acceptance={"commands": ["echo ok"], "required_artifacts": [], "rubric": []},
+    )
+
+
+def _sample_orchestrator_node() -> RuntimeNodeSpec:
+    return RuntimeNodeSpec(
+        id="phase-1::orchestrator::merge",
+        kind="agent",
+        group="phase-1",
+        depends_on=["phase-1::task::t1"],
+        task="merge",
+        agent_profile_id="orchestrator_default",
+        role="orchestrator",
+        phase="phase-1",
+        lane="shared",
+        cell_id="merge",
+        behavior_id="merge_default",
+        behavior_kind="merge_and_conflict_resolution",
+        behavior_prompt_template="Behavior {{behavior_kind}} for {{plan_id}}",
+    )
 
 
 def test_build_codex_exec_command_contract(tmp_path: Path) -> None:
@@ -43,6 +82,67 @@ def test_build_cursor_exec_command_contract() -> None:
     assert command[:4] == ["agent", "-p", "--force", "--output-format"]
     assert "--model" in command
     assert "gpt-5.3-codex" in command
+
+
+def test_build_node_prompt_renders_worker_system_prompt(tmp_path: Path) -> None:
+    prompt = build_node_prompt(
+        _sample_worker_node(),
+        worktree=tmp_path,
+        permission_snapshot={
+            "allow_tools": ["tool:*"],
+            "deny_tools": [],
+            "allow_mcps": ["mcp:*"],
+            "deny_mcps": [],
+        },
+        plan_id="demo",
+        plan_name="Demo",
+        agent_id="worker_default",
+        agent_role="worker",
+        system_prompt="Execute {{task_id}} in {{worktree}} with {{acceptance_summary}}",
+    )
+    assert "Execute t1 in" in prompt
+    assert "acceptance.commands=1" in prompt
+
+
+def test_build_node_prompt_renders_orchestrator_behavior_prompt(tmp_path: Path) -> None:
+    prompt = build_node_prompt(
+        _sample_orchestrator_node(),
+        worktree=tmp_path,
+        permission_snapshot={
+            "allow_tools": ["tool:*"],
+            "deny_tools": [],
+            "allow_mcps": ["mcp:*"],
+            "deny_mcps": [],
+        },
+        plan_id="demo",
+        plan_name="Demo",
+        agent_id="orchestrator_default",
+        agent_role="orchestrator",
+        system_prompt="Review {{behavior_kind}}",
+        behavior_prompt_template="Behavior {{behavior_kind}} for {{plan_id}}",
+    )
+    assert "Review merge_and_conflict_resolution" in prompt
+    assert "Behavior merge_and_conflict_resolution for demo" in prompt
+
+
+def test_build_node_prompt_rejects_invalid_placeholder_token(tmp_path: Path) -> None:
+    with pytest.raises(ValueError) as exc:
+        build_node_prompt(
+            _sample_worker_node(),
+            worktree=tmp_path,
+            permission_snapshot={
+                "allow_tools": ["tool:*"],
+                "deny_tools": [],
+                "allow_mcps": ["mcp:*"],
+                "deny_mcps": [],
+            },
+            plan_id="demo",
+            plan_name="Demo",
+            agent_id="worker_default",
+            agent_role="worker",
+            system_prompt="bad {{behavior_kind}} token",
+        )
+    assert "not allowed" in str(exc.value)
 
 
 def test_codex_backend_builds_expected_command(monkeypatch, tmp_path: Path) -> None:
