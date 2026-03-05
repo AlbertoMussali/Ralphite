@@ -65,16 +65,6 @@ class RunCheckpoint(BaseModel):
     updated_at: str = Field(default_factory=utc_now_iso)
 
 
-class PlanDraftState(BaseModel):
-    id: str
-    path: str
-    updated_at: str = Field(default_factory=utc_now_iso)
-    title: str = "Untitled Draft"
-    content: str
-    autosave: bool = True
-    meta: dict[str, Any] = Field(default_factory=dict)
-
-
 class ValidationFix(BaseModel):
     code: str
     title: str

@@ -73,11 +73,10 @@ def ensure_workspace_layout(workspace_root: Path) -> dict[str, Path]:
         "plans": dot / "plans",
         "runs": dot / "runs",
         "artifacts": dot / "artifacts",
-        "drafts": dot / "drafts",
         "config": dot / "config.toml",
         "history": dot / "runs" / "history.json",
     }
-    for key in ("dot", "plans", "runs", "artifacts", "drafts"):
+    for key in ("dot", "plans", "runs", "artifacts"):
         paths[key].mkdir(parents=True, exist_ok=True)
     return paths
 
