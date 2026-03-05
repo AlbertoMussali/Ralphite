@@ -8,7 +8,10 @@ import sys
 import time
 from typing import Any
 
-from rich.console import Console
+from rich.console import Console, Group
+from rich.panel import Panel
+from rich.text import Text
+from rich.tree import Tree
 import yaml
 from ralphite.schemas import CliOutputEnvelopeV1
 
@@ -169,9 +172,11 @@ def _print_run_stream(
     orch.wait_for_run(run_id, timeout=2.0)
     run = orch.get_run(run_id)
     if run and run.artifacts:
-        console.print("\nArtifacts:")
+        console.print()
+        tree = Tree("[bold]Artifacts[/bold]")
         for artifact in run.artifacts:
-            console.print(f"- {artifact['id']}: {artifact['path']}")
+            tree.add(f"{artifact['id']}: {artifact['path']}")
+        console.print(tree)
 
 
 def _emit_payload(
@@ -181,49 +186,65 @@ def _emit_payload(
         sys.stdout.write(json.dumps(payload, sort_keys=True) + "\n")
         sys.stdout.flush()
         return
-    if title:
-        console.print(f"[bold]{title}[/bold]")
+
+    lines: list[str] = []
     status = present_run_status(str(payload.get("status", "")))
-    console.print(f"Status: {status.label}")
+    status_color = "green" if status.severity == "info" else ("yellow" if status.severity == "warn" else "red")
+    lines.append(f"Status: [{status_color}]{status.label}[/{status_color}]")
+    
     run_id = payload.get("run_id")
     if isinstance(run_id, str) and run_id.strip():
-        console.print(f"Run ID: {run_id}")
+        lines.append(f"Run ID: {run_id}")
 
     data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
     if isinstance(data, dict):
         plan_path = data.get("plan_path")
         if isinstance(plan_path, str) and plan_path.strip():
-            console.print(f"Plan: {plan_path}")
-        artifacts = (
-            data.get("artifacts") if isinstance(data.get("artifacts"), list) else []
-        )
-        if artifacts:
-            console.print(f"Artifacts: {len(artifacts)}")
-            shown = 0
-            for item in artifacts:
-                if not isinstance(item, dict):
-                    continue
-                path = item.get("path")
-                if not isinstance(path, str) or not path:
-                    continue
-                shown += 1
-                console.print(f"- {path}")
-                if shown >= 3:
-                    break
-            if len(artifacts) > shown:
-                console.print(f"- ... ({len(artifacts) - shown} more)")
+            lines.append(f"Plan: {plan_path}")
+            
+    content = "\n".join(lines)
+    
+    artifacts = data.get("artifacts") if isinstance(data, dict) and isinstance(data.get("artifacts"), list) else []
+    
+    renderables = [Text.from_markup(content)]
+    
+    if artifacts:
+        tree = Tree(f"[bold]Artifacts ({len(artifacts)})[/bold]")
+        shown = 0
+        for item in artifacts:
+            if not isinstance(item, dict):
+                continue
+            path = item.get("path")
+            if not isinstance(path, str) or not path:
+                continue
+            shown += 1
+            tree.add(path)
+            if shown >= 5:
+                break
+        if len(artifacts) > shown:
+            tree.add(f"... ({len(artifacts) - shown} more)")
+        renderables.append(Text(""))
+        renderables.append(tree)
 
     issues = payload.get("issues", [])
     if isinstance(issues, list) and issues:
-        console.print("Issues:")
+        renderables.append(Text("\nIssues:", style="bold red"))
         for issue in issues:
             if isinstance(issue, dict):
-                console.print(f"- {issue.get('code')}: {issue.get('message')}")
+                renderables.append(Text(f"- {issue.get('code')}: {issue.get('message')}"))
             else:
-                console.print(f"- {issue}")
+                renderables.append(Text(f"- {issue}"))
 
     actions = payload.get("next_actions", [])
     if isinstance(actions, list) and actions:
-        console.print("Next actions:")
+        renderables.append(Text("\nNext actions:", style="bold blue"))
         for item in actions:
-            console.print(f"- {item}")
+            renderables.append(Text(f"- {item}"))
+
+    panel = Panel(
+        Group(*renderables),
+        title=f"[bold]{title}[/bold]" if title else "[bold]Result Payload[/bold]",
+        expand=False,
+        border_style="blue"
+    )
+    console.print(panel)

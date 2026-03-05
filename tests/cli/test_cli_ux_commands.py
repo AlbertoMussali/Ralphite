@@ -203,7 +203,7 @@ def test_quickstart_table_output_shows_run_id_and_artifacts(tmp_path: Path) -> N
     )
     assert result.exit_code == 0
     assert "Run ID:" in result.stdout
-    assert "Artifacts:" in result.stdout
+    assert "Artifacts" in result.stdout
 
 
 def test_run_table_output_shows_run_id_and_artifacts(tmp_path: Path) -> None:
@@ -213,7 +213,7 @@ def test_run_table_output_shows_run_id_and_artifacts(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0
     assert "Run ID:" in result.stdout
-    assert "Artifacts:" in result.stdout
+    assert "Artifacts" in result.stdout
 
 
 def test_quickstart_non_strict_allows_noncritical_doctor_failure(

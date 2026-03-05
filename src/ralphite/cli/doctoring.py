@@ -14,6 +14,7 @@ from ralphite.engine import LocalOrchestrator, suggest_fixes, validate_plan_cont
 from ralphite.engine.headless_agent import build_codex_exec_command
 
 from .core import console
+from rich.panel import Panel
 
 
 def _validate_all_plans(
@@ -346,9 +347,18 @@ def _render_doctor_table(snapshot: dict[str, Any]) -> None:
     for row in snapshot.get("checks", []):
         if not isinstance(row, dict):
             continue
+        status_val = str(row.get("status", ""))
+        status_upper = status_val.upper()
+        if status_upper in {"OK", "PASS"}:
+            status_str = f"[bold green]{status_val}[/bold green]"
+        elif status_upper == "WARN":
+            status_str = f"[bold yellow]{status_val}[/bold yellow]"
+        else:
+            status_str = f"[bold red]{status_val}[/bold red]"
+        
         table.add_row(
             str(row.get("check", "")),
-            str(row.get("status", "")),
+            status_str,
             str(row.get("detail", "")),
         )
     console.print(table)
@@ -359,24 +369,27 @@ def _render_doctor_table(snapshot: dict[str, Any]) -> None:
         plan_path = str(failure.get("plan_path"))
         issues = failure.get("issues", [])
         summary = failure.get("summary", {})
-        console.print(f"\n[bold red]Invalid plan:[/bold red] {plan_path}")
+        
+        lines = []
         if isinstance(issues, list):
             for issue in issues:
                 if not isinstance(issue, dict):
                     continue
-                console.print(
+                lines.append(
                     f"  - {issue.get('code')}: {issue.get('message')} ({issue.get('path')})"
                 )
         if summary:
-            console.print(f"  Summary: {summary}")
+            lines.append(f"  Summary: {summary}")
         recommended = (
             summary.get("recommended_commands", []) if isinstance(summary, dict) else []
         )
         if isinstance(recommended, list) and recommended:
-            console.print("  Recommended commands:")
+            lines.append("  Recommended commands:")
             for cmd in recommended:
                 if isinstance(cmd, str):
-                    console.print(f"  - {cmd}")
+                    lines.append(f"  - {cmd}")
+                    
+        console.print(Panel("\n".join(lines), title=f"[bold red]Invalid plan:[/bold red] {plan_path}", border_style="red", expand=False))
 
     stale = snapshot.get("stale_artifacts", {})
     if not isinstance(stale, dict):
@@ -392,19 +405,20 @@ def _render_doctor_table(snapshot: dict[str, Any]) -> None:
         else []
     )
     if stale_worktrees or stale_branches:
-        console.print("\n[bold yellow]Stale managed artifacts[/bold yellow]")
+        lines = []
         for item in stale_worktrees[:10]:
             if not isinstance(item, dict):
                 continue
-            console.print(
+            lines.append(
                 f"  - worktree run={item.get('run_id')} age={item.get('age_hours')}h path={item.get('path')}"
             )
         for item in stale_branches[:10]:
             if not isinstance(item, dict):
                 continue
-            console.print(
+            lines.append(
                 f"  - branch run={item.get('run_id')} branch={item.get('branch')}"
             )
-        console.print(
+        lines.append(
             "  Action: run cleanup by resolving or resuming stale runs, then re-check doctor."
         )
+        console.print(Panel("\n".join(lines), title="[bold yellow]Stale managed artifacts[/bold yellow]", border_style="yellow", expand=False))
