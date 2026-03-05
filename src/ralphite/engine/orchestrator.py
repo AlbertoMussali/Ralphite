@@ -15,6 +15,7 @@ from typing import Any, Generator
 from uuid import uuid4
 
 from ralphite.engine.config import LocalConfig, ensure_workspace_layout, load_config
+from ralphite.engine.git_worktree import GitRequiredError
 from ralphite.engine.headless_agent import (
     BackendExecutionConfig,
     build_node_prompt,
@@ -28,6 +29,7 @@ from ralphite.engine.models import (
     RunPersistenceState,
     RunViewState,
 )
+from ralphite.engine.reporting import build_final_report
 from ralphite.engine.recovery import to_paused_for_recovery
 from ralphite.engine.run_store import RunStore
 from ralphite.engine.store import HistoryStore
@@ -247,6 +249,7 @@ class LocalOrchestrator:
                         "id": node.id,
                         "cell_id": node.cell_id,
                         "role": node.role,
+                        "task_title": node.task,
                         "lane": node.lane,
                         "team": node.team,
                         "block_index": node.block_index,
@@ -298,6 +301,14 @@ class LocalOrchestrator:
         filename = versioned_filename(plan.plan_id, "completed")
         return "revision_only", self.paths["plans"] / filename
 
+    def git_runtime_status(self) -> dict[str, Any]:
+        return GitWorktreeManager(self.workspace_root, "runtime-check").runtime_status()
+
+    def require_git_workspace(self) -> None:
+        status = self.git_runtime_status()
+        if not bool(status.get("ok")):
+            raise GitRequiredError(self.workspace_root)
+
     def collect_requirements(
         self, plan_ref: str | None = None, plan_content: str | None = None
     ) -> dict[str, list[str]]:
@@ -345,6 +356,7 @@ class LocalOrchestrator:
         permission_snapshot: dict[str, list[str]] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> str:
+        self.require_git_workspace()
         compile_started = time.perf_counter()
         if plan_content is None:
             source_path = self._resolve_plan_path(plan_ref)
@@ -556,6 +568,7 @@ class LocalOrchestrator:
         )
 
     def recover_run(self, run_id: str) -> bool:
+        self.require_git_workspace()
         if run_id in self.active:
             return True
 
@@ -808,6 +821,7 @@ class LocalOrchestrator:
         return True
 
     def resume_from_checkpoint(self, run_id: str) -> bool:
+        self.require_git_workspace()
         if run_id not in self.active and not self.recover_run(run_id):
             return False
 
@@ -1262,131 +1276,30 @@ class LocalOrchestrator:
         artifacts_dir = self.paths["artifacts"] / run.id
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-        succeeded = len([n for n in run.nodes.values() if n.status == "succeeded"])
-        failed = len([n for n in run.nodes.values() if n.status == "failed"])
-        blocked = len([n for n in run.nodes.values() if n.status == "blocked"])
-
-        phase_done = run.metadata.get("phase_done", [])
-        recovery = run.metadata.get("recovery", {})
-        git_state = run.metadata.get("git_state", {})
-        phase_states = (
-            git_state.get("phases", {}) if isinstance(git_state, dict) else {}
-        )
-        cleanup_events = [
-            evt for evt in run.events if evt.get("event") == "CLEANUP_DONE"
-        ]
-        cleanup_items: list[str] = []
-        for event in cleanup_events:
-            meta = event.get("meta") if isinstance(event.get("meta"), dict) else {}
-            items = meta.get("items") if isinstance(meta.get("items"), list) else []
-            cleanup_items.extend(str(item) for item in items)
-        unresolved_conflicts = (
-            recovery.get("details", {}).get("conflict_files", [])
-            if isinstance(recovery.get("details"), dict)
-            else []
-        )
-        recovery_history = [
-            evt
-            for evt in run.events
-            if str(evt.get("event", "")).startswith("RECOVERY_")
-        ]
-
         metrics_payload = (
             run.metadata.get("run_metrics", {})
             if isinstance(run.metadata.get("run_metrics"), dict)
             else {}
         )
-        failure_histogram = (
-            metrics_payload.get("failure_reason_counts")
-            if isinstance(metrics_payload.get("failure_reason_counts"), dict)
-            else {}
-        )
-        top_failures = sorted(
-            [(str(code), int(count)) for code, count in failure_histogram.items()],
-            key=lambda item: item[1],
-            reverse=True,
-        )[:5]
-        remediation_items: list[str] = []
-        for node in run.nodes.values():
-            if node.status != "failed" or not isinstance(node.result, dict):
-                continue
-            next_action = str(node.result.get("next_action") or "").strip()
-            command_hint = str(node.result.get("command_hint") or "").strip()
-            if next_action:
-                remediation_items.append(next_action)
-            if command_hint:
-                remediation_items.append(command_hint)
-        remediation_items = sorted(dict.fromkeys(remediation_items))
 
-        report = "\n".join(
-            [
-                f"# Run {run.id} Summary",
-                "",
-                f"Status: **{run.status}**",
-                f"Succeeded nodes: {succeeded}",
-                f"Failed nodes: {failed}",
-                f"Blocked nodes: {blocked}",
-                f"Completed phases: {', '.join(phase_done) if phase_done else 'none'}",
-                f"Recovery status: {recovery.get('status', 'none')}",
-                "",
-                "## Integration Results",
-            ]
-            + (
-                [
-                    f"- {phase_id}: integrated_to_base={bool(state.get('integrated_to_base'))} "
-                    f"merged_workers={len(state.get('merged_workers', []))}"
-                    for phase_id, state in phase_states.items()
-                    if isinstance(state, dict)
-                ]
-                or ["- none"]
-            )
-            + [
-                "",
-                "## Cleanup Results",
-            ]
-            + ([f"- {item}" for item in cleanup_items] or ["- none"])
-            + [
-                "",
-                "## Unresolved Warnings",
-            ]
-            + (
-                [f"- unresolved conflict: {item}" for item in unresolved_conflicts]
-                or ["- none"]
-            )
-            + [
-                "",
-                "## Failure Histogram",
-            ]
-            + ([f"- {code}: {count}" for code, count in top_failures] or ["- none"])
-            + [
-                "",
-                "## Remediation Checklist",
-            ]
-            + ([f"- {item}" for item in remediation_items] or ["- none"])
-            + [
-                "",
-                "## Recovery History",
-            ]
-            + (
-                [
-                    f"- [{evt['level']}] {evt['event']}: {evt['message']}"
-                    for evt in recovery_history
-                ]
-                or ["- none"]
-            )
-            + [
-                "",
-                "## Timeline",
-            ]
-            + [
-                f"- [{evt['level']}] {evt['event']}: {evt['message']}"
-                for evt in run.events
-            ]
-        )
         report_path = artifacts_dir / "final_report.md"
+        metrics_path = artifacts_dir / "run_metrics.json"
+        bundle_path = artifacts_dir / "machine_bundle.json"
+        report = build_final_report(
+            run,
+            artifact_paths={
+                "final_report": str(report_path),
+                "run_metrics": str(metrics_path),
+                "machine_bundle": str(bundle_path),
+            },
+            run_state_paths={
+                "run_state": str(self.paths["runs"] / run.id / "run_state.json"),
+                "checkpoint": str(self.paths["runs"] / run.id / "checkpoint.json"),
+                "event_log": str(self.paths["runs"] / run.id / "event_log.ndjson"),
+            },
+        )
         report_path.write_text(report, encoding="utf-8")
 
-        metrics_path = artifacts_dir / "run_metrics.json"
         metrics_path.write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
 
         bundle = {
@@ -1398,7 +1311,6 @@ class LocalOrchestrator:
             "metadata": run.metadata,
             "metrics": metrics_payload,
         }
-        bundle_path = artifacts_dir / "machine_bundle.json"
         bundle_path.write_text(json.dumps(bundle, indent=2), encoding="utf-8")
 
         items = [
@@ -2020,6 +1932,14 @@ class LocalOrchestrator:
                     run.status = "succeeded"
 
             if run.status == "paused_recovery_required":
+                total_seconds = max(0.0, time.perf_counter() - run_started)
+                run.metadata["run_metrics"] = self._build_run_metrics(
+                    run,
+                    execution_seconds=total_seconds,
+                    cleanup_seconds=0.0,
+                    total_seconds=total_seconds,
+                ).model_dump(mode="json")
+                self._write_artifacts(run)
                 self._persist_runtime_state(handle, "paused_recovery_required")
                 self.run_store.release_lock(run.id)
                 handle.finished_event.set()

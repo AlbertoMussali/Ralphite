@@ -10,3 +10,4 @@ Last verified against commit: 70b0c1f
 - [ADR-0004: CLI-Only Hard Pivot](ADR-0004-cli-only-hard-pivot.md)
 - [ADR-0005: Single-Package v1 Consolidation](ADR-0005-single-package-v1-consolidation.md)
 - [ADR-0006: Centralized Agent Defaults for Plan v1](ADR-0006-centralized-agent-defaults.md)
+- [ADR-0007: Git-Required Runtime and Human Summary Artifact](ADR-0007-git-required-runtime.md)

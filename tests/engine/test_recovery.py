@@ -2,14 +2,62 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import subprocess
+import tempfile
 
+import pytest
 from ralphite.engine import LocalOrchestrator
+from ralphite.engine.git_worktree import GitRequiredError
 from ralphite.engine.models import (
     NodeRuntimeState,
     RunCheckpoint,
     RunPersistenceState,
     RunViewState,
 )
+
+
+def _init_repo(path: Path) -> None:
+    subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Ralphite Test"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "ralphite@example.com"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (path / "README.md").write_text("repo\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "-A"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "initial"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _git_workspace(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
 
 
 def _build_stub_run(workspace: Path, run_id: str) -> RunViewState:
@@ -131,3 +179,10 @@ def test_recovery_preflight_blocks_unresolved_conflict_markers(tmp_path: Path) -
     run = orch.get_run(run_id)
     assert run is not None
     assert run.metadata.get("recovery", {}).get("status") == "preflight_failed"
+
+
+def test_recover_run_requires_git_workspace(tmp_path: Path) -> None:
+    plain = Path(tempfile.mkdtemp())
+    orch = LocalOrchestrator(plain)
+    with pytest.raises(GitRequiredError):
+        orch.recover_run("missing-run")

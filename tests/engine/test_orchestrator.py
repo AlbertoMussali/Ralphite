@@ -1,11 +1,58 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
+import tempfile
 from types import MethodType
 
 import pytest
 from ralphite.engine import LocalOrchestrator
+from ralphite.engine.git_worktree import GitRequiredError
 import yaml
+
+
+def _init_repo(path: Path) -> None:
+    subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Ralphite Test"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "ralphite@example.com"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (path / "README.md").write_text("repo\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "-A"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "initial"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _git_workspace(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
 
 
 def _plan_content() -> str:
@@ -186,6 +233,11 @@ def _single_task_plan(
     return yaml.safe_dump(plan, sort_keys=False, allow_unicode=False)
 
 
+def _artifact_text(run, artifact_id: str) -> str:  # type: ignore[no-untyped-def]
+    artifact = next(item for item in run.artifacts if item["id"] == artifact_id)
+    return Path(artifact["path"]).read_text(encoding="utf-8")
+
+
 def test_goal_plan_run_succeeds(tmp_path: Path) -> None:
     orch = LocalOrchestrator(tmp_path)
     plan_path = orch.goal_to_plan("Create a simple test artifact")
@@ -200,6 +252,13 @@ def test_goal_plan_run_succeeds(tmp_path: Path) -> None:
     assert any(item["id"] == "final_report" for item in run.artifacts)
     assert any(item["id"] == "run_metrics" for item in run.artifacts)
     assert isinstance(run.metadata.get("run_metrics"), dict)
+    report = _artifact_text(run, "final_report")
+    assert "## Outcome" in report
+    assert "## Changed Files" in report
+    assert "## Acceptance Results" in report
+    assert "## Next Steps" in report
+    assert "## Supporting Artifacts" in report
+    assert "## Run Highlights" in report
 
 
 def test_cancel_run(tmp_path: Path) -> None:
@@ -282,27 +341,35 @@ def test_acceptance_timeout_produces_typed_failure(tmp_path: Path) -> None:
     node = next(iter(run.nodes.values()))
     assert isinstance(node.result, dict)
     assert node.result.get("reason") == "acceptance_command_timeout"
+    report = _artifact_text(run, "final_report")
+    assert "## Acceptance Results" in report
+    assert "Failing command:" in report
+    assert "Acceptance Timeout" in report
 
 
-def test_non_git_workspace_acceptance_uses_workspace_root(tmp_path: Path) -> None:
-    orch = LocalOrchestrator(tmp_path)
+def test_start_run_requires_git_workspace(tmp_path: Path) -> None:
+    plain = Path(tempfile.mkdtemp())
+    orch = LocalOrchestrator(plain)
     plan = _single_task_plan(acceptance_commands=["echo ok"])
-    run_id = orch.start_run(plan_content=plan)
-    assert orch.wait_for_run(run_id, timeout=8.0)
-    run = orch.get_run(run_id)
-    assert run is not None
-    assert run.status == "succeeded"
+    with pytest.raises(GitRequiredError):
+        orch.start_run(plan_content=plan)
 
 
 def test_acceptance_artifact_out_of_bounds_symlink_is_rejected(tmp_path: Path) -> None:
     leak_target = tmp_path.parent
     outside = leak_target / "outside_artifact.txt"
     outside.write_text("x", encoding="utf-8")
-    try:
-        (tmp_path / "leak").symlink_to(leak_target)
-    except OSError as exc:  # pragma: no cover - platform dependent
-        pytest.skip(f"symlink unavailable: {exc}")
     orch = LocalOrchestrator(tmp_path)
+
+    def symlink_agent(self, handle, node, profile, snapshot, *, worktree):  # type: ignore[no-untyped-def]
+        if node.role == "worker":
+            try:
+                (worktree / "leak").symlink_to(leak_target)
+            except OSError as exc:  # pragma: no cover - platform dependent
+                pytest.skip(f"symlink unavailable: {exc}")
+        return True, {"summary": "created symlink"}
+
+    orch._execute_agent = MethodType(symlink_agent, orch)  # type: ignore[method-assign]
     plan = _single_task_plan(
         acceptance_artifacts=[
             {"id": "leak", "path_glob": "leak/outside_artifact.txt", "format": "file"}
@@ -316,6 +383,40 @@ def test_acceptance_artifact_out_of_bounds_symlink_is_rejected(tmp_path: Path) -
     node = next(iter(run.nodes.values()))
     assert isinstance(node.result, dict)
     assert node.result.get("reason") == "acceptance_artifact_out_of_bounds"
+
+
+def test_acceptance_artifact_missing_is_reported_in_final_report(tmp_path: Path) -> None:
+    orch = LocalOrchestrator(tmp_path)
+    plan = _single_task_plan(
+        acceptance_artifacts=[
+            {"id": "missing", "path_glob": "missing/*.txt", "format": "file"}
+        ],
+    )
+    run_id = orch.start_run(plan_content=plan)
+    assert orch.wait_for_run(run_id, timeout=8.0)
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "failed"
+    report = _artifact_text(run, "final_report")
+    assert "## Acceptance Results" in report
+    assert "Missing artifact: `missing`" in report
+    assert "## Failures and Warnings" in report
+
+
+def test_recovery_required_run_is_reported_in_final_report(tmp_path: Path) -> None:
+    orch = LocalOrchestrator(tmp_path)
+    (tmp_path / ".ralphite" / "force_merge_conflict").write_text(
+        "phase-1", encoding="utf-8"
+    )
+    run_id = orch.start_run(plan_content=_conflict_plan_content())
+    assert orch.wait_for_run(run_id, timeout=8.0) is True
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "paused_recovery_required"
+    report = _artifact_text(run, "final_report")
+    assert "## Failures and Warnings" in report
+    assert "SIMULATED_CONFLICT" in report
+    assert "## Next Steps" in report
 
 
 def test_retry_policy_retries_transient_node_failures(tmp_path: Path) -> None:

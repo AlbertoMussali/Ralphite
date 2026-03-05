@@ -23,7 +23,7 @@ Source files:
 
 Typical generated artifacts:
 
-- `final_report.md`
+- `final_report.md` (human summary artifact with outcome, changed files, acceptance results, failures, next steps, and supporting paths)
 - `run_metrics.json`
 - `machine_bundle.json`
 

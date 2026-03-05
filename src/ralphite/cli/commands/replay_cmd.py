@@ -9,6 +9,7 @@ from ralphite.engine import present_run_status
 
 from ..core import (
     _emit_payload,
+    _git_required_payload,
     _normalize_output,
     _orchestrator,
     _print_run_stream,
@@ -33,6 +34,15 @@ def replay_command(
     """Replay a previous run in rerun-failed mode."""
     orch = _orchestrator(workspace)
     mode = _normalize_output(output)
+    if not bool(orch.git_runtime_status().get("ok")):
+        _git_required_payload(
+            command="replay",
+            workspace=workspace,
+            title="Replay",
+            output=mode,
+            run_id=run_id,
+        )
+        raise typer.Exit(code=1)
 
     new_run_id = orch.rerun_failed(run_id)
     if not quiet and mode != "json":

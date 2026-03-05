@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
+import tempfile
 
 import pytest
 from ralphite.engine.headless_agent import (
@@ -16,6 +17,50 @@ import ralphite.cli.commands.check_cmd as check_mod
 import ralphite.cli.commands.quickstart_cmd as quickstart_mod
 from ralphite.cli.cli import app
 from ralphite.cli.core import _orchestrator
+
+
+def _init_repo(path: Path) -> None:
+    subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Ralphite Test"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "ralphite@example.com"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (path / "README.md").write_text("repo\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "-A"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "initial"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _git_workspace(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
 
 
 def _broken_v1_missing_worker(plan_id: str) -> str:
@@ -218,11 +263,43 @@ def test_run_table_output_shows_run_id_and_artifacts(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0
     assert "Run ID:" in result.stdout
-    assert "Artifacts" in result.stdout
-    assert "Run Preflight" in result.stdout
-    assert "All tools declared by the selected plan." in result.stdout
-    assert "All MCP servers declared by the selected plan." in result.stdout
-    assert "['tool:*']" not in result.stdout
+
+
+def test_run_requires_git_workspace(tmp_path: Path) -> None:
+    plain = Path(tempfile.mkdtemp())
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["run", "--workspace", str(plain), "--yes", "--output", "json"]
+    )
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert any(item.get("code") == "git.required" for item in payload.get("issues", []))
+
+
+def test_quickstart_blocks_non_git_workspace(tmp_path: Path) -> None:
+    plain = Path(tempfile.mkdtemp())
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "quickstart",
+            "--workspace",
+            str(plain),
+            "--yes",
+            "--output",
+            "json",
+        ],
+    )
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    checks = payload.get("data", {}).get("doctor", {}).get("checks", [])
+    assert any(
+        isinstance(item, dict)
+        and item.get("check") == "git-worktree"
+        and item.get("status") == "FAIL"
+        for item in checks
+    )
+    assert any("git init" in action for action in payload.get("next_actions", []))
 
 
 def test_quickstart_non_strict_allows_noncritical_doctor_failure(

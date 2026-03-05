@@ -6,6 +6,8 @@ from typing import Annotated
 
 import typer
 
+from ralphite.engine.taxonomy import classify_failure
+
 from ..core import (
     _build_capability_summary,
     _build_execution_summary,
@@ -56,9 +58,30 @@ def doctor_command(
         issues=[{"code": "doctor.failed", "message": "one or more checks failed"}]
         if not bool(snapshot.get("ok"))
         else [],
-        next_actions=["Run with --fix-suggestions to view suggested plan repairs."]
-        if not fix_suggestions and not bool(snapshot.get("ok"))
-        else [],
+        next_actions=(
+            [
+                *(
+                    [
+                        classify_failure("git_required").next_action,
+                        classify_failure("git_required").command_hint,
+                    ]
+                    if any(
+                        isinstance(item, dict)
+                        and item.get("check") == "git-worktree"
+                        and str(item.get("status", "")).upper() not in {"OK", "PASS"}
+                        for item in snapshot.get("checks", [])
+                    )
+                    else []
+                ),
+                *(
+                    ["Run with --fix-suggestions to view suggested plan repairs."]
+                    if not fix_suggestions
+                    else []
+                ),
+            ]
+            if not bool(snapshot.get("ok"))
+            else []
+        ),
         data={
             **snapshot,
             "execution_summary": _build_execution_summary(

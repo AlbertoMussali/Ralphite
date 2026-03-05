@@ -11,6 +11,7 @@ from ..core import (
     _build_capability_summary,
     _build_execution_summary,
     _emit_payload,
+    _git_required_payload,
     _normalize_output,
     _orchestrator,
     _print_preflight_summary,
@@ -52,6 +53,14 @@ def run_command(
     """Run a plan immediately in headless mode."""
     orch = _orchestrator(workspace)
     output_mode = _normalize_output(output)
+    if not bool(orch.git_runtime_status().get("ok")):
+        _git_required_payload(
+            command="run",
+            workspace=workspace,
+            title="Run Result",
+            output=output_mode,
+        )
+        raise typer.Exit(code=1)
     selected_backend = backend or orch.config.default_backend
     selected_model = model or orch.config.default_model
     selected_reasoning_effort = reasoning_effort or orch.config.default_reasoning_effort

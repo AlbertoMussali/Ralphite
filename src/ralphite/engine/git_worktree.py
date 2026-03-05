@@ -12,6 +12,21 @@ def _slug(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip("-").lower() or "item"
 
 
+def git_required_details(workspace_root: Path) -> dict[str, Any]:
+    root = workspace_root.expanduser().resolve()
+    return {
+        "reason": "git_required",
+        "workspace_root": str(root),
+        "detail": "workspace must be inside a git worktree for Ralphite execution",
+    }
+
+
+class GitRequiredError(RuntimeError):
+    def __init__(self, workspace_root: Path) -> None:
+        self.details = git_required_details(workspace_root)
+        super().__init__(str(self.details["detail"]))
+
+
 class GitWorktreeManager:
     def __init__(self, workspace_root: Path, run_id: str) -> None:
         self.workspace_root = workspace_root.expanduser().resolve()
@@ -40,6 +55,20 @@ class GitWorktreeManager:
                 return name
         return "main"
 
+    def runtime_status(self) -> dict[str, Any]:
+        if self.git_available:
+            return {
+                "ok": True,
+                "workspace_root": str(self.workspace_root),
+                "base_branch": self.base_branch,
+                "detail": f"git worktree detected (base branch: {self.base_branch})",
+            }
+        return {"ok": False, **git_required_details(self.workspace_root)}
+
+    def _ensure_git_available(self) -> None:
+        if not self.git_available:
+            raise GitRequiredError(self.workspace_root)
+
     def _git(
         self, args: list[str], *, cwd: Path | None = None, check: bool = False
     ) -> subprocess.CompletedProcess[str]:
@@ -53,6 +82,34 @@ class GitWorktreeManager:
 
     def _worktrees_root(self) -> Path:
         return self.workspace_root / ".ralphite" / "worktrees"
+
+    def _head_commit_metadata(self, cwd: Path) -> dict[str, Any]:
+        commit = self._git(["rev-parse", "HEAD"], cwd=cwd, check=False)
+        commit_sha = commit.stdout.strip() if commit.returncode == 0 else ""
+        changed_files: list[dict[str, str]] = []
+        listing = self._git(
+            ["show", "--name-status", "--format=", "HEAD"], cwd=cwd, check=False
+        )
+        if listing.returncode == 0:
+            for raw in listing.stdout.splitlines():
+                line = raw.strip()
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if len(parts) < 2:
+                    continue
+                status = parts[0]
+                if status.startswith("R") and len(parts) >= 3:
+                    changed_files.append(
+                        {
+                            "status": status,
+                            "path": parts[2],
+                            "previous_path": parts[1],
+                        }
+                    )
+                    continue
+                changed_files.append({"status": status, "path": parts[1]})
+        return {"commit": commit_sha, "changed_files": changed_files}
 
     def _conflict_next_commands(self, worktree: Path) -> list[str]:
         return [
@@ -82,8 +139,8 @@ class GitWorktreeManager:
         return sorted(set(files))
 
     def bootstrap_state(self, existing: dict[str, Any] | None = None) -> dict[str, Any]:
+        self._ensure_git_available()
         state = dict(existing or {})
-        state.setdefault("enabled", self.git_available)
         state.setdefault("base_branch", self.base_branch)
         state.setdefault("phases", {})
         state.setdefault("cleanup_paths", [])
@@ -105,9 +162,6 @@ class GitWorktreeManager:
             "integrated_to_base": False,
         }
         phases[phase] = phase_state
-
-        if not state["enabled"]:
-            return phase_state
 
         if (
             self._git(["rev-parse", "--verify", phase_branch], check=False).returncode
@@ -145,9 +199,6 @@ class GitWorktreeManager:
         }
         workers[node_id] = info
 
-        if not state.get("enabled"):
-            return info
-
         worktree.parent.mkdir(parents=True, exist_ok=True)
         if self._git(["rev-parse", "--verify", branch], check=False).returncode != 0:
             created = self._git(
@@ -171,19 +222,13 @@ class GitWorktreeManager:
     def commit_worker(
         self, state: dict[str, Any], phase: str, node_id: str, message: str
     ) -> tuple[bool, dict[str, Any]]:
+        if not self.git_available:
+            return False, git_required_details(self.workspace_root)
         info = self.prepare_worker(state, phase, node_id)
         if info.get("prepare_error"):
             return False, {
                 "reason": "worktree_prepare_failed",
                 "error": info["prepare_error"],
-            }
-
-        if not state.get("enabled"):
-            info["committed"] = True
-            return True, {
-                "mode": "simulated",
-                "branch": info["branch"],
-                "worktree": str(self.workspace_root),
             }
 
         worktree = Path(info["worktree_path"])
@@ -204,7 +249,11 @@ class GitWorktreeManager:
             }
 
         info["committed"] = True
-        return True, {"branch": info["branch"], "worktree": info["worktree_path"]}
+        return True, {
+            "branch": info["branch"],
+            "worktree": info["worktree_path"],
+            **self._head_commit_metadata(worktree),
+        }
 
     def _simulate_conflict(self, phase: str) -> bool:
         marker_path = self.workspace_root / ".ralphite" / "force_merge_conflict"
@@ -241,10 +290,6 @@ class GitWorktreeManager:
                     ],
                 },
             )
-
-        if not state.get("enabled"):
-            phase_state["integrated_to_base"] = True
-            return "success", {"mode": "simulated", "workers": worker_branches}
 
         if recovery_mode == "agent_best_effort" and recovery_prompt:
             phase_state["last_recovery_prompt"] = recovery_prompt
@@ -423,6 +468,7 @@ class GitWorktreeManager:
         }
 
     def cleanup_phase(self, state: dict[str, Any], phase: str) -> list[str]:
+        self._ensure_git_available()
         messages: list[str] = []
         phase_state = self.prepare_phase(state, phase)
 
@@ -433,59 +479,49 @@ class GitWorktreeManager:
         if phase_state.get("integration_worktree"):
             worker_paths.append(phase_state["integration_worktree"])
 
-        if state.get("enabled"):
-            for path in sorted(dict.fromkeys([item for item in worker_paths if item])):
-                if not Path(path).exists():
-                    messages.append(f"worktree already removed {path}")
-                    continue
-                removed = self._git(
-                    ["worktree", "remove", "--force", path], check=False
+        for path in sorted(dict.fromkeys([item for item in worker_paths if item])):
+            if not Path(path).exists():
+                messages.append(f"worktree already removed {path}")
+                continue
+            removed = self._git(
+                ["worktree", "remove", "--force", path], check=False
+            )
+            if removed.returncode == 0:
+                messages.append(f"removed worktree {path}")
+            else:
+                messages.append(
+                    f"worktree remove skipped {path}: {removed.stderr.strip() or removed.stdout.strip()}"
                 )
-                if removed.returncode == 0:
-                    messages.append(f"removed worktree {path}")
-                else:
-                    messages.append(
-                        f"worktree remove skipped {path}: {removed.stderr.strip() or removed.stdout.strip()}"
-                    )
-        else:
-            for path in sorted(dict.fromkeys([item for item in worker_paths if item])):
-                messages.append(f"simulated cleanup {path}")
         return messages
 
     def cleanup_all(self, state: dict[str, Any]) -> list[str]:
+        self._ensure_git_available()
         messages: list[str] = []
         phases = list(self.bootstrap_state(state).get("phases", {}).keys())
         for phase in phases:
             messages.extend(self.cleanup_phase(state, phase))
 
-        if state.get("enabled"):
-            for branch in reversed(
-                list(dict.fromkeys(self.list_managed_branches(state)))
-            ):
-                if not branch:
-                    continue
-                exists = self._git(["rev-parse", "--verify", branch], check=False)
-                if exists.returncode != 0:
-                    messages.append(f"branch already removed {branch}")
-                    continue
-                deleted = self._git(["branch", "-D", branch], check=False)
-                if deleted.returncode == 0:
-                    messages.append(f"deleted branch {branch}")
-                else:
-                    messages.append(
-                        f"branch delete skipped {branch}: {deleted.stderr.strip() or deleted.stdout.strip()}"
-                    )
+        for branch in reversed(list(dict.fromkeys(self.list_managed_branches(state)))):
+            if not branch:
+                continue
+            exists = self._git(["rev-parse", "--verify", branch], check=False)
+            if exists.returncode != 0:
+                messages.append(f"branch already removed {branch}")
+                continue
+            deleted = self._git(["branch", "-D", branch], check=False)
+            if deleted.returncode == 0:
+                messages.append(f"deleted branch {branch}")
+            else:
+                messages.append(
+                    f"branch delete skipped {branch}: {deleted.stderr.strip() or deleted.stdout.strip()}"
+                )
         return messages
 
     def commit_workspace_changes(
         self, message: str, paths: list[str] | None = None
     ) -> tuple[bool, dict[str, Any]]:
         if not self.git_available:
-            return True, {
-                "mode": "simulated",
-                "message": message,
-                "paths": list(paths or []),
-            }
+            return False, git_required_details(self.workspace_root)
 
         if paths:
             staged_paths: list[str] = []
@@ -543,4 +579,5 @@ class GitWorktreeManager:
             "mode": "committed",
             "message": message,
             "paths": list(paths or []),
+            **self._head_commit_metadata(self.workspace_root),
         }

@@ -55,6 +55,6 @@ uv run ralphite run --workspace . --plan examples/plans/example_easy_calendar_ma
 
 ## Expected Outputs
 
-- `final_report` (markdown)
+- `final_report` (markdown human summary with outcome, changed files, acceptance results, failures, and next steps)
 - `machine_bundle` (json)
 - task-level artifacts under `src/calendar_math/`, `tests/`, and `docs/calendar_math/`

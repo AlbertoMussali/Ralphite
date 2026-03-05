@@ -13,6 +13,13 @@ class FailureAdvice:
 
 
 FAILURE_MAP: dict[str, FailureAdvice] = {
+    "git_required": FailureAdvice(
+        code="git_required",
+        title="Git Worktree Required",
+        message="Ralphite execution requires the workspace to be inside a git worktree.",
+        next_action="Run inside an existing git repository or initialize one with `git init -b main` before executing Ralphite.",
+        command_hint="git init -b main",
+    ),
     "permission_denied": FailureAdvice(
         code="permission_denied",
         title="Permission Blocked",

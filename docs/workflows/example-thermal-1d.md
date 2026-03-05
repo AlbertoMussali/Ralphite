@@ -57,7 +57,7 @@ uv run ralphite run --workspace . --plan examples/plans/example_medium_thermal_1
 
 ## Expected Outputs
 
-- `final_report` (markdown)
+- `final_report` (markdown human summary with outcome, changed files, acceptance results, failures, and next steps)
 - `machine_bundle` (json)
 - `simulation_wide_csv` (csv)
 - task-level artifacts in `rust/thermal_solver/`, `src/thermal_sim/`, and `outputs/`

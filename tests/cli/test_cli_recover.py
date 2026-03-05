@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
+import tempfile
 
+import pytest
 from typer.testing import CliRunner
 
 from ralphite.engine import LocalOrchestrator
@@ -13,6 +16,50 @@ from ralphite.cli.cli import (
     RECOVER_EXIT_SUCCESS,
     app,
 )
+
+
+def _init_repo(path: Path) -> None:
+    subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Ralphite Test"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "ralphite@example.com"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (path / "README.md").write_text("repo\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "-A"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "initial"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _git_workspace(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
 
 
 def _plan_content() -> str:
@@ -130,3 +177,12 @@ def test_cli_recover_preflight_reports_blockers_and_mode(tmp_path: Path) -> None
     assert payload["data"]["recovery_mode"] == "Best Effort Agent"
     blockers = payload["data"]["preflight"]["blocking_reasons"]
     assert any("requires a non-empty prompt" in item for item in blockers)
+
+
+def test_cli_recover_requires_git_workspace(tmp_path: Path) -> None:
+    plain = Path(tempfile.mkdtemp())
+    runner = CliRunner()
+    result = runner.invoke(app, ["recover", "--workspace", str(plain), "--json"])
+    assert result.exit_code == RECOVER_EXIT_INVALID_INPUT
+    payload = json.loads(result.stdout)
+    assert any(item.get("code") == "git.required" for item in payload.get("issues", []))

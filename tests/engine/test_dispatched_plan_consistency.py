@@ -3,11 +3,51 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import shutil
+import subprocess
 
 import pytest
 
 from ralphite.engine import LocalOrchestrator
 from ralphite.engine.validation import validate_plan_content
+
+
+def _init_repo(path: Path) -> None:
+    subprocess.run(
+        ["git", "init", "-b", "main"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Ralphite Test"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "ralphite@example.com"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (path / "README.md").write_text("repo\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "-A"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "initial"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 FIXTURE_PLANS = Path(__file__).resolve().parent / "fixtures" / "plans"
@@ -17,6 +57,11 @@ VALID_FIXTURES = [
     "blue_red_per_task.yaml",
     "custom_linear_cells.yaml",
 ]
+
+
+@pytest.fixture(autouse=True)
+def _git_workspace(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
 
 
 @pytest.mark.parametrize("fixture_name", VALID_FIXTURES)

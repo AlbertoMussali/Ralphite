@@ -6,7 +6,7 @@ Last verified against commit: 70b0c1f
 
 ## Codex-First Happy Path
 
-Requirements: Python 3.13+, `uv`, `git`, `rg`, and `codex` in `PATH`.
+Requirements: Python 3.13+, `uv`, `git`, `rg`, and `codex` in `PATH`, and the workspace must already be inside a git worktree.
 
 ```bash
 uv run ralphite init --workspace .
@@ -17,8 +17,9 @@ uv run ralphite run --workspace . --yes --output table
 What this should do:
 
 - `init` creates `.ralphite/config.toml` and a starter v1 plan.
-- `quickstart` runs `doctor`, bootstraps missing workspace state, shows the selected plan/backend/model/capability scope, and starts a first run.
+- `quickstart` runs `doctor`, verifies git/worktree readiness, bootstraps missing workspace state, shows the selected plan/backend/model/capability scope, and starts a first run.
 - `run` executes the selected plan directly and returns a result with run id, next action, and artifact paths.
+- Successful runs always leave behind a human-facing `final_report.md` with outcome, changed files, acceptance results, failures, and next steps.
 
 ## Starter Templates
 
@@ -34,6 +35,14 @@ If the happy path fails:
 - `uv run ralphite doctor --workspace . --output table`
 - `uv run ralphite history --workspace . --output table`
 - `uv run ralphite recover --workspace . --output table`
+
+If `doctor` reports `git-worktree` as failed, initialize the workspace first:
+
+```bash
+git init -b main
+git add -A
+git commit -m "initial workspace state"
+```
 
 ## What To Read Next
 

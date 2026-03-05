@@ -109,6 +109,17 @@ def _doctor_snapshot(
             {"check": f"cmd:{cmd}", "status": status, "detail": found or "not in PATH"}
         )
 
+    git_status = orch.git_runtime_status()
+    checks.append(
+        {
+            "check": "git-worktree",
+            "status": "OK" if bool(git_status.get("ok")) else "FAIL",
+            "detail": str(git_status.get("detail", "")),
+        }
+    )
+    if not bool(git_status.get("ok")):
+        ok = False
+
     default_backend = str(orch.config.default_backend or "codex").strip().lower()
     skip_backend_checks = os.getenv("RALPHITE_SKIP_BACKEND_CMD_CHECKS") == "1"
     codex_required = default_backend == "codex"
@@ -204,7 +215,7 @@ def _doctor_snapshot(
 
     tasks_ok = True
     resolver_ok = True
-    git_ready_ok = True
+    git_ready_ok = bool(git_status.get("ok"))
     for plan in plans:
         valid, _issues, summary = validate_plan_content(
             plan.read_text(encoding="utf-8"),

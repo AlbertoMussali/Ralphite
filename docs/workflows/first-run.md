@@ -11,6 +11,8 @@ uv run ralphite quickstart --workspace . --yes --output table
 uv run ralphite run --workspace . --yes --output table
 ```
 
+Ralphite execution and recovery require the workspace to be inside a git worktree. `doctor`, `quickstart`, `run`, and `recover` fail closed outside git.
+
 `init` creates the local Ralphite workspace.
 
 - `.ralphite/config.toml`
@@ -45,7 +47,7 @@ On completion, the CLI should surface:
 
 Typical artifacts:
 
-- `.ralphite/artifacts/<run-id>/final_report.md`
+- `.ralphite/artifacts/<run-id>/final_report.md` (human summary: outcome, changed files, acceptance results, failures, next steps)
 - `.ralphite/artifacts/<run-id>/run_metrics.json`
 - `.ralphite/artifacts/<run-id>/machine_bundle.json`
 

@@ -7,6 +7,7 @@ from typing import Annotated, Any
 import typer
 
 from ralphite.engine import present_run_status
+from ralphite.engine.taxonomy import classify_failure
 
 from ..core import (
     _build_capability_summary,
@@ -111,9 +112,20 @@ def quickstart_command(
     record_step("Doctor", doctor_started, doctor_detail)
     if blocking_checks:
         recommended = _collect_recommended_commands(snapshot)
-        next_actions = recommended or [
-            "Run `ralphite doctor --output table` to inspect failures."
-        ]
+        git_failure = any(
+            isinstance(item, dict)
+            and item.get("check") == "git-worktree"
+            and str(item.get("status", "")).upper() not in {"OK", "PASS"}
+            for item in blocking_checks
+        )
+        next_actions = recommended or (
+            [
+                classify_failure("git_required").next_action,
+                classify_failure("git_required").command_hint,
+            ]
+            if git_failure
+            else ["Run `ralphite doctor --output table` to inspect failures."]
+        )
         if mode == "json":
             _emit_payload(
                 mode,

@@ -16,6 +16,7 @@ import yaml
 from ralphite.schemas import CliOutputEnvelopeV1
 
 from ralphite.engine import (
+    GitWorktreeManager,
     LocalOrchestrator,
     make_bootstrap_plan,
     present_event,
@@ -23,6 +24,7 @@ from ralphite.engine import (
     present_run_status,
     validate_plan_content,
 )
+from ralphite.engine.taxonomy import classify_failure
 
 CLI_OUTPUT_SCHEMA_VERSION = "cli-output.v1"
 console = Console()
@@ -198,6 +200,31 @@ def _result_payload(
         data=data or {},
     )
     return envelope.model_dump(mode="json")
+
+
+def _git_required_payload(
+    *,
+    command: str,
+    workspace: Path,
+    title: str,
+    output: str,
+    run_id: str | None = None,
+    data: dict[str, Any] | None = None,
+    exit_code: int = 1,
+) -> None:
+    advice = classify_failure("git_required")
+    status = GitWorktreeManager(workspace.expanduser().resolve(), "cli").runtime_status()
+    payload = _result_payload(
+        command=command,
+        ok=False,
+        status="failed",
+        run_id=run_id,
+        exit_code=exit_code,
+        issues=[{"code": "git.required", "message": advice.message}],
+        next_actions=_dedupe_strings([advice.next_action, advice.command_hint]),
+        data={"git": status, **(data or {})},
+    )
+    _emit_payload(output, payload, title=title)
 
 
 def _normalize_output(output: str, json_mode: bool = False) -> str:
