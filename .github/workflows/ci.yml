@@ -27,7 +27,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
@@ -35,7 +35,7 @@ jobs:
           enable-cache: true
 
       - name: Install workspace deps
-        run: uv sync --all-packages --dev
+        run: uv sync --all-packages --dev --no-editable
 
       - name: Ruff format check
         run: uv run ruff format --check .
@@ -80,7 +80,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
@@ -88,7 +88,7 @@ jobs:
           enable-cache: true
 
       - name: Install workspace deps
-        run: uv sync --all-packages --dev
+        run: uv sync --all-packages --dev --no-editable
 
       - name: Full test suite
         run: uv run --with pytest pytest -q
@@ -112,7 +112,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
@@ -120,7 +120,7 @@ jobs:
           enable-cache: true
 
       - name: Install workspace deps
-        run: uv sync --all-packages --dev
+        run: uv sync --all-packages --dev --no-editable
 
       - name: Perf regression gate
         run: uv run --with pytest pytest apps/cli/tests/perf -q -m perf
