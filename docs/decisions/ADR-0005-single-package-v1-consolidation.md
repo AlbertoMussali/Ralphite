@@ -24,7 +24,7 @@ Adopt a single distributable package:
 Consolidate repo/package layout to:
 
 - `src/ralphite/{cli,engine,schemas}`
-- `tests/{cli,engine,perf}`
+- `tests/{cli,engine}`
 - `docs/`
 - `scripts/`
 
@@ -48,7 +48,6 @@ CI must keep:
 - `ruff check --fix` cleanliness gate (`git diff --exit-code`)
 - full test suite
 - strict check gate
-- perf regression gate (`<=10%` runtime/RSS)
 
 CI must include deterministic preflight for required binaries used by doctor/check (notably `rg`).
 

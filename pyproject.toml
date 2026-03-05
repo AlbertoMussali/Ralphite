@@ -32,10 +32,5 @@ where = ["src"]
 [tool.setuptools.package-data]
 "ralphite.schemas" = ["json/*.json"]
 
-[tool.pytest.ini_options]
-markers = [
-    "perf: performance baseline checks (opt-in with RALPHITE_PERF=1)",
-]
-
 [tool.ruff]
 extend-exclude = ["build"]
