@@ -149,6 +149,7 @@ def _print_preflight_summary(
             title=f"[bold]{title}[/bold]",
             border_style="blue",
             expand=False,
+            padding=(0, 1),
         )
     )
 
@@ -366,9 +367,9 @@ def _print_run_stream(
         info = present_event(str(event.get("event", "")))
         color = "green" if level == "info" else "yellow" if level == "warn" else "red"
         message = str(event.get("message", ""))
-        console.print(f"[{color}]{info.title}[/{color}] {message}")
+        console.print(f"[{color}]{info.title:20}[/{color}] {message}")
         if verbose or level in {"warn", "error"}:
-            console.print(f"  next: {info.next_action}")
+            console.print(f"  [dim]next: {info.next_action}[/dim]")
         if event.get("event") == "RUN_DONE":
             break
 
@@ -575,5 +576,6 @@ def _emit_payload(
         title=f"[bold]{title}[/bold]" if title else "[bold]Result Payload[/bold]",
         expand=False,
         border_style="blue",
+        padding=(0, 1),
     )
     console.print(panel)

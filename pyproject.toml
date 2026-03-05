@@ -7,6 +7,22 @@ name = "ralphite"
 version = "1.0.0"
 description = "Ralphite local-first multi-agent CLI orchestrator"
 requires-python = ">=3.13"
+authors = [
+    {name = "Alberto Mussali", email = "[EMAIL_ADDRESS]"},
+]
+license = {text = "MIT"}
+readme = "README.md"
+keywords = ["agent", "orchestrator", "cli", "headless"]
+classifiers = [
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: MIT License",
+]
+
+[project.urls]
+Homepage = "https://github.com/AlbertoMussali/Ralphite"
+Documentation = "https://github.com/AlbertoMussali/Ralphite/blob/main/docs/index.md"
+Repository = "https://github.com/AlbertoMussali/Ralphite"
+
 dependencies = [
     "typer>=0.12,<1",
     "rich>=13.9,<14",
