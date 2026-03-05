@@ -7,6 +7,13 @@
 - `packages/engine`: local orchestrator, validation, compiler, git/worktree lifecycle, recovery
 - `packages/schemas`: shared v5 schema + validation rules
 
+## Headless Agent Runtime
+
+- default backend: `codex exec` in non-interactive (`--json`) mode
+- optional backend: `agent` (Cursor headless command)
+- default model: `gpt-5.3-codex`
+- default reasoning effort: `medium`
+
 ## Plan Contract (v5)
 
 Runtime executes only `version: 5` plans.

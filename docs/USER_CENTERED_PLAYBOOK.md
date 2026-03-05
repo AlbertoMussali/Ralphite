@@ -8,6 +8,7 @@ This playbook captures practical operator flows for Ralphite's local-first workf
    - `uv run ralphite init --workspace .`
 2. Run guided setup:
    - `uv run ralphite quickstart --workspace . --no-tui --yes --output stream`
+   - optional backend override: `--backend codex|cursor --model gpt-5.3-codex --reasoning-effort medium`
 3. If you prefer interactive setup:
    - `uv run ralphite tui --workspace .`
    - Open `Run Setup` and validate before start.
@@ -40,6 +41,7 @@ Recommended hardening loop:
 2. Run real workflows.
 3. Move frequently unused capabilities to deny lists.
 4. Save and rerun `doctor` + `check`.
+5. For release confidence, run `uv run ralphite check --workspace . --beta-gate --output json`.
 
 ## 4) JSON Automation Contract
 

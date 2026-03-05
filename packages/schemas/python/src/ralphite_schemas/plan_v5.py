@@ -13,11 +13,24 @@ class AgentRole(str, Enum):
     ORCHESTRATOR = "orchestrator"
 
 
+class AgentProvider(str, Enum):
+    CODEX = "codex"
+    CURSOR = "cursor"
+    OPENAI = "openai"
+
+
+class ReasoningEffort(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class AgentSpec(BaseModel):
     id: str
     role: AgentRole
-    provider: str
-    model: str
+    provider: AgentProvider = AgentProvider.CODEX
+    model: str = "gpt-5.3-codex"
+    reasoning_effort: ReasoningEffort = ReasoningEffort.MEDIUM
     system_prompt: str = ""
     tools_allow: list[str] = Field(default_factory=list)
 

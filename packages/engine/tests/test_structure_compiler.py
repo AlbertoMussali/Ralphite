@@ -19,12 +19,12 @@ def _base_plan() -> dict:
         },
         "constraints": {"max_parallel": 3},
         "agents": [
-            {"id": "worker_default", "role": "worker", "provider": "openai", "model": "gpt-4.1-mini"},
+            {"id": "worker_default", "role": "worker", "provider": "codex", "model": "gpt-5.3-codex"},
             {
                 "id": "orchestrator_default",
                 "role": "orchestrator",
-                "provider": "openai",
-                "model": "gpt-4.1-mini",
+                "provider": "codex",
+                "model": "gpt-5.3-codex",
             },
         ],
         "orchestration": {

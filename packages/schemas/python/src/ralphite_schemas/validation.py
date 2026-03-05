@@ -76,6 +76,15 @@ def validate_plan(plan: PlanSpecV5) -> list[ValidationIssue]:
             )
         agent_ids.add(agent.id)
         role_counts[agent.role.value] += 1
+        if agent.provider.value == "openai":
+            issues.append(
+                ValidationIssue(
+                    "agent.provider.legacy_openai",
+                    f"agent '{agent.id}' uses legacy provider 'openai'; migrate to 'codex' or 'cursor'",
+                    f"agents[{idx}].provider",
+                    level="warn",
+                )
+            )
 
     if role_counts.get("worker", 0) == 0:
         issues.append(ValidationIssue("agent.missing_worker", "at least one worker agent is required", "agents"))

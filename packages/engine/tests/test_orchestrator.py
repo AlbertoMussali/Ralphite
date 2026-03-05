@@ -25,13 +25,13 @@ constraints:
 agents:
   - id: worker_default
     role: worker
-    provider: openai
-    model: gpt-4.1-mini
+    provider: codex
+    model: gpt-5.3-codex
     tools_allow: [tool:*]
   - id: orchestrator_default
     role: orchestrator
-    provider: openai
-    model: gpt-4.1-mini
+    provider: codex
+    model: gpt-5.3-codex
 orchestration:
   template: general_sps
   inference_mode: mixed
@@ -90,13 +90,13 @@ materials:
 agents:
   - id: worker_default
     role: worker
-    provider: openai
-    model: gpt-4.1-mini
+    provider: codex
+    model: gpt-5.3-codex
     tools_allow: [tool:*]
   - id: orchestrator_default
     role: orchestrator
-    provider: openai
-    model: gpt-4.1-mini
+    provider: codex
+    model: gpt-5.3-codex
 orchestration:
   template: general_sps
   inference_mode: mixed
@@ -141,8 +141,8 @@ def _single_task_plan(
             "acceptance_timeout_seconds": acceptance_timeout_seconds,
         },
         "agents": [
-            {"id": "worker_default", "role": "worker", "provider": "openai", "model": "gpt-4.1-mini"},
-            {"id": "orchestrator_default", "role": "orchestrator", "provider": "openai", "model": "gpt-4.1-mini"},
+            {"id": "worker_default", "role": "worker", "provider": "codex", "model": "gpt-5.3-codex"},
+            {"id": "orchestrator_default", "role": "orchestrator", "provider": "codex", "model": "gpt-5.3-codex"},
         ],
         "orchestration": {
             "template": "general_sps",

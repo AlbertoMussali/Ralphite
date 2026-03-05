@@ -141,6 +141,14 @@ Run deterministic release gate (repo-root suites, independent of workspace plan 
 
 ```bash
 uv run ralphite check --workspace . --release-gate --output json
+uv run ralphite check --workspace . --beta-gate --output json
+```
+
+Headless backend overrides:
+
+```bash
+uv run ralphite run --workspace . --backend codex --model gpt-5.3-codex --reasoning-effort medium --no-tui --output stream
+uv run ralphite quickstart --workspace . --backend cursor --model gpt-5.3-codex --reasoning-effort medium --no-tui --yes
 ```
 
 Recovery:

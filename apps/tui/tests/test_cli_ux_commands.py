@@ -27,8 +27,8 @@ constraints:
 agents:
   - id: orchestrator_default
     role: orchestrator
-    provider: openai
-    model: gpt-4.1-mini
+    provider: codex
+    model: gpt-5.3-codex
 tasks:
   - id: t1
     title: invalid
@@ -292,3 +292,44 @@ def test_check_release_gate_ignores_doctor_failures(tmp_path: Path, monkeypatch:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["status"] == "succeeded"
+
+
+def test_check_beta_gate_fails_when_doctor_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_snapshot(_orch, include_fix_suggestions=False):  # noqa: ANN001
+        return {"ok": False, "checks": [], "plan_failures": [], "stale_artifacts": {}, "fix_suggestions": []}
+
+    monkeypatch.setattr(cli_mod, "_doctor_snapshot", fake_snapshot)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["check", "--workspace", str(tmp_path), "--beta-gate", "--output", "json"],
+    )
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "failed"
+    assert any(item.get("code") == "check.beta_gate_doctor_failed" for item in payload.get("issues", []))
+
+
+def test_check_beta_gate_runs_backend_and_release_checks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_snapshot(_orch, include_fix_suggestions=False):  # noqa: ANN001
+        return {"ok": True, "checks": [], "plan_failures": [], "stale_artifacts": {}, "fix_suggestions": []}
+
+    def fake_backend_smoke(*, orch, repo_root, quiet, machine_mode, verbose):  # noqa: ANN001
+        return True, [{"suite": "backend-codex-smoke", "command": "codex exec", "cwd": str(repo_root), "exit_code": 0}]
+
+    def fake_release_gate(*, repo_root, quiet, machine_mode, verbose):  # noqa: ANN001
+        return True, [{"suite": "release", "command": "pytest -q", "cwd": str(repo_root), "exit_code": 0}]
+
+    monkeypatch.setattr(cli_mod, "_doctor_snapshot", fake_snapshot)
+    monkeypatch.setattr(cli_mod, "_run_backend_smoke", fake_backend_smoke)
+    monkeypatch.setattr(cli_mod, "_run_release_gate", fake_release_gate)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["check", "--workspace", str(tmp_path), "--beta-gate", "--output", "json"],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "succeeded"
+    commands = payload.get("data", {}).get("commands", [])
+    assert any(row.get("suite") == "backend-codex-smoke" for row in commands if isinstance(row, dict))

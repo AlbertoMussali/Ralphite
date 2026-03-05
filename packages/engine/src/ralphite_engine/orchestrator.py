@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import glob
 import json
-import os
 from pathlib import Path
 from queue import Empty, Queue
 import subprocess
@@ -16,6 +15,7 @@ from typing import Any, Generator
 from uuid import uuid4
 
 from ralphite_engine.config import LocalConfig, ensure_workspace_layout, load_config
+from ralphite_engine.headless_agent import BackendExecutionConfig, build_node_prompt, execute_headless_agent
 from ralphite_engine.git_worktree import GitWorktreeManager
 from ralphite_engine.models import ArtifactIndex, NodeRuntimeState, RunCheckpoint, RunMetrics, RunPersistenceState, RunViewState
 from ralphite_engine.recovery import recoverable_run_ids, to_paused_for_recovery
@@ -285,6 +285,9 @@ class LocalOrchestrator:
         *,
         plan_ref: str | None = None,
         plan_content: str | None = None,
+        backend_override: str | None = None,
+        model_override: str | None = None,
+        reasoning_effort_override: str | None = None,
         permission_snapshot: dict[str, list[str]] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> str:
@@ -325,6 +328,15 @@ class LocalOrchestrator:
 
         run_id = str(uuid4())
         snapshot = permission_snapshot or self.default_permission_snapshot()
+        execution_backend = (backend_override or self.config.default_backend or "codex").strip().lower()
+        if execution_backend not in {"codex", "cursor"}:
+            execution_backend = "codex"
+        execution_model = (model_override or self.config.default_model or "gpt-5.3-codex").strip() or "gpt-5.3-codex"
+        execution_reasoning_effort = (
+            reasoning_effort_override or self.config.default_reasoning_effort or "medium"
+        ).strip().lower()
+        if execution_reasoning_effort not in {"low", "medium", "high"}:
+            execution_reasoning_effort = "medium"
         git_manager = GitWorktreeManager(self.workspace_root, run_id)
         run = RunViewState(
             id=run_id,
@@ -337,6 +349,12 @@ class LocalOrchestrator:
                 "compile_seconds": compile_seconds,
                 "permission_snapshot": snapshot,
                 "task_writeback_mode": self.config.task_writeback_mode,
+                "execution_defaults": {
+                    "backend": execution_backend,
+                    "model": execution_model,
+                    "reasoning_effort": execution_reasoning_effort,
+                    "cursor_command": self.config.cursor_command,
+                },
                 **runtime_meta,
                 "git_state": git_manager.bootstrap_state(),
                 **(metadata or {}),
@@ -783,11 +801,38 @@ class LocalOrchestrator:
             return True
         return mcp_id in allow
 
+    def _resolve_execution_defaults(self, handle: RuntimeHandle, profile: AgentSpec) -> tuple[str, str, str, str]:
+        defaults = (
+            handle.run.metadata.get("execution_defaults")
+            if isinstance(handle.run.metadata.get("execution_defaults"), dict)
+            else {}
+        )
+        backend_raw = str(defaults.get("backend") or profile.provider.value or self.config.default_backend or "codex").strip().lower()
+        if backend_raw == "openai":
+            backend_raw = "codex"
+        if backend_raw not in {"codex", "cursor"}:
+            backend_raw = "codex"
+
+        model_raw = str(defaults.get("model") or profile.model or self.config.default_model or "gpt-5.3-codex").strip()
+        model = model_raw or "gpt-5.3-codex"
+
+        reasoning_raw = (
+            str(defaults.get("reasoning_effort") or profile.reasoning_effort.value or self.config.default_reasoning_effort or "medium")
+            .strip()
+            .lower()
+        )
+        reasoning_effort = reasoning_raw if reasoning_raw in {"low", "medium", "high"} else "medium"
+        cursor_command = str(defaults.get("cursor_command") or self.config.cursor_command or "agent").strip() or "agent"
+        return backend_raw, model, reasoning_effort, cursor_command
+
     def _execute_agent(
         self,
+        handle: RuntimeHandle,
         node: RuntimeNodeSpec,
         profile: AgentSpec,
         snapshot: dict[str, list[str]],
+        *,
+        worktree: Path,
     ) -> tuple[bool, dict[str, Any]]:
         requested = list(profile.tools_allow or [])
         denied: list[str] = []
@@ -804,11 +849,27 @@ class LocalOrchestrator:
         if "[fail]" in task.lower():
             return False, {"reason": "task_marker_failure", "task": task}
 
-        time.sleep(float(os.getenv("RALPHITE_RUNNER_SIMULATED_TASK_SECONDS", "0.2")))
+        backend, model, reasoning_effort, cursor_command = self._resolve_execution_defaults(handle, profile)
+        prompt = build_node_prompt(node, worktree=worktree, permission_snapshot=snapshot)
+        ok, result = execute_headless_agent(
+            config=BackendExecutionConfig(
+                backend=backend,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                cursor_command=cursor_command,
+                timeout_seconds=max(60, int(handle.plan.constraints.max_runtime_seconds)),
+            ),
+            prompt=prompt,
+            worktree=worktree,
+        )
+        if not ok:
+            return False, result
         return True, {
-            "summary": f"Executed task: {task[:120]}",
+            **result,
             "agent_id": profile.id,
-            "model": profile.model,
+            "provider": backend,
+            "model": model,
+            "reasoning_effort": reasoning_effort,
             "role": node.role,
             "phase": node.phase,
             "lane": node.lane,
@@ -996,6 +1057,12 @@ class LocalOrchestrator:
             "worker_merge_conflict",
             "base_merge_conflict",
             "simulated_conflict",
+            "backend_binary_missing",
+            "backend_model_unsupported",
+            "backend_auth_failed",
+            "backend_output_malformed",
+            "backend_out_of_worktree_claim",
+            "backend_worktree_missing",
         }
         if reason not in non_retryable and rec.attempt_count <= max_retries:
             rec.status = "queued"
@@ -1465,7 +1532,13 @@ class LocalOrchestrator:
             return "failure", {"reason": "runtime_error", "error": f"unknown agent_id {node.agent_profile_id}"}
 
         if node.role == "orchestrator":
-            agent_ok, agent_result = self._execute_agent(node, profile, handle.permission_snapshot)
+            agent_ok, agent_result = self._execute_agent(
+                handle,
+                node,
+                profile,
+                handle.permission_snapshot,
+                worktree=self.workspace_root,
+            )
             if not agent_ok:
                 return "failure", agent_result
 
@@ -1514,7 +1587,22 @@ class LocalOrchestrator:
 
         if node.role == "worker":
             git_manager.prepare_phase(handle.run.metadata.setdefault("git_state", {}), node.phase)
-            ok, result = self._execute_agent(node, profile, handle.permission_snapshot)
+            worker_info = git_manager.prepare_worker(
+                handle.run.metadata.setdefault("git_state", {}),
+                node.phase,
+                node.id,
+            )
+            if worker_info.get("prepare_error"):
+                return "failure", {"reason": "worktree_prepare_failed", "error": worker_info["prepare_error"]}
+            worker_worktree_candidate = Path(str(worker_info.get("worktree_path") or self.workspace_root)).expanduser().resolve()
+            worker_worktree = worker_worktree_candidate if worker_worktree_candidate.exists() else self.workspace_root
+            ok, result = self._execute_agent(
+                handle,
+                node,
+                profile,
+                handle.permission_snapshot,
+                worktree=worker_worktree,
+            )
             if not ok:
                 return "failure", result
 
@@ -1535,7 +1623,13 @@ class LocalOrchestrator:
                 return "failure", acceptance_result
             return "success", {**result, "worktree": commit_meta, "acceptance": acceptance_result}
 
-        ok, result = self._execute_agent(node, profile, handle.permission_snapshot)
+        ok, result = self._execute_agent(
+            handle,
+            node,
+            profile,
+            handle.permission_snapshot,
+            worktree=self.workspace_root,
+        )
         return ("success", result) if ok else ("failure", result)
 
     def _finalize_terminal_run(self, handle: RuntimeHandle, git_manager: GitWorktreeManager) -> None:

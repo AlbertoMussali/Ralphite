@@ -56,6 +56,9 @@ jobs:
 
   bootstrap-release-gate-smoke:
     runs-on: ubuntu-latest
+    env:
+      RALPHITE_DEV_SIMULATED_EXECUTION: "1"
+      RALPHITE_SKIP_BACKEND_CMD_CHECKS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -81,3 +84,32 @@ jobs:
         run: |
           mkdir -p /tmp/ralphite-release-gate
           ralphite check --workspace /tmp/ralphite-release-gate --release-gate --output json
+
+  cross-platform-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      RALPHITE_DEV_SIMULATED_EXECUTION: "1"
+      RALPHITE_SKIP_BACKEND_CMD_CHECKS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv
+          pip install -e packages/schemas/python
+          pip install -e packages/engine
+          pip install -e apps/tui
+          pip install pytest
+      - name: Headless backend command-build tests
+        run: |
+          pytest packages/engine/tests/test_headless_agent.py apps/tui/tests/test_cli_ux_commands.py::test_check_beta_gate_runs_backend_and_release_checks -q
+      - name: Non-interactive run smoke
+        run: |
+          ralphite run --workspace . --no-tui --yes --output json

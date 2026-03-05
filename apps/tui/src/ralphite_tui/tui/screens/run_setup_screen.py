@@ -192,6 +192,22 @@ class RunSetupScreen(Vertical):
     def _fix_preview(self) -> Static:
         return self.query_one("#setup-fix-preview", Static)
 
+    def _execution_profile_hint(self) -> str:
+        if not self._loaded_plan_data:
+            cfg = self.shell.orchestrator.config
+            return f"backend={cfg.default_backend} model={cfg.default_model} reasoning={cfg.default_reasoning_effort}"
+        agents = self._loaded_plan_data.get("agents") if isinstance(self._loaded_plan_data.get("agents"), list) else []
+        if not agents:
+            cfg = self.shell.orchestrator.config
+            return f"backend={cfg.default_backend} model={cfg.default_model} reasoning={cfg.default_reasoning_effort}"
+        first = next((row for row in agents if isinstance(row, dict)), {})
+        backend = str(first.get("provider") or self.shell.orchestrator.config.default_backend)
+        model = str(first.get("model") or self.shell.orchestrator.config.default_model)
+        reasoning = str(first.get("reasoning_effort") or self.shell.orchestrator.config.default_reasoning_effort)
+        if backend == "openai":
+            backend = "codex"
+        return f"backend={backend} model={model} reasoning={reasoning}"
+
     def _clear_fix_preview(self) -> None:
         self._pending_fixed_plan_data = None
         self._pending_fix_diff = ""
@@ -320,7 +336,7 @@ class RunSetupScreen(Vertical):
             )
 
         table.move_cursor(row=0, column=0)
-        self._status().update(f"{len(self._plans)} plan(s) discovered. Load one to configure orchestration.")
+        self._status().update(f"{len(self._plans)} plan(s) discovered. Load one to configure orchestration. {self._execution_profile_hint()}")
 
     def _render_editor_tables(self) -> None:
         run_table = self._run_table()
@@ -480,7 +496,7 @@ class RunSetupScreen(Vertical):
             ]
         )
         base = "Validation passed." if valid else f"Validation issues: {len(issues)}."
-        self._status().update(f"{base} Task rows with errors: {errored_rows}.")
+        self._status().update(f"{base} Task rows with errors: {errored_rows}. {self._execution_profile_hint()}")
         self._render_editor_tables()
 
     def _load_plan(self, path: Path) -> None:
@@ -526,7 +542,9 @@ class RunSetupScreen(Vertical):
 
         self._render_editor_tables()
         self._refresh_validation()
-        self._status().update(f"Loaded plan {path.name}. Edit routing/template and save a validated revision.")
+        self._status().update(
+            f"Loaded plan {path.name}. Edit routing/template and save a validated revision. {self._execution_profile_hint()}"
+        )
 
     def _apply_orchestration_edit(self) -> None:
         if not self._loaded_plan_data:
@@ -780,7 +798,7 @@ class RunSetupScreen(Vertical):
             if not run_id:
                 self._status().update("Unable to start run for selected plan.")
                 return
-            self._status().update(f"Started run {run_id}")
+            self._status().update(f"Started run {run_id}. {self._execution_profile_hint()}")
             self.shell.show_screen("phase_timeline")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:

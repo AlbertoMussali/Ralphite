@@ -66,8 +66,9 @@
         "properties": {
           "id": { "type": "string", "minLength": 1 },
           "role": { "type": "string", "enum": ["worker", "orchestrator"] },
-          "provider": { "type": "string" },
-          "model": { "type": "string" },
+          "provider": { "type": "string", "enum": ["codex", "cursor", "openai"], "default": "codex" },
+          "model": { "type": "string", "default": "gpt-5.3-codex" },
+          "reasoning_effort": { "type": "string", "enum": ["low", "medium", "high"], "default": "medium" },
           "system_prompt": { "type": "string" },
           "tools_allow": {
             "type": "array",

@@ -144,6 +144,10 @@ class SettingsScreen(Vertical):
             compact_timeline=current.compact_timeline,
             default_plan=self.query_one("#cfg-default-plan", Input).value.strip() or None,
             task_writeback_mode=writeback_mode,  # type: ignore[arg-type]
+            default_backend=current.default_backend,
+            default_model=current.default_model,
+            default_reasoning_effort=current.default_reasoning_effort,
+            cursor_command=current.cursor_command,
         )
         ok, issues, detail = save_settings_with_rollback(self.shell.orchestrator.workspace_root, updated)
         if not ok:

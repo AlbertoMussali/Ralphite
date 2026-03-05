@@ -55,9 +55,27 @@ uv run ralphite doctor --workspace . --output table --fix-suggestions
 uv run ralphite validate --workspace . --json
 uv run ralphite check --workspace . --full
 uv run ralphite check --workspace . --release-gate
+uv run ralphite check --workspace . --beta-gate
 ```
 
 `check --release-gate` is repository-deterministic: it executes named suites from repo root regardless of workspace plan state.
+`check --beta-gate` enforces doctor + backend smoke + release suites.
+
+## Headless Backends
+
+Ralphite executes agents through local headless CLIs.
+
+- Default backend: `codex exec`
+- Optional backend: `agent` (Cursor headless)
+- Default model: `gpt-5.3-codex`
+- Default reasoning effort: `medium`
+
+Run-time overrides:
+
+```bash
+uv run ralphite run --workspace . --backend codex --model gpt-5.3-codex --reasoning-effort medium
+uv run ralphite quickstart --workspace . --backend cursor --model gpt-5.3-codex --reasoning-effort medium --no-tui --yes
+```
 
 Fixture confidence suite (included in `--release-gate`):
 
@@ -98,13 +116,15 @@ constraints:
 agents:
   - id: worker_default
     role: worker
-    provider: openai
-    model: gpt-4.1
+    provider: codex
+    model: gpt-5.3-codex
+    reasoning_effort: medium
     tools_allow: [tool:*, mcp:*]
   - id: orchestrator_default
     role: orchestrator
-    provider: openai
-    model: gpt-4.1-mini
+    provider: codex
+    model: gpt-5.3-codex
+    reasoning_effort: medium
 
 tasks:
   - id: t1

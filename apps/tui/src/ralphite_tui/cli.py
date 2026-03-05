@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -160,6 +161,68 @@ def _bootstrap_plan_file(
     return target
 
 
+def _probe_codex_model(model: str, reasoning_effort: str) -> tuple[bool, str]:
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return True, "skipped in pytest"
+    if os.getenv("RALPHITE_SKIP_MODEL_PROBE") == "1":
+        return True, "skipped by RALPHITE_SKIP_MODEL_PROBE"
+    if not shutil.which("codex"):
+        return False, "codex not found"
+    command = [
+        "codex",
+        "exec",
+        "--json",
+        "--ephemeral",
+        "--skip-git-repo-check",
+        "--model",
+        model,
+        "-c",
+        f'model_reasoning_effort="{reasoning_effort}"',
+        "-c",
+        'approval_policy="never"',
+        "--sandbox",
+        "read-only",
+        "Reply with exactly: OK",
+    ]
+    try:
+        run = subprocess.run(command, check=False, capture_output=True, text=True, timeout=25)
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+
+    errors: list[str] = []
+    for line in (run.stdout or "").splitlines():
+        text = line.strip()
+        if not text.startswith("{"):
+            continue
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        ptype = str(payload.get("type", ""))
+        if ptype == "error":
+            msg = payload.get("message")
+            if isinstance(msg, str) and msg.strip():
+                errors.append(msg.strip())
+        elif ptype == "turn.failed":
+            err = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+            msg = err.get("message")
+            if isinstance(msg, str) and msg.strip():
+                errors.append(msg.strip())
+        elif ptype == "item.completed":
+            item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
+            if str(item.get("type")) == "error":
+                msg = item.get("message")
+                if isinstance(msg, str) and msg.strip():
+                    errors.append(msg.strip())
+
+    if run.returncode != 0:
+        detail = (run.stderr or run.stdout or "").strip() or f"exit={run.returncode}"
+        return False, detail
+    if errors:
+        return False, errors[0]
+    return True, "model probe succeeded"
+
+
 def _doctor_snapshot(orch: LocalOrchestrator, include_fix_suggestions: bool = False) -> dict[str, Any]:
     checks: list[dict[str, Any]] = []
     ok = True
@@ -171,6 +234,38 @@ def _doctor_snapshot(orch: LocalOrchestrator, include_fix_suggestions: bool = Fa
         if not found:
             ok = False
         checks.append({"check": f"cmd:{cmd}", "status": status, "detail": found or "not in PATH"})
+
+    default_backend = str(orch.config.default_backend or "codex").strip().lower()
+    test_mode = bool(os.getenv("PYTEST_CURRENT_TEST"))
+    skip_backend_checks = os.getenv("RALPHITE_SKIP_BACKEND_CMD_CHECKS") == "1"
+    codex_required = default_backend == "codex"
+    cursor_required = default_backend == "cursor"
+
+    codex_path = shutil.which("codex")
+    codex_status = "OK" if codex_path else ("WARN" if (test_mode or skip_backend_checks) else ("MISSING" if codex_required else "WARN"))
+    checks.append({"check": "cmd:codex", "status": codex_status, "detail": codex_path or "not in PATH"})
+    if codex_required and not codex_path and not (test_mode or skip_backend_checks):
+        ok = False
+
+    cursor_command = str(orch.config.cursor_command or "agent").strip() or "agent"
+    cursor_path = shutil.which(cursor_command)
+    cursor_status = "OK" if cursor_path else ("WARN" if (test_mode or skip_backend_checks) else ("MISSING" if cursor_required else "WARN"))
+    checks.append({"check": f"cmd:{cursor_command}", "status": cursor_status, "detail": cursor_path or "not in PATH"})
+    if cursor_required and not cursor_path and not (test_mode or skip_backend_checks):
+        ok = False
+
+    if codex_required and codex_path and not skip_backend_checks:
+        model_ok, model_detail = _probe_codex_model(
+            str(orch.config.default_model or "gpt-5.3-codex"),
+            str(orch.config.default_reasoning_effort or "medium"),
+        )
+        checks.append(
+            {
+                "check": "codex-model-probe",
+                "status": "OK" if model_ok else "WARN",
+                "detail": model_detail,
+            }
+        )
 
     cfg_path = orch.paths["config"]
     cfg_ok = cfg_path.exists()
@@ -284,7 +379,7 @@ def _doctor_snapshot(orch: LocalOrchestrator, include_fix_suggestions: bool = Fa
 def _doctor_evaluation(snapshot: dict[str, Any], *, strict: bool) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     blocking: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
-    non_critical = {"stale-artifacts", "recovery-readiness"}
+    non_critical = {"stale-artifacts", "recovery-readiness", "codex-model-probe"}
     for row in snapshot.get("checks", []):
         if not isinstance(row, dict):
             continue
@@ -495,6 +590,10 @@ def init(
         compact_timeline=orch.config.compact_timeline,
         default_plan=orch.config.default_plan,
         task_writeback_mode=orch.config.task_writeback_mode,
+        default_backend=orch.config.default_backend,
+        default_model=orch.config.default_model,
+        default_reasoning_effort=orch.config.default_reasoning_effort,
+        cursor_command=orch.config.cursor_command,
     )
     cfg_path = save_config(orch.workspace_root, config)
     seeded = seed_starter_if_missing(orch.paths["plans"])
@@ -535,6 +634,9 @@ def init(
 def quickstart(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
     goal: Annotated[str | None, typer.Option(help="Optional goal to generate a plan")] = None,
+    backend: Annotated[str | None, typer.Option(help="Execution backend override: codex | cursor")] = None,
+    model: Annotated[str | None, typer.Option(help="Model override for headless backend")] = None,
+    reasoning_effort: Annotated[str | None, typer.Option(help="Reasoning effort override: low | medium | high")] = None,
     no_tui: Annotated[bool, typer.Option("--no-tui", help="Stream in terminal instead of opening TUI")] = False,
     yes: Annotated[bool, typer.Option("--yes", help="Auto-approve capabilities")] = False,
     strict_doctor: Annotated[bool, typer.Option("--strict-doctor", help="Fail on any doctor warning")] = False,
@@ -706,7 +808,13 @@ def quickstart(
     record_step("Capability Approval", approval_started, "approved" if approved else "cancelled")
 
     run_started = time.perf_counter()
-    run_id = orch.start_run(plan_ref=plan_ref, metadata={"source": "cli.quickstart", "goal": goal})
+    run_id = orch.start_run(
+        plan_ref=plan_ref,
+        backend_override=backend,
+        model_override=model,
+        reasoning_effort_override=reasoning_effort,
+        metadata={"source": "cli.quickstart", "goal": goal},
+    )
     run_status = "running"
     if no_tui:
         if mode == "stream":
@@ -737,6 +845,9 @@ def quickstart(
                     "step_timing": steps,
                     "doctor_warnings": warning_checks,
                     "bootstrap_paths": list(dict.fromkeys(bootstrap_paths)),
+                    "backend": backend or orch.config.default_backend,
+                    "model": model or orch.config.default_model,
+                    "reasoning_effort": reasoning_effort or orch.config.default_reasoning_effort,
                     "total_elapsed_seconds": round(max(0.0, time.perf_counter() - flow_started), 3),
                 },
             )
@@ -890,6 +1001,9 @@ def run(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
     plan: Annotated[str | None, typer.Option(help="Plan file path or name")] = None,
     goal: Annotated[str | None, typer.Option(help="Goal text to generate a plan")] = None,
+    backend: Annotated[str | None, typer.Option(help="Execution backend override: codex | cursor")] = None,
+    model: Annotated[str | None, typer.Option(help="Model override for headless backend")] = None,
+    reasoning_effort: Annotated[str | None, typer.Option(help="Reasoning effort override: low | medium | high")] = None,
     no_tui: Annotated[bool, typer.Option("--no-tui", help="Print streaming logs instead of opening TUI")] = False,
     yes: Annotated[bool, typer.Option("--yes", help="Auto-approve requirements")] = False,
     attach_run_detail: Annotated[bool, typer.Option("--attach-run-detail", help="Open phase timeline after start")] = False,
@@ -932,7 +1046,13 @@ def run(
                 console.print("Run aborted by user.")
             raise typer.Exit(code=1)
 
-    run_id = orch.start_run(plan_ref=plan_ref, metadata={"source": "cli.run", "goal": goal})
+    run_id = orch.start_run(
+        plan_ref=plan_ref,
+        backend_override=backend,
+        model_override=model,
+        reasoning_effort_override=reasoning_effort,
+        metadata={"source": "cli.run", "goal": goal},
+    )
     if not quiet and output_mode != "json":
         console.print(f"Started run: [bold]{run_id}[/bold]")
 
@@ -955,6 +1075,9 @@ def run(
                     "plan_path": str(plan_ref or ""),
                     "required_tools": requirements["tools"],
                     "required_mcps": requirements["mcps"],
+                    "backend": backend or orch.config.default_backend,
+                    "model": model or orch.config.default_model,
+                    "reasoning_effort": reasoning_effort or orch.config.default_reasoning_effort,
                 },
             )
             _emit_payload(output_mode, payload, title="Run Result")
@@ -1375,11 +1498,117 @@ def _run_release_gate(
     return True, results
 
 
+def _run_backend_smoke(
+    *,
+    orch: LocalOrchestrator,
+    repo_root: Path,
+    quiet: bool = False,
+    machine_mode: bool = False,
+    verbose: bool = False,
+) -> tuple[bool, list[dict[str, Any]]]:
+    results: list[dict[str, Any]] = []
+    capture_subprocess_output = machine_mode or quiet
+    backend = str(orch.config.default_backend or "codex").strip().lower()
+    model = str(orch.config.default_model or "gpt-5.3-codex").strip() or "gpt-5.3-codex"
+    reasoning_effort = str(orch.config.default_reasoning_effort or "medium").strip().lower() or "medium"
+    cursor_command = str(orch.config.cursor_command or "agent").strip() or "agent"
+
+    if backend == "codex":
+        command = [
+            "codex",
+            "exec",
+            "--json",
+            "--ephemeral",
+            "--skip-git-repo-check",
+            "--model",
+            model,
+            "-c",
+            f'model_reasoning_effort="{reasoning_effort}"',
+            "-c",
+            'approval_policy="never"',
+            "--sandbox",
+            "read-only",
+            "Reply with exactly: OK",
+        ]
+        result = subprocess.run(
+            command,
+            cwd=repo_root,
+            check=False,
+            capture_output=capture_subprocess_output,
+            text=True,
+        )
+        row = {
+            "suite": "backend-codex-smoke",
+            "command": " ".join(command),
+            "cwd": str(repo_root),
+            "exit_code": result.returncode,
+            "stdout": result.stdout if capture_subprocess_output and verbose else "",
+            "stderr": result.stderr if capture_subprocess_output and verbose else "",
+        }
+        results.append(row)
+        if result.returncode != 0:
+            return False, results
+        errors: list[str] = []
+        for line in (result.stdout or "").splitlines():
+            text = line.strip()
+            if not text.startswith("{"):
+                continue
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            ptype = str(payload.get("type", ""))
+            if ptype == "error":
+                msg = payload.get("message")
+                if isinstance(msg, str) and msg.strip():
+                    errors.append(msg.strip())
+            elif ptype == "turn.failed":
+                err = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+                msg = err.get("message")
+                if isinstance(msg, str) and msg.strip():
+                    errors.append(msg.strip())
+        if errors:
+            row["exit_code"] = 1
+            row["stderr"] = errors[0]
+            return False, results
+    elif backend == "cursor":
+        command = [
+            cursor_command,
+            "-p",
+            "--output-format",
+            "json",
+            "--model",
+            model,
+            "Reply with exactly: OK",
+        ]
+        result = subprocess.run(
+            command,
+            cwd=repo_root,
+            check=False,
+            capture_output=capture_subprocess_output,
+            text=True,
+        )
+        row = {
+            "suite": "backend-cursor-smoke",
+            "command": " ".join(command),
+            "cwd": str(repo_root),
+            "exit_code": result.returncode,
+            "stdout": result.stdout if capture_subprocess_output and verbose else "",
+            "stderr": result.stderr if capture_subprocess_output and verbose else "",
+        }
+        results.append(row)
+        if result.returncode != 0:
+            return False, results
+
+    return True, results
+
+
 @app.command()
 def check(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
     full: Annotated[bool, typer.Option("--full", help="Run full repo test suite")] = False,
     release_gate: Annotated[bool, typer.Option("--release-gate", help="Run v5 stabilization release gate suites")] = False,
+    beta_gate: Annotated[bool, typer.Option("--beta-gate", help="Run strict beta gate (doctor + backend smoke + release suites)")] = False,
     output: Annotated[str, typer.Option("--output", help="Output mode: table | json")] = "table",
     quiet: Annotated[bool, typer.Option("--quiet", help="Suppress non-critical output")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", help="Show extra details")] = False,
@@ -1392,10 +1621,22 @@ def check(
     capture_subprocess_output = machine_mode or quiet
 
     snapshot = _doctor_snapshot(orch, include_fix_suggestions=False)
-    if not machine_mode and not quiet and not release_gate:
+    if not machine_mode and not quiet and not (release_gate or beta_gate):
         _render_doctor_table(snapshot)
     command_results: list[dict[str, Any]] = []
-    if not release_gate and not bool(snapshot.get("ok")):
+    if beta_gate and not bool(snapshot.get("ok")):
+        envelope = _result_payload(
+            command="check",
+            ok=False,
+            status="failed",
+            run_id=None,
+            exit_code=1,
+            issues=[{"code": "check.beta_gate_doctor_failed", "message": "doctor checks failed for beta gate"}],
+            data={"doctor": snapshot, "commands": command_results},
+        )
+        _emit_payload(mode, envelope, title="Check")
+        raise typer.Exit(code=1)
+    if not beta_gate and not release_gate and not bool(snapshot.get("ok")):
         envelope = _result_payload(
             command="check",
             ok=False,
@@ -1475,7 +1716,29 @@ def check(
             _emit_payload(mode, envelope, title="Check")
             raise typer.Exit(code=1)
 
-    if release_gate:
+    if beta_gate:
+        smoke_ok, smoke_results = _run_backend_smoke(
+            orch=orch,
+            repo_root=repo_root,
+            quiet=quiet,
+            machine_mode=machine_mode,
+            verbose=verbose,
+        )
+        command_results.extend(smoke_results)
+        if not smoke_ok:
+            envelope = _result_payload(
+                command="check",
+                ok=False,
+                status="failed",
+                run_id=None,
+                exit_code=1,
+                issues=[{"code": "check.backend_smoke_failed", "message": "backend smoke check failed"}],
+                data={"doctor": snapshot, "commands": command_results},
+            )
+            _emit_payload(mode, envelope, title="Check")
+            raise typer.Exit(code=1)
+
+    if release_gate or beta_gate:
         gate_ok, gate_results = _run_release_gate(
             repo_root=repo_root,
             quiet=quiet,

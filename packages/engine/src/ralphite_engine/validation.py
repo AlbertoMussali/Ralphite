@@ -136,9 +136,20 @@ def _recommended_commands(
     *,
     plan_path: str | Path | None = None,
 ) -> list[str]:
-    _ = issues
-    _ = plan_path
-    return []
+    commands: list[str] = []
+    target = str(plan_path) if plan_path else ".ralphite/plans/<plan>.yaml"
+    codes = {str(issue.get("code") or "") for issue in issues if isinstance(issue, dict)}
+    if "version.invalid" in codes:
+        commands.append(f"uv run ralphite init --workspace . --yes --template general_sps --plan-id migrated_v5 --name \"Migrated V5\"")
+    if "agent.missing_worker" in codes or "agent.missing_orchestrator" in codes:
+        commands.append(f"uv run ralphite validate --workspace . --plan {target} --apply-safe-fixes --json")
+    if any(code.startswith("task.dep_") for code in codes):
+        commands.append(f"uv run ralphite validate --workspace . --plan {target} --json")
+    if "tasks.unassigned" in codes or "tasks.routing.missing" in codes:
+        commands.append("Open Run Setup and assign routing.lane / routing.cell for pending tasks, then validate again.")
+    if "agent.provider.legacy_openai" in codes:
+        commands.append("Update agents provider to codex/cursor and set model to gpt-5.3-codex with reasoning_effort=medium.")
+    return list(dict.fromkeys(commands))
 
 
 def validate_plan_content(
@@ -374,6 +385,36 @@ def suggest_fixes(plan_data: dict[str, Any], issues: list[dict[str, Any]]) -> li
                     patch={"action": "set_value", "path": path, "value": agent_ids[0]},
                 )
             )
+        if code == "agent.provider.legacy_openai" and path.startswith("agents[") and path.endswith(".provider"):
+            fixes.append(
+                ValidationFix(
+                    code="fix.migrate_agent_provider",
+                    title="Migrate agent provider to codex",
+                    description=f"Updates {path} provider/model defaults for headless codex backend.",
+                    path=path,
+                    patch={"action": "set_value", "path": path, "value": "codex"},
+                )
+            )
+            model_path = path.rsplit(".", 1)[0] + ".model"
+            fixes.append(
+                ValidationFix(
+                    code="fix.migrate_agent_model",
+                    title="Set beta default model",
+                    description=f"Sets {model_path} to gpt-5.3-codex.",
+                    path=model_path,
+                    patch={"action": "set_value", "path": model_path, "value": "gpt-5.3-codex"},
+                )
+            )
+            reasoning_path = path.rsplit(".", 1)[0] + ".reasoning_effort"
+            fixes.append(
+                ValidationFix(
+                    code="fix.migrate_agent_reasoning",
+                    title="Set beta default reasoning effort",
+                    description=f"Sets {reasoning_path} to medium.",
+                    path=reasoning_path,
+                    patch={"action": "set_value", "path": reasoning_path, "value": "medium"},
+                )
+            )
 
     unique: list[ValidationFix] = []
     seen_keys: set[tuple[str, str]] = set()
@@ -438,8 +479,9 @@ def apply_fix(plan_data: dict[str, Any], fix: ValidationFix) -> dict[str, Any]:
             {
                 "id": "worker_default",
                 "role": "worker",
-                "provider": "openai",
-                "model": "gpt-4.1-mini",
+                "provider": "codex",
+                "model": "gpt-5.3-codex",
+                "reasoning_effort": "medium",
                 "tools_allow": ["tool:*"],
             }
         )
@@ -454,8 +496,9 @@ def apply_fix(plan_data: dict[str, Any], fix: ValidationFix) -> dict[str, Any]:
             {
                 "id": "orchestrator_default",
                 "role": "orchestrator",
-                "provider": "openai",
-                "model": "gpt-4.1-mini",
+                "provider": "codex",
+                "model": "gpt-5.3-codex",
+                "reasoning_effort": "medium",
                 "tools_allow": ["tool:*"],
             }
         )

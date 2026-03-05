@@ -19,6 +19,10 @@ class LocalConfig(BaseModel):
     compact_timeline: bool = False
     default_plan: str | None = None
     task_writeback_mode: Literal["in_place", "revision_only", "disabled"] = "revision_only"
+    default_backend: Literal["codex", "cursor"] = "codex"
+    default_model: str = "gpt-5.3-codex"
+    default_reasoning_effort: Literal["low", "medium", "high"] = "medium"
+    cursor_command: str = "agent"
 
 
 _TOOL_ENTRY_RE = re.compile(r"^tool:(\*|[A-Za-z0-9._/-]+)$")
@@ -91,10 +95,20 @@ def load_config(workspace_root: Path, *, create_if_missing: bool = True) -> Loca
     writeback_mode = str(run.get("task_writeback_mode") or "revision_only")
     if writeback_mode not in {"in_place", "revision_only", "disabled"}:
         writeback_mode = "revision_only"
+    default_backend = str(run.get("default_backend") or "codex")
+    if default_backend not in {"codex", "cursor"}:
+        default_backend = "codex"
+    default_reasoning_effort = str(run.get("default_reasoning_effort") or "medium")
+    if default_reasoning_effort not in {"low", "medium", "high"}:
+        default_reasoning_effort = "medium"
 
     profile_name = str(profile.get("name", "default") or "default")
     default_plan_raw = run.get("default_plan")
     default_plan = str(default_plan_raw).strip() if isinstance(default_plan_raw, str) else None
+    default_model_raw = run.get("default_model")
+    default_model = str(default_model_raw).strip() if isinstance(default_model_raw, str) and default_model_raw.strip() else "gpt-5.3-codex"
+    cursor_command_raw = run.get("cursor_command")
+    cursor_command = str(cursor_command_raw).strip() if isinstance(cursor_command_raw, str) and cursor_command_raw.strip() else "agent"
     candidate = LocalConfig(
         workspace_root=str(paths["root"]),
         profile_name=profile_name,
@@ -105,6 +119,10 @@ def load_config(workspace_root: Path, *, create_if_missing: bool = True) -> Loca
         compact_timeline=bool(ui.get("compact_timeline", False)),
         default_plan=default_plan or None,
         task_writeback_mode=writeback_mode,
+        default_backend=default_backend,  # type: ignore[arg-type]
+        default_model=default_model,
+        default_reasoning_effort=default_reasoning_effort,  # type: ignore[arg-type]
+        cursor_command=cursor_command,
     )
     issues = validate_local_config(candidate, workspace_root=paths["root"])
     if not issues:
@@ -127,6 +145,14 @@ def load_config(workspace_root: Path, *, create_if_missing: bool = True) -> Loca
             if candidate.task_writeback_mode in {"in_place", "revision_only", "disabled"}
             else "revision_only"
         ),
+        default_backend=(candidate.default_backend if candidate.default_backend in {"codex", "cursor"} else "codex"),  # type: ignore[arg-type]
+        default_model=candidate.default_model.strip() or "gpt-5.3-codex",
+        default_reasoning_effort=(
+            candidate.default_reasoning_effort
+            if candidate.default_reasoning_effort in {"low", "medium", "high"}
+            else "medium"
+        ),  # type: ignore[arg-type]
+        cursor_command=candidate.cursor_command.strip() or "agent",
     )
 
 
@@ -183,6 +209,14 @@ def validate_local_config(config: LocalConfig, workspace_root: Path | None = Non
 
     if config.task_writeback_mode not in {"in_place", "revision_only", "disabled"}:
         issues.append("invalid task_writeback_mode")
+    if config.default_backend not in {"codex", "cursor"}:
+        issues.append("invalid default_backend")
+    if config.default_reasoning_effort not in {"low", "medium", "high"}:
+        issues.append("invalid default_reasoning_effort")
+    if not config.default_model.strip():
+        issues.append("default_model cannot be empty")
+    if not config.cursor_command.strip():
+        issues.append("cursor_command cannot be empty")
 
     if workspace_root is not None and (config.default_plan or "").strip():
         if resolve_default_plan_path(workspace_root, config.default_plan) is None:
@@ -219,6 +253,10 @@ def save_config(workspace_root: Path, config: LocalConfig) -> Path:
             "[run]",
             f"default_plan = {json.dumps(config.default_plan or '')}",
             f"task_writeback_mode = {json.dumps(config.task_writeback_mode)}",
+            f"default_backend = {json.dumps(config.default_backend)}",
+            f"default_model = {json.dumps(config.default_model)}",
+            f"default_reasoning_effort = {json.dumps(config.default_reasoning_effort)}",
+            f"cursor_command = {json.dumps(config.cursor_command)}",
             "",
         ]
     )
