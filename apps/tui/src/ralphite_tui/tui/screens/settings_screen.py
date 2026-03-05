@@ -7,13 +7,20 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Input, Static
 
-from ralphite_engine.config import LocalConfig, load_config, save_config, validate_local_config
+from ralphite_engine.config import (
+    LocalConfig,
+    load_config,
+    save_config,
+    validate_local_config,
+)
 
 if TYPE_CHECKING:
     from ralphite_tui.tui.app_shell import AppShell
 
 
-def save_settings_with_rollback(workspace_root: Path, config: LocalConfig) -> tuple[bool, list[str], str]:
+def save_settings_with_rollback(
+    workspace_root: Path, config: LocalConfig
+) -> tuple[bool, list[str], str]:
     root = workspace_root.expanduser().resolve()
     cfg_path = root / ".ralphite" / "config.toml"
     backup = cfg_path.read_text(encoding="utf-8") if cfg_path.exists() else None
@@ -61,7 +68,10 @@ class SettingsScreen(Vertical):
         yield Input(placeholder="Allow MCPs (comma-separated)", id="cfg-allow-mcps")
         yield Input(placeholder="Deny MCPs (comma-separated)", id="cfg-deny-mcps")
         yield Input(placeholder="Default plan path/name", id="cfg-default-plan")
-        yield Input(placeholder="Write-back mode: revision_only | in_place | disabled", id="cfg-writeback")
+        yield Input(
+            placeholder="Write-back mode: revision_only | in_place | disabled",
+            id="cfg-writeback",
+        )
         with Horizontal():
             yield Button("Preset: Open", id="preset-open")
             yield Button("Preset: Balanced", id="preset-balanced")
@@ -128,32 +138,44 @@ class SettingsScreen(Vertical):
         if button_id != "save-settings":
             return
 
-        writeback_mode = self.query_one("#cfg-writeback", Input).value.strip() or "revision_only"
+        writeback_mode = (
+            self.query_one("#cfg-writeback", Input).value.strip() or "revision_only"
+        )
         if writeback_mode not in {"revision_only", "in_place", "disabled"}:
-            self._status().update("Invalid write-back mode. Use revision_only, in_place, or disabled.")
+            self._status().update(
+                "Invalid write-back mode. Use revision_only, in_place, or disabled."
+            )
             return
 
         current = self.shell.orchestrator.config
         updated = LocalConfig(
             workspace_root=current.workspace_root,
-            profile_name=self.query_one("#cfg-profile", Input).value.strip() or "default",
+            profile_name=self.query_one("#cfg-profile", Input).value.strip()
+            or "default",
             allow_tools=self._get_list("cfg-allow-tools"),
             deny_tools=self._get_list("cfg-deny-tools"),
             allow_mcps=self._get_list("cfg-allow-mcps"),
             deny_mcps=self._get_list("cfg-deny-mcps"),
             compact_timeline=current.compact_timeline,
-            default_plan=self.query_one("#cfg-default-plan", Input).value.strip() or None,
+            default_plan=self.query_one("#cfg-default-plan", Input).value.strip()
+            or None,
             task_writeback_mode=writeback_mode,  # type: ignore[arg-type]
             default_backend=current.default_backend,
             default_model=current.default_model,
             default_reasoning_effort=current.default_reasoning_effort,
             cursor_command=current.cursor_command,
         )
-        ok, issues, detail = save_settings_with_rollback(self.shell.orchestrator.workspace_root, updated)
+        ok, issues, detail = save_settings_with_rollback(
+            self.shell.orchestrator.workspace_root, updated
+        )
         if not ok:
-            self.shell.orchestrator.config = load_config(self.shell.orchestrator.workspace_root)
+            self.shell.orchestrator.config = load_config(
+                self.shell.orchestrator.workspace_root
+            )
             preview = issues[0] if issues else "unknown error"
             self._status().update(f"Settings not saved ({detail}): {preview}")
             return
-        self.shell.orchestrator.config = load_config(self.shell.orchestrator.workspace_root)
+        self.shell.orchestrator.config = load_config(
+            self.shell.orchestrator.workspace_root
+        )
         self._status().update(f"Settings saved: {detail}")

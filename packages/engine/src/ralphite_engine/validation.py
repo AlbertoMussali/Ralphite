@@ -10,15 +10,16 @@ import yaml
 from pydantic import ValidationError as PydanticValidationError
 
 from ralphite_engine.models import ValidationFix
-from ralphite_engine.structure_compiler import RuntimeExecutionPlan, compile_execution_structure
+from ralphite_engine.structure_compiler import (
+    RuntimeExecutionPlan,
+    compile_execution_structure,
+)
 from ralphite_engine.task_parser import ParsedTask, parse_plan_tasks
 from ralphite_schemas.plan_v5 import PlanSpecV5
 from ralphite_schemas.validation import ValidationError, compile_plan, validate_plan
 
 
-UNSUPPORTED_VERSION_MESSAGE = (
-    "Invalid plan version. Ralphite executes only version: 5 unified YAML (tasks + orchestration + agents)."
-)
+UNSUPPORTED_VERSION_MESSAGE = "Invalid plan version. Ralphite executes only version: 5 unified YAML (tasks + orchestration + agents)."
 
 
 PlanDocument = PlanSpecV5
@@ -73,7 +74,13 @@ def _git_recovery_readiness(workspace_root: str | Path | None) -> dict[str, Any]
             "reason": "workspace is not a git work tree; worktree integration will run in simulation mode",
         }
 
-    status = subprocess.run(["git", "status", "--porcelain"], cwd=root, check=False, capture_output=True, text=True)
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
     dirty = bool(status.stdout.strip())
     return {
         "status": "ready" if not dirty else "dirty",
@@ -99,7 +106,9 @@ def _append_task_diagnostics(
                 }
             )
 
-    compiled_runtime, compile_issues = compile_execution_structure(plan, tasks, task_parse_issues=parse_issues)
+    compiled_runtime, compile_issues = compile_execution_structure(
+        plan, tasks, task_parse_issues=parse_issues
+    )
     for issue in compile_issues:
         issues.append(
             {
@@ -138,17 +147,29 @@ def _recommended_commands(
 ) -> list[str]:
     commands: list[str] = []
     target = str(plan_path) if plan_path else ".ralphite/plans/<plan>.yaml"
-    codes = {str(issue.get("code") or "") for issue in issues if isinstance(issue, dict)}
+    codes = {
+        str(issue.get("code") or "") for issue in issues if isinstance(issue, dict)
+    }
     if "version.invalid" in codes:
-        commands.append(f"uv run ralphite init --workspace . --yes --template general_sps --plan-id migrated_v5 --name \"Migrated V5\"")
+        commands.append(
+            'uv run ralphite init --workspace . --yes --template general_sps --plan-id migrated_v5 --name "Migrated V5"'
+        )
     if "agent.missing_worker" in codes or "agent.missing_orchestrator" in codes:
-        commands.append(f"uv run ralphite validate --workspace . --plan {target} --apply-safe-fixes --json")
+        commands.append(
+            f"uv run ralphite validate --workspace . --plan {target} --apply-safe-fixes --json"
+        )
     if any(code.startswith("task.dep_") for code in codes):
-        commands.append(f"uv run ralphite validate --workspace . --plan {target} --json")
+        commands.append(
+            f"uv run ralphite validate --workspace . --plan {target} --json"
+        )
     if "tasks.unassigned" in codes or "tasks.routing.missing" in codes:
-        commands.append("Open Run Setup and assign routing.lane / routing.cell for pending tasks, then validate again.")
+        commands.append(
+            "Open Run Setup and assign routing.lane / routing.cell for pending tasks, then validate again."
+        )
     if "agent.provider.legacy_openai" in codes:
-        commands.append("Update agents provider to codex/cursor and set model to gpt-5.3-codex with reasoning_effort=medium.")
+        commands.append(
+            "Update agents provider to codex/cursor and set model to gpt-5.3-codex with reasoning_effort=medium."
+        )
     return list(dict.fromkeys(commands))
 
 
@@ -161,12 +182,30 @@ def validate_plan_content(
     try:
         raw = yaml.safe_load(content)
     except Exception as exc:  # noqa: BLE001
-        return False, [{"code": "yaml.invalid", "message": str(exc), "path": "root", "level": "error"}], {}
+        return (
+            False,
+            [
+                {
+                    "code": "yaml.invalid",
+                    "message": str(exc),
+                    "path": "root",
+                    "level": "error",
+                }
+            ],
+            {},
+        )
 
     if not isinstance(raw, dict):
         return (
             False,
-            [{"code": "yaml.invalid", "message": "plan content must be a YAML object", "path": "root", "level": "error"}],
+            [
+                {
+                    "code": "yaml.invalid",
+                    "message": "plan content must be a YAML object",
+                    "path": "root",
+                    "level": "error",
+                }
+            ],
             {},
         )
 
@@ -181,11 +220,17 @@ def validate_plan_content(
             }
         ]
         issues = _dedupe_and_sort_issues(issues)
-        return False, issues, {
-            "version": version,
-            "expected_version": 5,
-            "recommended_commands": _recommended_commands(issues, plan_path=plan_path),
-        }
+        return (
+            False,
+            issues,
+            {
+                "version": version,
+                "expected_version": 5,
+                "recommended_commands": _recommended_commands(
+                    issues, plan_path=plan_path
+                ),
+            },
+        )
 
     try:
         plan = PlanSpecV5.model_validate(raw)
@@ -200,7 +245,15 @@ def validate_plan_content(
             for err in exc.errors()
         ]
         issues = _dedupe_and_sort_issues(issues)
-        return False, issues, {"recommended_commands": _recommended_commands(issues, plan_path=plan_path)}
+        return (
+            False,
+            issues,
+            {
+                "recommended_commands": _recommended_commands(
+                    issues, plan_path=plan_path
+                )
+            },
+        )
 
     issues = [asdict(issue) for issue in validate_plan(plan)]
     try:
@@ -208,7 +261,15 @@ def validate_plan_content(
     except ValidationError as exc:
         issues.extend(asdict(issue) for issue in exc.issues)
         issues = _dedupe_and_sort_issues(issues)
-        return False, issues, {"recommended_commands": _recommended_commands(issues, plan_path=plan_path)}
+        return (
+            False,
+            issues,
+            {
+                "recommended_commands": _recommended_commands(
+                    issues, plan_path=plan_path
+                )
+            },
+        )
 
     parse_issues, runtime, tasks = _append_task_diagnostics(
         plan=plan,
@@ -285,7 +346,9 @@ def validate_plan_content(
         "template": plan.orchestration.template.value,
         "nodes": runtime_nodes,
         "edges": runtime_edges,
-        "node_levels": runtime.node_levels if runtime is not None else compiled.node_levels,
+        "node_levels": runtime.node_levels
+        if runtime is not None
+        else compiled.node_levels,
         "groups": runtime.groups if runtime is not None else compiled.groups,
         "required_tools": tools,
         "required_mcps": mcps,
@@ -305,19 +368,37 @@ def validate_plan_content(
     }
 
     issues = _dedupe_and_sort_issues(issues)
-    valid = len([issue for issue in issues if issue.get("level", "error") == "error"]) == 0
+    valid = (
+        len([issue for issue in issues if issue.get("level", "error") == "error"]) == 0
+    )
     return valid, issues, summary
 
 
-def suggest_fixes(plan_data: dict[str, Any], issues: list[dict[str, Any]]) -> list[ValidationFix]:
+def suggest_fixes(
+    plan_data: dict[str, Any], issues: list[dict[str, Any]]
+) -> list[ValidationFix]:
     fixes: list[ValidationFix] = []
     tasks = plan_data.get("tasks") if isinstance(plan_data.get("tasks"), list) else []
-    agents = plan_data.get("agents") if isinstance(plan_data.get("agents"), list) else []
-    agent_ids = [str(agent.get("id")) for agent in agents if isinstance(agent, dict) and agent.get("id")]
+    agents = (
+        plan_data.get("agents") if isinstance(plan_data.get("agents"), list) else []
+    )
+    agent_ids = [
+        str(agent.get("id"))
+        for agent in agents
+        if isinstance(agent, dict) and agent.get("id")
+    ]
 
-    version = int(plan_data.get("version", 0) or 0) if isinstance(plan_data, dict) else 0
-    worker_exists = any(isinstance(agent, dict) and str(agent.get("role")) == "worker" for agent in agents)
-    orchestrator_exists = any(isinstance(agent, dict) and str(agent.get("role")) == "orchestrator" for agent in agents)
+    version = (
+        int(plan_data.get("version", 0) or 0) if isinstance(plan_data, dict) else 0
+    )
+    worker_exists = any(
+        isinstance(agent, dict) and str(agent.get("role")) == "worker"
+        for agent in agents
+    )
+    orchestrator_exists = any(
+        isinstance(agent, dict) and str(agent.get("role")) == "orchestrator"
+        for agent in agents
+    )
     if version == 5 and not worker_exists:
         fixes.append(
             ValidationFix(
@@ -343,7 +424,11 @@ def suggest_fixes(plan_data: dict[str, Any], issues: list[dict[str, Any]]) -> li
         code = str(issue.get("code") or "")
         path = str(issue.get("path") or "")
 
-        if code in {"task.dep_forward", "task.dep_missing"} and path.startswith("tasks[") and ".deps" in path:
+        if (
+            code in {"task.dep_forward", "task.dep_missing"}
+            and path.startswith("tasks[")
+            and ".deps" in path
+        ):
             match = re.match(r"tasks\[(\d+)\]\.deps", path)
             if not match:
                 continue
@@ -375,7 +460,12 @@ def suggest_fixes(plan_data: dict[str, Any], issues: list[dict[str, Any]]) -> li
                     )
                 )
 
-        if code == "task.unknown_agent" and path.startswith("tasks[") and ".agent" in path and agent_ids:
+        if (
+            code == "task.unknown_agent"
+            and path.startswith("tasks[")
+            and ".agent" in path
+            and agent_ids
+        ):
             fixes.append(
                 ValidationFix(
                     code="fix.assign_known_agent",
@@ -385,7 +475,11 @@ def suggest_fixes(plan_data: dict[str, Any], issues: list[dict[str, Any]]) -> li
                     patch={"action": "set_value", "path": path, "value": agent_ids[0]},
                 )
             )
-        if code == "agent.provider.legacy_openai" and path.startswith("agents[") and path.endswith(".provider"):
+        if (
+            code == "agent.provider.legacy_openai"
+            and path.startswith("agents[")
+            and path.endswith(".provider")
+        ):
             fixes.append(
                 ValidationFix(
                     code="fix.migrate_agent_provider",
@@ -402,7 +496,11 @@ def suggest_fixes(plan_data: dict[str, Any], issues: list[dict[str, Any]]) -> li
                     title="Set beta default model",
                     description=f"Sets {model_path} to gpt-5.3-codex.",
                     path=model_path,
-                    patch={"action": "set_value", "path": model_path, "value": "gpt-5.3-codex"},
+                    patch={
+                        "action": "set_value",
+                        "path": model_path,
+                        "value": "gpt-5.3-codex",
+                    },
                 )
             )
             reasoning_path = path.rsplit(".", 1)[0] + ".reasoning_effort"
@@ -412,7 +510,11 @@ def suggest_fixes(plan_data: dict[str, Any], issues: list[dict[str, Any]]) -> li
                     title="Set beta default reasoning effort",
                     description=f"Sets {reasoning_path} to medium.",
                     path=reasoning_path,
-                    patch={"action": "set_value", "path": reasoning_path, "value": "medium"},
+                    patch={
+                        "action": "set_value",
+                        "path": reasoning_path,
+                        "value": "medium",
+                    },
                 )
             )
 
@@ -440,7 +542,11 @@ def apply_fix(plan_data: dict[str, Any], fix: ValidationFix) -> dict[str, Any]:
             last = index == len(parts) - 1
             if list_match:
                 item_index = int(list_match.group(1))
-                if not isinstance(cursor, list) or item_index < 0 or item_index >= len(cursor):
+                if (
+                    not isinstance(cursor, list)
+                    or item_index < 0
+                    or item_index >= len(cursor)
+                ):
                     return
                 if last:
                     cursor[item_index] = value

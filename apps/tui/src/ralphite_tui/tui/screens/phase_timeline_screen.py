@@ -80,10 +80,20 @@ class PhaseTimelineScreen(Vertical):
             yield Button("Prev Page", id="page-prev")
             yield Button("Next Page", id="page-next")
             yield Button("Last Page", id="page-last")
-            yield Input(placeholder="phase filter", id="filter-phase", classes="phase-filter")
-            yield Input(placeholder="lane filter", id="filter-lane", classes="phase-filter")
-            yield Input(placeholder="task filter", id="filter-task", classes="phase-filter")
-            yield Input(placeholder="event types (comma-separated)", id="filter-event-types", classes="phase-filter")
+            yield Input(
+                placeholder="phase filter", id="filter-phase", classes="phase-filter"
+            )
+            yield Input(
+                placeholder="lane filter", id="filter-lane", classes="phase-filter"
+            )
+            yield Input(
+                placeholder="task filter", id="filter-task", classes="phase-filter"
+            )
+            yield Input(
+                placeholder="event types (comma-separated)",
+                id="filter-event-types",
+                classes="phase-filter",
+            )
             yield Static("page 1/1", id="phase-page-meta")
         events = DataTable(id="phase-events")
         events.add_columns("#", "Event", "Phase", "Lane", "Level", "Message")
@@ -133,15 +143,24 @@ class PhaseTimelineScreen(Vertical):
             next_action = row.get("next_action", "")
             if self._errors_only and level not in {"error", "warn"}:
                 continue
-            if self._failures_with_next_action and (level not in {"error", "warn"} or not next_action):
+            if self._failures_with_next_action and (
+                level not in {"error", "warn"} or not next_action
+            ):
                 continue
             if phase_filter and phase_filter not in phase:
                 continue
             if lane_filter and lane_filter not in lane:
                 continue
-            if task_filter and task_filter not in event_name and task_filter not in task_id and task_filter not in message.lower():
+            if (
+                task_filter
+                and task_filter not in event_name
+                and task_filter not in task_id
+                and task_filter not in message.lower()
+            ):
                 continue
-            if event_tokens and not any(token in event_name or token in raw_event for token in event_tokens):
+            if event_tokens and not any(
+                token in event_name or token in raw_event for token in event_tokens
+            ):
                 continue
             rows.append(row)
         return rows
@@ -161,7 +180,11 @@ class PhaseTimelineScreen(Vertical):
         end = start + self._page_size
         for row in filtered[start:end]:
             message = row.get("message", "")
-            display_message = message if not self._compact else (message[:72] + "..." if len(message) > 75 else message)
+            display_message = (
+                message
+                if not self._compact
+                else (message[:72] + "..." if len(message) > 75 else message)
+            )
             table.add_row(
                 row.get("id", ""),
                 row.get("event", ""),
@@ -171,19 +194,35 @@ class PhaseTimelineScreen(Vertical):
                 display_message,
             )
         meta = self.query_one("#phase-page-meta", Static)
-        meta.update(f"page {self._page_index + 1}/{total_pages} | rows {table.row_count}/{total} | retain {self._retention_limit()}")
-        if self._autoscroll and table.row_count > 0 and self._page_index == total_pages - 1:
+        meta.update(
+            f"page {self._page_index + 1}/{total_pages} | rows {table.row_count}/{total} | retain {self._retention_limit()}"
+        )
+        if (
+            self._autoscroll
+            and table.row_count > 0
+            and self._page_index == total_pages - 1
+        ):
             table.move_cursor(row=table.row_count - 1, column=0)
 
     def _build_phase_progress(self, run) -> str:
-        phase_nodes = run.metadata.get("phase_nodes", {}) if isinstance(run.metadata.get("phase_nodes"), dict) else {}
+        phase_nodes = (
+            run.metadata.get("phase_nodes", {})
+            if isinstance(run.metadata.get("phase_nodes"), dict)
+            else {}
+        )
         phase_groups: dict[str, list[dict[str, object]]] = {}
         if not phase_nodes:
             return "No phase metadata available."
 
         lines = ["Phase Progress:"]
         for phase, node_ids in phase_nodes.items():
-            counts = {"queued": 0, "running": 0, "succeeded": 0, "failed": 0, "blocked": 0}
+            counts = {
+                "queued": 0,
+                "running": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "blocked": 0,
+            }
             total = 0
             for node_id in node_ids:
                 node = run.nodes.get(node_id)
@@ -191,7 +230,11 @@ class PhaseTimelineScreen(Vertical):
                     continue
                 total += 1
                 counts[node.status] = counts.get(node.status, 0) + 1
-            completed = counts.get("succeeded", 0) + counts.get("failed", 0) + counts.get("blocked", 0)
+            completed = (
+                counts.get("succeeded", 0)
+                + counts.get("failed", 0)
+                + counts.get("blocked", 0)
+            )
             pct = int((completed / total) * 100) if total else 0
             lines.append(
                 f"- {phase}: {pct}% ({completed}/{total}) "
@@ -204,7 +247,11 @@ class PhaseTimelineScreen(Vertical):
                     if not isinstance(group, dict):
                         continue
                     group_id = group.get("group_id", "?")
-                    group_nodes = group.get("node_ids", []) if isinstance(group.get("node_ids"), list) else []
+                    group_nodes = (
+                        group.get("node_ids", [])
+                        if isinstance(group.get("node_ids"), list)
+                        else []
+                    )
                     group_total = len(group_nodes)
                     group_done = 0
                     for node_id in group_nodes:
@@ -220,9 +267,19 @@ class PhaseTimelineScreen(Vertical):
             if node.status != "failed":
                 continue
             result = node.result or {}
-            reason = result.get("reason", "unknown") if isinstance(result, dict) else "unknown"
-            next_action = result.get("next_action", "inspect timeline") if isinstance(result, dict) else "inspect timeline"
-            command_hint = result.get("command_hint", "") if isinstance(result, dict) else ""
+            reason = (
+                result.get("reason", "unknown")
+                if isinstance(result, dict)
+                else "unknown"
+            )
+            next_action = (
+                result.get("next_action", "inspect timeline")
+                if isinstance(result, dict)
+                else "inspect timeline"
+            )
+            command_hint = (
+                result.get("command_hint", "") if isinstance(result, dict) else ""
+            )
             suffix = f"; cmd={command_hint}" if command_hint else ""
             failures.append(f"- {node_id}: reason={reason}; next={next_action}{suffix}")
         if not failures:
@@ -237,7 +294,9 @@ class PhaseTimelineScreen(Vertical):
             self._refresh_event_table()
         elif button_id == "toggle-failure-next":
             self._failures_with_next_action = not self._failures_with_next_action
-            event.button.label = f"Failures+Next: {'On' if self._failures_with_next_action else 'Off'}"
+            event.button.label = (
+                f"Failures+Next: {'On' if self._failures_with_next_action else 'Off'}"
+            )
             self._refresh_event_table()
         elif button_id == "toggle-autoscroll":
             self._autoscroll = not self._autoscroll
@@ -248,7 +307,9 @@ class PhaseTimelineScreen(Vertical):
             event.button.label = f"Compact: {'On' if self._compact else 'Off'}"
             self._refresh_event_table()
         elif button_id == "cycle-retention":
-            self._retention_index = (self._retention_index + 1) % len(self._retention_options)
+            self._retention_index = (self._retention_index + 1) % len(
+                self._retention_options
+            )
             event.button.label = f"Retention: {self._retention_limit()}"
             if len(self._event_rows) > self._retention_limit():
                 self._event_rows = self._event_rows[-self._retention_limit() :]
@@ -266,7 +327,12 @@ class PhaseTimelineScreen(Vertical):
             self._refresh_event_table()
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id in {"filter-phase", "filter-lane", "filter-task", "filter-event-types"}:
+        if event.input.id in {
+            "filter-phase",
+            "filter-lane",
+            "filter-task",
+            "filter-event-types",
+        }:
             self._refresh_event_table()
 
     def _tick(self) -> None:

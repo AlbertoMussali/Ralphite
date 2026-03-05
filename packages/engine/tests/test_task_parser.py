@@ -17,7 +17,12 @@ def _plan(tasks: list[dict]) -> PlanSpecV5:
             },
             "constraints": {"max_parallel": 2},
             "agents": [
-                {"id": "worker_default", "role": "worker", "provider": "codex", "model": "gpt-5.3-codex"},
+                {
+                    "id": "worker_default",
+                    "role": "worker",
+                    "provider": "codex",
+                    "model": "gpt-5.3-codex",
+                },
                 {
                     "id": "orchestrator_default",
                     "role": "orchestrator",
@@ -55,10 +60,18 @@ def test_parse_plan_tasks_reads_yaml_tasks() -> None:
                 "title": "Build",
                 "completed": False,
                 "deps": ["t1"],
-                "routing": {"lane": "lane_a", "cell": "par_core", "team_mode": None, "group": None, "tags": ["core"]},
+                "routing": {
+                    "lane": "lane_a",
+                    "cell": "par_core",
+                    "team_mode": None,
+                    "group": None,
+                    "tags": ["core"],
+                },
                 "acceptance": {
                     "commands": ["echo ok"],
-                    "required_artifacts": [{"id": "bundle", "path_glob": "dist/*", "format": "file"}],
+                    "required_artifacts": [
+                        {"id": "bundle", "path_glob": "dist/*", "format": "file"}
+                    ],
                     "rubric": ["build passes"],
                 },
             },

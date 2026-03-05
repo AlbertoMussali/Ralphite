@@ -3,7 +3,10 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from ralphite_engine.headless_agent import BackendExecutionConfig, execute_headless_agent
+from ralphite_engine.headless_agent import (
+    BackendExecutionConfig,
+    execute_headless_agent,
+)
 
 
 def test_codex_backend_builds_expected_command(monkeypatch, tmp_path: Path) -> None:
@@ -52,7 +55,9 @@ def test_cursor_backend_builds_expected_command(monkeypatch, tmp_path: Path) -> 
     def _fake_run(command, cwd, check, capture_output, text, timeout):  # noqa: ANN001
         seen["command"] = list(command)
         seen["cwd"] = str(cwd)
-        return subprocess.CompletedProcess(command, 0, stdout='{"text":"done"}\n', stderr="")
+        return subprocess.CompletedProcess(
+            command, 0, stdout='{"text":"done"}\n', stderr=""
+        )
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
     ok, result = execute_headless_agent(

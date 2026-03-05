@@ -67,7 +67,9 @@ def _default_agents() -> list[dict[str, Any]]:
     ]
 
 
-def _common_plan_shell(*, plan_id: str, name: str, lanes: list[str], loop_unit: str) -> dict[str, Any]:
+def _common_plan_shell(
+    *, plan_id: str, name: str, lanes: list[str], loop_unit: str
+) -> dict[str, Any]:
     return {
         "version": 5,
         "plan_id": plan_id,
@@ -118,11 +120,17 @@ def make_bootstrap_plan(
     branched_lanes: list[str] | None = None,
     blue_red_loop_unit: str = "per_task",
 ) -> dict[str, Any]:
-    lanes = [item.strip() for item in (branched_lanes or ["lane_a", "lane_b"]) if item and item.strip()]
+    lanes = [
+        item.strip()
+        for item in (branched_lanes or ["lane_a", "lane_b"])
+        if item and item.strip()
+    ]
     if not lanes:
         lanes = ["lane_a", "lane_b"]
 
-    shell = _common_plan_shell(plan_id=plan_id, name=name, lanes=lanes, loop_unit=blue_red_loop_unit)
+    shell = _common_plan_shell(
+        plan_id=plan_id, name=name, lanes=lanes, loop_unit=blue_red_loop_unit
+    )
     shell["orchestration"]["template"] = template
 
     plan_task = "Decompose the objective into executable steps."
@@ -180,7 +188,11 @@ def make_bootstrap_plan(
                 "title": plan_task,
                 "completed": False,
                 "routing": {"group": "trunk", "tags": ["trunk", "planning"]},
-                "acceptance": {"commands": [], "required_artifacts": [], "rubric": ["Prelude context is clear."]},
+                "acceptance": {
+                    "commands": [],
+                    "required_artifacts": [],
+                    "rubric": ["Prelude context is clear."],
+                },
             },
             {
                 "id": "task_lane_a",
@@ -188,7 +200,11 @@ def make_bootstrap_plan(
                 "completed": False,
                 "deps": ["task_trunk_prelude"],
                 "routing": {"lane": lane_a, "tags": ["lane"]},
-                "acceptance": {"commands": [], "required_artifacts": [], "rubric": ["Lane A work is complete."]},
+                "acceptance": {
+                    "commands": [],
+                    "required_artifacts": [],
+                    "rubric": ["Lane A work is complete."],
+                },
             },
             {
                 "id": "task_lane_b",
@@ -196,14 +212,22 @@ def make_bootstrap_plan(
                 "completed": False,
                 "deps": ["task_trunk_prelude"],
                 "routing": {"lane": lane_b, "tags": ["lane"]},
-                "acceptance": {"commands": [], "required_artifacts": [], "rubric": ["Lane B work is complete."]},
+                "acceptance": {
+                    "commands": [],
+                    "required_artifacts": [],
+                    "rubric": ["Lane B work is complete."],
+                },
             },
             {
                 "id": "task_trunk_finalize",
                 "title": verify_task,
                 "completed": False,
                 "deps": ["task_lane_a", "task_lane_b"],
-                "routing": {"group": "trunk", "cell": "trunk_post", "tags": ["trunk", "finalize"]},
+                "routing": {
+                    "group": "trunk",
+                    "cell": "trunk_post",
+                    "tags": ["trunk", "finalize"],
+                },
                 "acceptance": {
                     "commands": [],
                     "required_artifacts": [],
@@ -217,7 +241,11 @@ def make_bootstrap_plan(
                 "id": "task_feature_1",
                 "title": execute_task,
                 "completed": False,
-                "routing": {"cell": "cycle", "team_mode": "blue_red", "tags": ["feature"]},
+                "routing": {
+                    "cell": "cycle",
+                    "team_mode": "blue_red",
+                    "tags": ["feature"],
+                },
                 "acceptance": {
                     "commands": [],
                     "required_artifacts": [],
@@ -228,7 +256,11 @@ def make_bootstrap_plan(
                 "id": "task_feature_2",
                 "title": verify_task,
                 "completed": False,
-                "routing": {"cell": "cycle", "team_mode": "blue_red", "tags": ["feature"]},
+                "routing": {
+                    "cell": "cycle",
+                    "team_mode": "blue_red",
+                    "tags": ["feature"],
+                },
                 "acceptance": {
                     "commands": [],
                     "required_artifacts": [],
@@ -246,7 +278,12 @@ def make_bootstrap_plan(
                     "behavior": "merge_and_conflict_resolution_default",
                     "depends_on": ["pre"],
                 },
-                {"id": "post", "kind": "sequential", "task_ids": ["task_post"], "depends_on": ["merge"]},
+                {
+                    "id": "post",
+                    "kind": "sequential",
+                    "task_ids": ["task_post"],
+                    "depends_on": ["merge"],
+                },
             ]
         }
         shell["tasks"] = [
@@ -255,14 +292,22 @@ def make_bootstrap_plan(
                 "title": plan_task,
                 "completed": False,
                 "routing": {"cell": "pre", "tags": ["custom"]},
-                "acceptance": {"commands": [], "required_artifacts": [], "rubric": ["Pre-step completed."]},
+                "acceptance": {
+                    "commands": [],
+                    "required_artifacts": [],
+                    "rubric": ["Pre-step completed."],
+                },
             },
             {
                 "id": "task_post",
                 "title": verify_task,
                 "completed": False,
                 "routing": {"cell": "post", "tags": ["custom"]},
-                "acceptance": {"commands": [], "required_artifacts": [], "rubric": ["Post-step completed."]},
+                "acceptance": {
+                    "commands": [],
+                    "required_artifacts": [],
+                    "rubric": ["Post-step completed."],
+                },
             },
         ]
     else:
@@ -310,7 +355,11 @@ def _starter_target_path(plans_dir: Path) -> Path:
 
 def seed_starter_if_missing(plans_dir: Path) -> Path | None:
     plans_dir.mkdir(parents=True, exist_ok=True)
-    existing = [p for p in plans_dir.iterdir() if p.is_file() and p.suffix.lower() in {".yaml", ".yml"}]
+    existing = [
+        p
+        for p in plans_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in {".yaml", ".yml"}
+    ]
 
     if existing and any(_is_v5_plan_file(path) for path in existing):
         return None

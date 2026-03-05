@@ -141,8 +141,18 @@ def _single_task_plan(
             "acceptance_timeout_seconds": acceptance_timeout_seconds,
         },
         "agents": [
-            {"id": "worker_default", "role": "worker", "provider": "codex", "model": "gpt-5.3-codex"},
-            {"id": "orchestrator_default", "role": "orchestrator", "provider": "codex", "model": "gpt-5.3-codex"},
+            {
+                "id": "worker_default",
+                "role": "worker",
+                "provider": "codex",
+                "model": "gpt-5.3-codex",
+            },
+            {
+                "id": "orchestrator_default",
+                "role": "orchestrator",
+                "provider": "codex",
+                "model": "gpt-5.3-codex",
+            },
         ],
         "orchestration": {
             "template": "general_sps",
@@ -223,7 +233,9 @@ def test_v5_plan_executes_with_phase_events(tmp_path: Path) -> None:
 
 def test_conflict_triggers_recovery_and_abort_mode(tmp_path: Path) -> None:
     orch = LocalOrchestrator(tmp_path)
-    (tmp_path / ".ralphite" / "force_merge_conflict").write_text("phase-1", encoding="utf-8")
+    (tmp_path / ".ralphite" / "force_merge_conflict").write_text(
+        "phase-1", encoding="utf-8"
+    )
     run_id = orch.start_run(plan_content=_conflict_plan_content())
     assert orch.wait_for_run(run_id, timeout=8.0) is True
     run = orch.get_run(run_id)
@@ -275,7 +287,9 @@ def test_acceptance_artifact_out_of_bounds_symlink_is_rejected(tmp_path: Path) -
         pytest.skip(f"symlink unavailable: {exc}")
     orch = LocalOrchestrator(tmp_path)
     plan = _single_task_plan(
-        acceptance_artifacts=[{"id": "leak", "path_glob": "leak/outside_artifact.txt", "format": "file"}],
+        acceptance_artifacts=[
+            {"id": "leak", "path_glob": "leak/outside_artifact.txt", "format": "file"}
+        ],
     )
     run_id = orch.start_run(plan_content=plan)
     assert orch.wait_for_run(run_id, timeout=8.0)
@@ -309,10 +323,14 @@ def test_retry_policy_retries_transient_node_failures(tmp_path: Path) -> None:
     assert any(evt.get("event") == "NODE_RETRY_SCHEDULED" for evt in run.events)
 
 
-def test_retry_policy_does_not_retry_deterministic_artifact_missing(tmp_path: Path) -> None:
+def test_retry_policy_does_not_retry_deterministic_artifact_missing(
+    tmp_path: Path,
+) -> None:
     orch = LocalOrchestrator(tmp_path)
     plan = _single_task_plan(
-        acceptance_artifacts=[{"id": "missing", "path_glob": "missing/*.txt", "format": "file"}],
+        acceptance_artifacts=[
+            {"id": "missing", "path_glob": "missing/*.txt", "format": "file"}
+        ],
         max_retries_per_node=3,
     )
     run_id = orch.start_run(plan_content=plan)

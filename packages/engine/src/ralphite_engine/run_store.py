@@ -8,7 +8,11 @@ import threading
 from typing import Any
 from uuid import uuid4
 
-from ralphite_engine.models import EventJournalRecord, RunCheckpoint, RunPersistenceState
+from ralphite_engine.models import (
+    EventJournalRecord,
+    RunCheckpoint,
+    RunPersistenceState,
+)
 
 
 class RunStore:
@@ -90,13 +94,17 @@ class RunStore:
         if not path.exists():
             return None
         try:
-            return RunPersistenceState.model_validate_json(path.read_text(encoding="utf-8"))
+            return RunPersistenceState.model_validate_json(
+                path.read_text(encoding="utf-8")
+            )
         except Exception:  # noqa: BLE001
             return None
 
     def append_event(self, run_id: str, event: dict[str, Any]) -> EventJournalRecord:
         seq = int(event.get("id", 0))
-        record = EventJournalRecord(seq=seq, ts=str(event.get("ts", "")), run_id=run_id, payload=event)
+        record = EventJournalRecord(
+            seq=seq, ts=str(event.get("ts", "")), run_id=run_id, payload=event
+        )
         path = self._events_path(run_id)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(record.model_dump_json())
@@ -134,6 +142,7 @@ class RunStore:
             return RunCheckpoint.model_validate_json(path.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             return None
+
     def _tmp_path(self, path: Path) -> Path:
         token = f"{os.getpid()}-{threading.get_ident()}-{uuid4().hex}"
         return path.with_name(f"{path.name}.{token}.tmp")

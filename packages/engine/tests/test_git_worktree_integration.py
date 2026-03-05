@@ -7,12 +7,20 @@ from ralphite_engine.git_worktree import GitWorktreeManager
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+    )
 
 
 def _init_repo(path: Path) -> None:
     _git(path, "init")
-    subprocess.run(["git", "branch", "-m", "main"], cwd=path, check=False, capture_output=True, text=True)
+    subprocess.run(
+        ["git", "branch", "-m", "main"],
+        cwd=path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
     _git(path, "config", "user.name", "Ralphite Test")
     _git(path, "config", "user.email", "ralphite@example.com")
     (path / "README.md").write_text("repo\n", encoding="utf-8")
@@ -32,7 +40,9 @@ def test_git_worktree_worker_merge_and_cleanup_idempotent(tmp_path: Path) -> Non
     assert worker_path.exists()
 
     (worker_path / "worker.txt").write_text("worker output\n", encoding="utf-8")
-    ok, commit_meta = manager.commit_worker(state, "phase-1", "phase-1::parallel::t1", "worker commit")
+    ok, commit_meta = manager.commit_worker(
+        state, "phase-1", "phase-1::parallel::t1", "worker commit"
+    )
     assert ok is True
     assert "branch" in commit_meta
 
@@ -60,7 +70,9 @@ def test_git_worktree_conflict_fail_closed_reports_details(tmp_path: Path) -> No
     worker = manager.prepare_worker(state, "phase-1", "phase-1::parallel::t1")
     worker_path = Path(str(worker["worktree_path"]))
     (worker_path / "shared.txt").write_text("worker-change\n", encoding="utf-8")
-    ok, _meta = manager.commit_worker(state, "phase-1", "phase-1::parallel::t1", "worker changes shared file")
+    ok, _meta = manager.commit_worker(
+        state, "phase-1", "phase-1::parallel::t1", "worker changes shared file"
+    )
     assert ok is True
 
     (tmp_path / "shared.txt").write_text("base-change\n", encoding="utf-8")
@@ -83,7 +95,9 @@ def test_detect_stale_artifacts_reports_orphans(tmp_path: Path) -> None:
     orphan = tmp_path / ".ralphite" / "worktrees" / "orphanrun"
     orphan.mkdir(parents=True, exist_ok=True)
 
-    report = manager.detect_stale_artifacts(active_run_ids=["active-run"], max_age_hours=0)
+    report = manager.detect_stale_artifacts(
+        active_run_ids=["active-run"], max_age_hours=0
+    )
     assert "stale_worktrees" in report
     assert any(item.get("run_id") == "orphanrun" for item in report["stale_worktrees"])
 

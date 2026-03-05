@@ -28,7 +28,9 @@ def latest_snapshot(drafts_dir: Path, *, draft_id: str | None = None) -> Path | 
     if not drafts_dir.exists():
         return None
     pattern = f"{draft_id}.*.autosave.yaml" if draft_id else "*.autosave.yaml"
-    snapshots = sorted(drafts_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    snapshots = sorted(
+        drafts_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True
+    )
     return snapshots[0] if snapshots else None
 
 
@@ -36,7 +38,9 @@ def load_drafts(drafts_dir: Path) -> list[PlanDraftState]:
     drafts: list[PlanDraftState] = []
     if not drafts_dir.exists():
         return drafts
-    for path in sorted(drafts_dir.glob("*.yaml"), key=lambda p: p.stat().st_mtime, reverse=True):
+    for path in sorted(
+        drafts_dir.glob("*.yaml"), key=lambda p: p.stat().st_mtime, reverse=True
+    ):
         if path.name.endswith(".autosave.yaml"):
             continue
         drafts.append(

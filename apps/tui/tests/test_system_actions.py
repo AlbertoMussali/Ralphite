@@ -15,7 +15,9 @@ def test_copy_text_to_clipboard_uses_pbcopy_on_macos(monkeypatch) -> None:
     )
     observed: dict[str, object] = {}
 
-    def _fake_run(args: list[str], *, text: str | None = None, shell: bool = False) -> ActionResult:
+    def _fake_run(
+        args: list[str], *, text: str | None = None, shell: bool = False
+    ) -> ActionResult:
         observed["args"] = args
         observed["text"] = text
         observed["shell"] = shell
@@ -51,7 +53,9 @@ def test_open_local_path_uses_open_on_macos(monkeypatch, tmp_path: Path) -> None
     target = tmp_path / "artifact.txt"
     target.write_text("x", encoding="utf-8")
 
-    def _fake_run(args: list[str], *, text: str | None = None, shell: bool = False) -> ActionResult:
+    def _fake_run(
+        args: list[str], *, text: str | None = None, shell: bool = False
+    ) -> ActionResult:
         opened["args"] = args
         opened["text"] = text
         opened["shell"] = shell

@@ -116,7 +116,9 @@ def _assert_matches_cli_schema(payload: dict[str, Any]) -> None:
 def test_check_json_envelope_contains_schema_version(tmp_path: Path) -> None:
     LocalOrchestrator(tmp_path)
     runner = CliRunner()
-    result = runner.invoke(app, ["check", "--workspace", str(tmp_path), "--output", "json"])
+    result = runner.invoke(
+        app, ["check", "--workspace", str(tmp_path), "--output", "json"]
+    )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     _assert_matches_cli_schema(payload)
@@ -133,7 +135,15 @@ def test_replay_json_envelope_contains_schema_version(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["replay", run_id, "--workspace", str(tmp_path), "--no-tui", "--output", "json"],
+        [
+            "replay",
+            run_id,
+            "--workspace",
+            str(tmp_path),
+            "--no-tui",
+            "--output",
+            "json",
+        ],
     )
     assert result.exit_code in {0, 1}
     payload = json.loads(result.stdout)
@@ -154,7 +164,9 @@ def test_tui_json_requires_dry_run(tmp_path: Path) -> None:
     assert bad_payload["command"] == "tui"
     assert bad_payload["ok"] is False
 
-    ok = runner.invoke(app, ["tui", "--workspace", str(tmp_path), "--output", "json", "--dry-run"])
+    ok = runner.invoke(
+        app, ["tui", "--workspace", str(tmp_path), "--output", "json", "--dry-run"]
+    )
     assert ok.exit_code == 0
     ok_payload = json.loads(ok.stdout)
     _assert_matches_cli_schema(ok_payload)
@@ -175,7 +187,15 @@ def test_json_envelopes_match_schema_for_additional_commands(tmp_path: Path) -> 
         ["validate", "--workspace", str(tmp_path), "--json"],
         ["run", "--workspace", str(tmp_path), "--no-tui", "--yes", "--output", "json"],
         ["recover", "--workspace", str(tmp_path), "--no-tui", "--json"],
-        ["quickstart", "--workspace", str(tmp_path), "--no-tui", "--yes", "--output", "json"],
+        [
+            "quickstart",
+            "--workspace",
+            str(tmp_path),
+            "--no-tui",
+            "--yes",
+            "--output",
+            "json",
+        ],
     ]
     for args in invocations:
         result = runner.invoke(app, args)

@@ -72,6 +72,8 @@ def parse_plan_tasks(plan: PlanSpecV5) -> tuple[list[ParsedTask], list[str]]:
 def task_acceptance_payload(task: ParsedTask) -> dict[str, Any]:
     return {
         "commands": list(task.acceptance_commands),
-        "required_artifacts": [dict(item) for item in task.acceptance_required_artifacts],
+        "required_artifacts": [
+            dict(item) for item in task.acceptance_required_artifacts
+        ],
         "rubric": list(task.acceptance_rubric),
     }

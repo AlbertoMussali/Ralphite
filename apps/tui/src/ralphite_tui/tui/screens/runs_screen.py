@@ -61,7 +61,9 @@ class RunsScreen(Vertical):
     def _refresh_status(self) -> None:
         run_id = self.shell.current_run_id
         if not run_id:
-            self._status_widget().update("Ready. Start a run with `s` or command palette.")
+            self._status_widget().update(
+                "Ready. Start a run with `s` or command palette."
+            )
             return
         run = self.shell.orchestrator.get_run(run_id)
         if not run:
@@ -78,7 +80,13 @@ class RunsScreen(Vertical):
         table.clear()
         for run in self.shell.orchestrator.list_history(limit=25):
             status = present_run_status(run.status)
-            table.add_row(run.id[:8], status.label, status.next_action, run.plan_path, run.completed_at or "-")
+            table.add_row(
+                run.id[:8],
+                status.label,
+                status.next_action,
+                run.plan_path,
+                run.completed_at or "-",
+            )
 
     def _tick(self) -> None:
         self._refresh_status()

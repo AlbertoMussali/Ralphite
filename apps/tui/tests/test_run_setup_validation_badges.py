@@ -146,7 +146,11 @@ def test_render_resolved_preview_uses_structured_row_format() -> None:
     sink = _StaticSink()
     screen._structure = MethodType(lambda self: sink, screen)  # type: ignore[method-assign]
     screen._latest_validation_issues = [  # noqa: SLF001
-        {"code": "tasks.unassigned", "message": "routing missing", "path": "tasks[0].routing"}
+        {
+            "code": "tasks.unassigned",
+            "message": "routing missing",
+            "path": "tasks[0].routing",
+        }
     ]
     summary = {
         "template": "general_sps",
@@ -154,8 +158,18 @@ def test_render_resolved_preview_uses_structured_row_format() -> None:
             "template": "general_sps",
             "resolved_cells": [{"id": "seq_pre", "kind": "sequential"}],
             "resolved_nodes": [
-                {"cell_id": "seq_pre", "lane": "sequential", "role": "worker", "source_task_id": "t1"},
-                {"cell_id": "orch_merge_1", "lane": "orchestrator", "role": "orchestrator", "source_task_id": None},
+                {
+                    "cell_id": "seq_pre",
+                    "lane": "sequential",
+                    "role": "worker",
+                    "source_task_id": "t1",
+                },
+                {
+                    "cell_id": "orch_merge_1",
+                    "lane": "orchestrator",
+                    "role": "orchestrator",
+                    "source_task_id": None,
+                },
             ],
             "compile_warnings": [],
         },

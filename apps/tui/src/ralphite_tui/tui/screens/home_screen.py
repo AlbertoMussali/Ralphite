@@ -28,9 +28,15 @@ class HomeScreen(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static("Ralphite TUI Home", id="home-title")
-        yield Static("Primary loop: setup run -> phase timeline -> recovery (if needed) -> summary.")
-        yield Static("Use top navigation or `ctrl+p`/`:` command palette for every action.")
-        yield Static("Task source remains file-based; TUI controls execution structure and run flow.")
+        yield Static(
+            "Primary loop: setup run -> phase timeline -> recovery (if needed) -> summary."
+        )
+        yield Static(
+            "Use top navigation or `ctrl+p`/`:` command palette for every action."
+        )
+        yield Static(
+            "Task source remains file-based; TUI controls execution structure and run flow."
+        )
         yield Static("", id="home-status")
         with Horizontal():
             yield Button("Create Plan", id="home-create-plan", variant="primary")

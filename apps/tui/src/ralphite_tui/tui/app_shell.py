@@ -75,7 +75,16 @@ class AppShell(App[None]):
         yield Header(show_clock=True)
         with Horizontal(id="top-nav"):
             yield Static("Ralphite", id="nav-title")
-            for screen in ["home", "run_setup", "runs", "phase_timeline", "recovery", "summary", "history", "settings"]:
+            for screen in [
+                "home",
+                "run_setup",
+                "runs",
+                "phase_timeline",
+                "recovery",
+                "summary",
+                "history",
+                "settings",
+            ]:
                 yield Button(screen.replace("_", " ").title(), id=f"nav-{screen}")
         yield Vertical(id="screen-body")
         yield Footer()
@@ -108,24 +117,67 @@ class AppShell(App[None]):
         else:
             self.nav_stack = [screen]
 
-    def _command_map(self) -> tuple[list[PaletteCommand], dict[str, Callable[[], None]]]:
+    def _command_map(
+        self,
+    ) -> tuple[list[PaletteCommand], dict[str, Callable[[], None]]]:
         commands: list[PaletteCommand] = [
-            PaletteCommand(id="nav.home", title="Go Home", scope="global", shortcut="1"),
-            PaletteCommand(id="nav.run_setup", title="Open Run Setup", scope="global", shortcut="2"),
-            PaletteCommand(id="nav.runs", title="Open Runs", scope="global", shortcut="3"),
-            PaletteCommand(id="nav.phase_timeline", title="Open Phase Timeline", scope="global", shortcut="4"),
-            PaletteCommand(id="nav.recovery", title="Open Recovery Console", scope="global", shortcut="5"),
-            PaletteCommand(id="nav.summary", title="Open Post-Run Summary", scope="global", shortcut="6"),
-            PaletteCommand(id="nav.history", title="Open History", scope="global", shortcut="7"),
-            PaletteCommand(id="nav.settings", title="Open Settings", scope="global", shortcut="8"),
-            PaletteCommand(id="run.start", title="Start Run", scope="run", shortcut="s"),
-            PaletteCommand(id="run.pause", title="Pause Run", scope="run", shortcut="p"),
-            PaletteCommand(id="run.resume", title="Resume Run", scope="run", shortcut="r"),
-            PaletteCommand(id="run.cancel", title="Cancel Run", scope="run", shortcut="c"),
+            PaletteCommand(
+                id="nav.home", title="Go Home", scope="global", shortcut="1"
+            ),
+            PaletteCommand(
+                id="nav.run_setup", title="Open Run Setup", scope="global", shortcut="2"
+            ),
+            PaletteCommand(
+                id="nav.runs", title="Open Runs", scope="global", shortcut="3"
+            ),
+            PaletteCommand(
+                id="nav.phase_timeline",
+                title="Open Phase Timeline",
+                scope="global",
+                shortcut="4",
+            ),
+            PaletteCommand(
+                id="nav.recovery",
+                title="Open Recovery Console",
+                scope="global",
+                shortcut="5",
+            ),
+            PaletteCommand(
+                id="nav.summary",
+                title="Open Post-Run Summary",
+                scope="global",
+                shortcut="6",
+            ),
+            PaletteCommand(
+                id="nav.history", title="Open History", scope="global", shortcut="7"
+            ),
+            PaletteCommand(
+                id="nav.settings", title="Open Settings", scope="global", shortcut="8"
+            ),
+            PaletteCommand(
+                id="run.start", title="Start Run", scope="run", shortcut="s"
+            ),
+            PaletteCommand(
+                id="run.pause", title="Pause Run", scope="run", shortcut="p"
+            ),
+            PaletteCommand(
+                id="run.resume", title="Resume Run", scope="run", shortcut="r"
+            ),
+            PaletteCommand(
+                id="run.cancel", title="Cancel Run", scope="run", shortcut="c"
+            ),
             PaletteCommand(id="run.recover", title="Recover Latest", scope="run"),
-            PaletteCommand(id="recovery.manual", title="Recovery: Manual", scope="recovery"),
-            PaletteCommand(id="recovery.agent", title="Recovery: Best Effort Agent", scope="recovery"),
-            PaletteCommand(id="recovery.abort", title="Recovery: Abort", scope="recovery"),
+            PaletteCommand(
+                id="recovery.manual", title="Recovery: Manual", scope="recovery"
+            ),
+            PaletteCommand(
+                id="recovery.agent",
+                title="Recovery: Best Effort Agent",
+                scope="recovery",
+            ),
+            PaletteCommand(
+                id="recovery.abort", title="Recovery: Abort", scope="recovery"
+            ),
         ]
 
         handlers: dict[str, Callable[[], None]] = {
@@ -143,7 +195,9 @@ class AppShell(App[None]):
             "run.cancel": self.action_cancel_run,
             "run.recover": self.action_recover_run,
             "recovery.manual": lambda: self.action_set_recovery_mode("manual"),
-            "recovery.agent": lambda: self.action_set_recovery_mode("agent_best_effort"),
+            "recovery.agent": lambda: self.action_set_recovery_mode(
+                "agent_best_effort"
+            ),
             "recovery.abort": lambda: self.action_set_recovery_mode("abort_phase"),
         }
         return commands, handlers
@@ -195,7 +249,9 @@ class AppShell(App[None]):
 
     def start_run_for_plan(self, plan_ref: str | None) -> str | None:
         try:
-            run_id = self.orchestrator.start_run(plan_ref=plan_ref, metadata={"source": "tui.shell"})
+            run_id = self.orchestrator.start_run(
+                plan_ref=plan_ref, metadata={"source": "tui.shell"}
+            )
         except Exception:
             return None
         self.current_run_id = run_id

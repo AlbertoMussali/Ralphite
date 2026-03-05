@@ -12,7 +12,12 @@ import yaml
 
 from ralphite_engine.task_parser import ParsedTask, parse_plan_tasks
 from ralphite_engine.templates import versioned_filename
-from ralphite_engine.validation import apply_fix, parse_plan_yaml, suggest_fixes, validate_plan_content
+from ralphite_engine.validation import (
+    apply_fix,
+    parse_plan_yaml,
+    suggest_fixes,
+    validate_plan_content,
+)
 
 if TYPE_CHECKING:
     from ralphite_tui.tui.app_shell import AppShell
@@ -119,16 +124,24 @@ class RunSetupScreen(Vertical):
                 id="edit-branched-lanes",
                 classes="setup-edit-input",
             )
-            yield Input(placeholder="blue_red.loop_unit", id="edit-loop-unit", classes="setup-edit-input")
+            yield Input(
+                placeholder="blue_red.loop_unit",
+                id="edit-loop-unit",
+                classes="setup-edit-input",
+            )
             yield Input(
                 placeholder="custom.cells count (read-only hint)",
                 id="edit-custom-cells",
                 classes="setup-edit-input",
             )
-            yield Button("Apply Orchestration", id="apply-orchestration-edit", variant="primary")
+            yield Button(
+                "Apply Orchestration", id="apply-orchestration-edit", variant="primary"
+            )
 
         plans = DataTable(id="setup-plans")
-        plans.add_columns("Plan", "Valid", "Template", "Tasks", "Pending", "Cells", "Nodes")
+        plans.add_columns(
+            "Plan", "Valid", "Template", "Tasks", "Pending", "Cells", "Nodes"
+        )
         yield plans
 
         run_table = DataTable(id="setup-run")
@@ -155,18 +168,46 @@ class RunSetupScreen(Vertical):
         yield tasks
 
         with Horizontal(id="setup-task-editor"):
-            yield Input(placeholder="title", id="edit-task-title", classes="setup-edit-input")
-            yield Input(placeholder="deps (comma-separated ids)", id="edit-task-deps", classes="setup-edit-input")
-            yield Input(placeholder="routing.lane", id="edit-task-lane", classes="setup-edit-input")
-            yield Input(placeholder="routing.cell", id="edit-task-cell", classes="setup-edit-input")
-            yield Input(placeholder="routing.team_mode", id="edit-task-team", classes="setup-edit-input")
-            yield Input(placeholder="agent id (optional)", id="edit-task-agent", classes="setup-edit-input")
-            yield Input(placeholder="completed true|false", id="edit-task-completed", classes="setup-edit-input")
+            yield Input(
+                placeholder="title", id="edit-task-title", classes="setup-edit-input"
+            )
+            yield Input(
+                placeholder="deps (comma-separated ids)",
+                id="edit-task-deps",
+                classes="setup-edit-input",
+            )
+            yield Input(
+                placeholder="routing.lane",
+                id="edit-task-lane",
+                classes="setup-edit-input",
+            )
+            yield Input(
+                placeholder="routing.cell",
+                id="edit-task-cell",
+                classes="setup-edit-input",
+            )
+            yield Input(
+                placeholder="routing.team_mode",
+                id="edit-task-team",
+                classes="setup-edit-input",
+            )
+            yield Input(
+                placeholder="agent id (optional)",
+                id="edit-task-agent",
+                classes="setup-edit-input",
+            )
+            yield Input(
+                placeholder="completed true|false",
+                id="edit-task-completed",
+                classes="setup-edit-input",
+            )
             yield Button("Apply Task Edit", id="apply-task-edit", variant="primary")
 
         yield Static("No resolved run preview yet.", id="setup-structure")
         yield Static("No safe-fix preview yet.", id="setup-fix-preview")
-        yield Static("Load a v5 plan to edit orchestration and routing.", id="setup-validation")
+        yield Static(
+            "Load a v5 plan to edit orchestration and routing.", id="setup-validation"
+        )
 
     def on_mount(self) -> None:
         self._refresh_plans()
@@ -196,14 +237,23 @@ class RunSetupScreen(Vertical):
         if not self._loaded_plan_data:
             cfg = self.shell.orchestrator.config
             return f"backend={cfg.default_backend} model={cfg.default_model} reasoning={cfg.default_reasoning_effort}"
-        agents = self._loaded_plan_data.get("agents") if isinstance(self._loaded_plan_data.get("agents"), list) else []
+        agents = (
+            self._loaded_plan_data.get("agents")
+            if isinstance(self._loaded_plan_data.get("agents"), list)
+            else []
+        )
         if not agents:
             cfg = self.shell.orchestrator.config
             return f"backend={cfg.default_backend} model={cfg.default_model} reasoning={cfg.default_reasoning_effort}"
         first = next((row for row in agents if isinstance(row, dict)), {})
-        backend = str(first.get("provider") or self.shell.orchestrator.config.default_backend)
+        backend = str(
+            first.get("provider") or self.shell.orchestrator.config.default_backend
+        )
         model = str(first.get("model") or self.shell.orchestrator.config.default_model)
-        reasoning = str(first.get("reasoning_effort") or self.shell.orchestrator.config.default_reasoning_effort)
+        reasoning = str(
+            first.get("reasoning_effort")
+            or self.shell.orchestrator.config.default_reasoning_effort
+        )
         if backend == "openai":
             backend = "codex"
         return f"backend={backend} model={model} reasoning={reasoning}"
@@ -239,7 +289,13 @@ class RunSetupScreen(Vertical):
 
     def _rebuild_task_badges(self) -> None:
         self._task_badges = {
-            idx: {"title": "OK", "deps": "OK", "agent": "OK", "routing": "OK", "acceptance": "OK"}
+            idx: {
+                "title": "OK",
+                "deps": "OK",
+                "agent": "OK",
+                "routing": "OK",
+                "acceptance": "OK",
+            }
             for idx in range(len(self._tasks))
         }
         for issue in self._latest_validation_issues:
@@ -256,7 +312,11 @@ class RunSetupScreen(Vertical):
                 continue
             if index < 0 or index >= len(self._tasks):
                 continue
-            target_fields = [field] if field else ["title", "deps", "agent", "routing", "acceptance"]
+            target_fields = (
+                [field]
+                if field
+                else ["title", "deps", "agent", "routing", "acceptance"]
+            )
             for target in target_fields:
                 self._task_badges[index][target] = f"ERR({code})"
 
@@ -283,22 +343,45 @@ class RunSetupScreen(Vertical):
         self._set_edit_field("edit-task-cell", task.routing_cell or "")
         self._set_edit_field("edit-task-team", task.routing_team_mode or "")
         self._set_edit_field("edit-task-agent", task.agent or "")
-        self._set_edit_field("edit-task-completed", "true" if task.completed else "false")
+        self._set_edit_field(
+            "edit-task-completed", "true" if task.completed else "false"
+        )
 
     def _populate_orchestration_editor(self) -> None:
         if not self._loaded_plan_data:
             return
         orchestration = (
-            self._loaded_plan_data.get("orchestration") if isinstance(self._loaded_plan_data.get("orchestration"), dict) else {}
+            self._loaded_plan_data.get("orchestration")
+            if isinstance(self._loaded_plan_data.get("orchestration"), dict)
+            else {}
         )
-        branched = orchestration.get("branched") if isinstance(orchestration.get("branched"), dict) else {}
-        blue_red = orchestration.get("blue_red") if isinstance(orchestration.get("blue_red"), dict) else {}
-        custom = orchestration.get("custom") if isinstance(orchestration.get("custom"), dict) else {}
+        branched = (
+            orchestration.get("branched")
+            if isinstance(orchestration.get("branched"), dict)
+            else {}
+        )
+        blue_red = (
+            orchestration.get("blue_red")
+            if isinstance(orchestration.get("blue_red"), dict)
+            else {}
+        )
+        custom = (
+            orchestration.get("custom")
+            if isinstance(orchestration.get("custom"), dict)
+            else {}
+        )
         lanes = branched.get("lanes") if isinstance(branched.get("lanes"), list) else []
         cells = custom.get("cells") if isinstance(custom.get("cells"), list) else []
-        self._set_edit_field("edit-template", str(orchestration.get("template", "general_sps")))
-        self._set_edit_field("edit-branched-lanes", ",".join(str(item) for item in lanes if isinstance(item, str)))
-        self._set_edit_field("edit-loop-unit", str(blue_red.get("loop_unit", "per_task")))
+        self._set_edit_field(
+            "edit-template", str(orchestration.get("template", "general_sps"))
+        )
+        self._set_edit_field(
+            "edit-branched-lanes",
+            ",".join(str(item) for item in lanes if isinstance(item, str)),
+        )
+        self._set_edit_field(
+            "edit-loop-unit", str(blue_red.get("loop_unit", "per_task"))
+        )
         self._set_edit_field("edit-custom-cells", f"{len(cells)} cells")
 
     def _selected_plan_path(self) -> Path | None:
@@ -324,19 +407,29 @@ class RunSetupScreen(Vertical):
                 plan_path=str(plan_path),
             )
             task_counts = summary.get("task_counts", {})
-            resolved = summary.get("resolved_execution", {}) if isinstance(summary.get("resolved_execution"), dict) else {}
+            resolved = (
+                summary.get("resolved_execution", {})
+                if isinstance(summary.get("resolved_execution"), dict)
+                else {}
+            )
             table.add_row(
                 plan_path.name,
                 "yes" if valid else "no",
                 str(summary.get("template", "-")),
                 str(task_counts.get("total", "-")),
                 str(task_counts.get("pending", "-")),
-                str(len(resolved.get("resolved_cells", [])) if isinstance(resolved.get("resolved_cells"), list) else "-"),
+                str(
+                    len(resolved.get("resolved_cells", []))
+                    if isinstance(resolved.get("resolved_cells"), list)
+                    else "-"
+                ),
                 str(summary.get("nodes", "-")),
             )
 
         table.move_cursor(row=0, column=0)
-        self._status().update(f"{len(self._plans)} plan(s) discovered. Load one to configure orchestration. {self._execution_profile_hint()}")
+        self._status().update(
+            f"{len(self._plans)} plan(s) discovered. Load one to configure orchestration. {self._execution_profile_hint()}"
+        )
 
     def _render_editor_tables(self) -> None:
         run_table = self._run_table()
@@ -347,29 +440,61 @@ class RunSetupScreen(Vertical):
         if not self._loaded_plan_data:
             return
 
-        constraints = self._loaded_plan_data.get("constraints") if isinstance(self._loaded_plan_data.get("constraints"), dict) else {}
-        orchestration = (
-            self._loaded_plan_data.get("orchestration") if isinstance(self._loaded_plan_data.get("orchestration"), dict) else {}
+        constraints = (
+            self._loaded_plan_data.get("constraints")
+            if isinstance(self._loaded_plan_data.get("constraints"), dict)
+            else {}
         )
-        branched = orchestration.get("branched") if isinstance(orchestration.get("branched"), dict) else {}
-        behaviors = orchestration.get("behaviors") if isinstance(orchestration.get("behaviors"), list) else []
+        orchestration = (
+            self._loaded_plan_data.get("orchestration")
+            if isinstance(self._loaded_plan_data.get("orchestration"), dict)
+            else {}
+        )
+        branched = (
+            orchestration.get("branched")
+            if isinstance(orchestration.get("branched"), dict)
+            else {}
+        )
+        behaviors = (
+            orchestration.get("behaviors")
+            if isinstance(orchestration.get("behaviors"), list)
+            else []
+        )
 
         run_table.add_row("Template", str(orchestration.get("template", "-")))
-        run_table.add_row("Inference mode", str(orchestration.get("inference_mode", "-")))
+        run_table.add_row(
+            "Inference mode", str(orchestration.get("inference_mode", "-"))
+        )
         run_table.add_row("Max parallel", str(constraints.get("max_parallel", 1)))
-        run_table.add_row("Acceptance timeout (s)", str(constraints.get("acceptance_timeout_seconds", 120)))
-        run_table.add_row("Max retries/node", str(constraints.get("max_retries_per_node", 0)))
+        run_table.add_row(
+            "Acceptance timeout (s)",
+            str(constraints.get("acceptance_timeout_seconds", 120)),
+        )
+        run_table.add_row(
+            "Max retries/node", str(constraints.get("max_retries_per_node", 0))
+        )
         run_table.add_row("Behaviors", str(len(behaviors)))
         run_table.add_row(
             "Branched lanes",
-            ", ".join(str(item) for item in branched.get("lanes", []) if isinstance(item, str)) or "-",
+            ", ".join(
+                str(item) for item in branched.get("lanes", []) if isinstance(item, str)
+            )
+            or "-",
         )
-        run_table.add_row("Plan version", str(self._loaded_plan_data.get("version", "-")))
+        run_table.add_row(
+            "Plan version", str(self._loaded_plan_data.get("version", "-"))
+        )
 
         for idx, task in enumerate(self._tasks, start=1):
             badges = self._task_badges.get(
                 idx - 1,
-                {"title": "OK", "deps": "OK", "agent": "OK", "routing": "OK", "acceptance": "OK"},
+                {
+                    "title": "OK",
+                    "deps": "OK",
+                    "agent": "OK",
+                    "routing": "OK",
+                    "acceptance": "OK",
+                },
             )
             tasks_table.add_row(
                 task.id,
@@ -395,10 +520,26 @@ class RunSetupScreen(Vertical):
         run_table.move_cursor(row=0, column=0)
 
     def _render_resolved_preview(self, summary: dict[str, Any]) -> None:
-        resolved = summary.get("resolved_execution") if isinstance(summary.get("resolved_execution"), dict) else {}
-        cells = resolved.get("resolved_cells") if isinstance(resolved.get("resolved_cells"), list) else []
-        nodes = resolved.get("resolved_nodes") if isinstance(resolved.get("resolved_nodes"), list) else []
-        warnings = resolved.get("compile_warnings") if isinstance(resolved.get("compile_warnings"), list) else []
+        resolved = (
+            summary.get("resolved_execution")
+            if isinstance(summary.get("resolved_execution"), dict)
+            else {}
+        )
+        cells = (
+            resolved.get("resolved_cells")
+            if isinstance(resolved.get("resolved_cells"), list)
+            else []
+        )
+        nodes = (
+            resolved.get("resolved_nodes")
+            if isinstance(resolved.get("resolved_nodes"), list)
+            else []
+        )
+        warnings = (
+            resolved.get("compile_warnings")
+            if isinstance(resolved.get("compile_warnings"), list)
+            else []
+        )
         node_limit = len(nodes) if self._preview_verbose else 24
         unmapped = [
             issue
@@ -430,29 +571,39 @@ class RunSetupScreen(Vertical):
         if unmapped:
             lines.append("Unmapped-task warnings:")
             for issue in unmapped[:8]:
-                lines.append(f"- {issue.get('code')}: {issue.get('message')} ({issue.get('path')})")
+                lines.append(
+                    f"- {issue.get('code')}: {issue.get('message')} ({issue.get('path')})"
+                )
 
         self._structure().update("\n".join(lines))
 
     def _refresh_validation(self) -> None:
         if not self._loaded_plan_data:
-            self._validation().update("Load a plan to validate orchestration, routing, and resolved execution.")
+            self._validation().update(
+                "Load a plan to validate orchestration, routing, and resolved execution."
+            )
             self._structure().update("No resolved run preview yet.")
             self._latest_validation_issues = []
             self._task_badges = {}
             return
 
-        content = yaml.safe_dump(self._loaded_plan_data, sort_keys=False, allow_unicode=False)
+        content = yaml.safe_dump(
+            self._loaded_plan_data, sort_keys=False, allow_unicode=False
+        )
         valid, issues, summary = validate_plan_content(
             content,
             workspace_root=self.shell.orchestrator.workspace_root,
             plan_path=str(self._loaded_plan_path) if self._loaded_plan_path else None,
         )
-        self._latest_validation_issues = [issue for issue in issues if isinstance(issue, dict)]
+        self._latest_validation_issues = [
+            issue for issue in issues if isinstance(issue, dict)
+        ]
         self._rebuild_task_badges()
         task_counts = summary.get("task_counts", {})
         cell_counts = summary.get("cell_counts", {})
-        recommended_commands = summary.get("recommended_commands", []) if isinstance(summary, dict) else []
+        recommended_commands = (
+            summary.get("recommended_commands", []) if isinstance(summary, dict) else []
+        )
         if not isinstance(recommended_commands, list):
             recommended_commands = []
 
@@ -471,17 +622,31 @@ class RunSetupScreen(Vertical):
             lines.extend([f"- {item}" for item in self._task_parse_issues])
         if issues:
             lines.append("Validation issues:")
-            lines.extend([f"- {issue.get('code')}: {issue.get('message')} ({issue.get('path')})" for issue in issues])
+            lines.extend(
+                [
+                    f"- {issue.get('code')}: {issue.get('message')} ({issue.get('path')})"
+                    for issue in issues
+                ]
+            )
         if recommended_commands:
             lines.append("Recommended commands:")
-            lines.extend([f"- {item}" for item in recommended_commands if isinstance(item, str)])
+            lines.extend(
+                [f"- {item}" for item in recommended_commands if isinstance(item, str)]
+            )
         fix_actions: list[str] = []
         if any(str(issue.get("code")) == "agent.missing_worker" for issue in issues):
             fix_actions.append("Use 'Apply Safe Fixes' to add a default worker.")
-        if any(str(issue.get("code")) == "agent.missing_orchestrator" for issue in issues):
+        if any(
+            str(issue.get("code")) == "agent.missing_orchestrator" for issue in issues
+        ):
             fix_actions.append("Use 'Apply Safe Fixes' to add a default orchestrator.")
-        if any(str(issue.get("code")) in {"tasks.unassigned", "tasks.routing.missing"} for issue in issues):
-            fix_actions.append("Set task routing.lane / routing.cell in the table, then validate again.")
+        if any(
+            str(issue.get("code")) in {"tasks.unassigned", "tasks.routing.missing"}
+            for issue in issues
+        ):
+            fix_actions.append(
+                "Set task routing.lane / routing.cell in the table, then validate again."
+            )
         if fix_actions:
             lines.append("Fix actions:")
             lines.extend([f"- {item}" for item in fix_actions])
@@ -496,7 +661,9 @@ class RunSetupScreen(Vertical):
             ]
         )
         base = "Validation passed." if valid else f"Validation issues: {len(issues)}."
-        self._status().update(f"{base} Task rows with errors: {errored_rows}. {self._execution_profile_hint()}")
+        self._status().update(
+            f"{base} Task rows with errors: {errored_rows}. {self._execution_profile_hint()}"
+        )
         self._render_editor_tables()
 
     def _load_plan(self, path: Path) -> None:
@@ -513,7 +680,9 @@ class RunSetupScreen(Vertical):
             self._loaded_plan_path = path
             self._tasks = []
             self._task_parse_issues = []
-            self._latest_validation_issues = [issue for issue in issues if isinstance(issue, dict)]
+            self._latest_validation_issues = [
+                issue for issue in issues if isinstance(issue, dict)
+            ]
             self._task_badges = {}
             self._clear_fix_preview()
             self._render_editor_tables()
@@ -523,14 +692,29 @@ class RunSetupScreen(Vertical):
             ]
             if issues:
                 lines.append("Validation issues:")
-                lines.extend([f"- {issue.get('code')}: {issue.get('message')} ({issue.get('path')})" for issue in issues])
-            recommended = summary.get("recommended_commands", []) if isinstance(summary, dict) else []
+                lines.extend(
+                    [
+                        f"- {issue.get('code')}: {issue.get('message')} ({issue.get('path')})"
+                        for issue in issues
+                    ]
+                )
+            recommended = (
+                summary.get("recommended_commands", [])
+                if isinstance(summary, dict)
+                else []
+            )
             if isinstance(recommended, list) and recommended:
                 lines.append("Recommended commands:")
-                lines.extend([f"- {item}" for item in recommended if isinstance(item, str)])
+                lines.extend(
+                    [f"- {item}" for item in recommended if isinstance(item, str)]
+                )
             self._validation().update("\n".join(lines))
-            self._structure().update("No resolved run preview available for invalid plan.")
-            self._status().update(f"Load blocked for {path.name}. Use recommended command(s) to repair.")
+            self._structure().update(
+                "No resolved run preview available for invalid plan."
+            )
+            self._status().update(
+                f"Load blocked for {path.name}. Use recommended command(s) to repair."
+            )
             return
         self._loaded_plan_data = plan_model.model_dump(mode="json")
         self._loaded_plan_path = path
@@ -566,14 +750,30 @@ class RunSetupScreen(Vertical):
 
         orchestration["template"] = template
         orchestration.setdefault("inference_mode", "mixed")
-        branched = orchestration.get("branched") if isinstance(orchestration.get("branched"), dict) else {}
-        blue_red = orchestration.get("blue_red") if isinstance(orchestration.get("blue_red"), dict) else {}
-        custom = orchestration.get("custom") if isinstance(orchestration.get("custom"), dict) else {}
+        branched = (
+            orchestration.get("branched")
+            if isinstance(orchestration.get("branched"), dict)
+            else {}
+        )
+        blue_red = (
+            orchestration.get("blue_red")
+            if isinstance(orchestration.get("blue_red"), dict)
+            else {}
+        )
+        custom = (
+            orchestration.get("custom")
+            if isinstance(orchestration.get("custom"), dict)
+            else {}
+        )
         if lanes_raw:
-            branched["lanes"] = [item.strip() for item in lanes_raw.split(",") if item.strip()]
+            branched["lanes"] = [
+                item.strip() for item in lanes_raw.split(",") if item.strip()
+            ]
         else:
             branched.setdefault("lanes", ["lane_a", "lane_b"])
-        blue_red["loop_unit"] = loop_unit_raw or str(blue_red.get("loop_unit", "per_task"))
+        blue_red["loop_unit"] = loop_unit_raw or str(
+            blue_red.get("loop_unit", "per_task")
+        )
         custom.setdefault("cells", [])
         orchestration["branched"] = branched
         orchestration["blue_red"] = blue_red
@@ -625,11 +825,17 @@ class RunSetupScreen(Vertical):
         cell_raw = self.query_one("#edit-task-cell", Input).value.strip()
         team_raw = self.query_one("#edit-task-team", Input).value.strip()
         agent_raw = self.query_one("#edit-task-agent", Input).value.strip()
-        completed_raw = self.query_one("#edit-task-completed", Input).value.strip().lower()
+        completed_raw = (
+            self.query_one("#edit-task-completed", Input).value.strip().lower()
+        )
 
         if title:
             row["title"] = title
-        row["deps"] = [item.strip() for item in deps_raw.split(",") if item.strip()] if deps_raw else []
+        row["deps"] = (
+            [item.strip() for item in deps_raw.split(",") if item.strip()]
+            if deps_raw
+            else []
+        )
 
         routing = row.get("routing") if isinstance(row.get("routing"), dict) else {}
         routing["lane"] = lane_raw or None
@@ -644,7 +850,11 @@ class RunSetupScreen(Vertical):
         self._clear_fix_preview()
 
         try:
-            model = parse_plan_yaml(yaml.safe_dump(self._loaded_plan_data, sort_keys=False, allow_unicode=False))
+            model = parse_plan_yaml(
+                yaml.safe_dump(
+                    self._loaded_plan_data, sort_keys=False, allow_unicode=False
+                )
+            )
             self._tasks, self._task_parse_issues = parse_plan_tasks(model)
         except Exception as exc:  # noqa: BLE001
             self._status().update(f"Task edit applied, but parsing failed: {exc}")
@@ -655,7 +865,9 @@ class RunSetupScreen(Vertical):
     def _apply_safe_fixes(self) -> None:
         if not self._loaded_plan_data:
             return
-        content = yaml.safe_dump(self._loaded_plan_data, sort_keys=False, allow_unicode=False)
+        content = yaml.safe_dump(
+            self._loaded_plan_data, sort_keys=False, allow_unicode=False
+        )
         _valid, issues, _summary = validate_plan_content(
             content,
             workspace_root=self.shell.orchestrator.workspace_root,
@@ -668,8 +880,12 @@ class RunSetupScreen(Vertical):
         updated = dict(self._loaded_plan_data)
         for fix in fixes:
             updated = apply_fix(updated, fix)
-        before_text = yaml.safe_dump(self._loaded_plan_data, sort_keys=False, allow_unicode=False).splitlines()
-        after_text = yaml.safe_dump(updated, sort_keys=False, allow_unicode=False).splitlines()
+        before_text = yaml.safe_dump(
+            self._loaded_plan_data, sort_keys=False, allow_unicode=False
+        ).splitlines()
+        after_text = yaml.safe_dump(
+            updated, sort_keys=False, allow_unicode=False
+        ).splitlines()
         diff_lines = list(
             difflib.unified_diff(
                 before_text,
@@ -680,7 +896,9 @@ class RunSetupScreen(Vertical):
             )
         )
         self._pending_fixed_plan_data = updated
-        self._pending_fix_diff = "\n".join(diff_lines) if diff_lines else "No textual diff generated."
+        self._pending_fix_diff = (
+            "\n".join(diff_lines) if diff_lines else "No textual diff generated."
+        )
         self._pending_fix_count = len(fixes)
         self._fix_preview().update(
             f"Safe-fix preview ({len(fixes)} fix(es)). Use Accept Fixes or Reject Fixes.\n\n{self._pending_fix_diff}"
@@ -698,13 +916,19 @@ class RunSetupScreen(Vertical):
         self._pending_fix_diff = ""
         self._fix_preview().update("Safe-fix preview accepted.")
         try:
-            model = parse_plan_yaml(yaml.safe_dump(self._loaded_plan_data, sort_keys=False, allow_unicode=False))
+            model = parse_plan_yaml(
+                yaml.safe_dump(
+                    self._loaded_plan_data, sort_keys=False, allow_unicode=False
+                )
+            )
             self._tasks, self._task_parse_issues = parse_plan_tasks(model)
         except Exception as exc:  # noqa: BLE001
             self._status().update(f"Accepted safe fixes, but parsing failed: {exc}")
         self._render_editor_tables()
         self._refresh_validation()
-        self._status().update(f"Accepted {applied} safe fix(es). Review and save revision.")
+        self._status().update(
+            f"Accepted {applied} safe fix(es). Review and save revision."
+        )
 
     def _reject_pending_fixes(self) -> None:
         if self._pending_fixed_plan_data is None:
@@ -717,7 +941,9 @@ class RunSetupScreen(Vertical):
         if not self._loaded_plan_data:
             return None
 
-        content = yaml.safe_dump(self._loaded_plan_data, sort_keys=False, allow_unicode=False)
+        content = yaml.safe_dump(
+            self._loaded_plan_data, sort_keys=False, allow_unicode=False
+        )
         valid, issues, _summary = validate_plan_content(
             content,
             workspace_root=self.shell.orchestrator.workspace_root,
@@ -798,7 +1024,9 @@ class RunSetupScreen(Vertical):
             if not run_id:
                 self._status().update("Unable to start run for selected plan.")
                 return
-            self._status().update(f"Started run {run_id}. {self._execution_profile_hint()}")
+            self._status().update(
+                f"Started run {run_id}. {self._execution_profile_hint()}"
+            )
             self.shell.show_screen("phase_timeline")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:

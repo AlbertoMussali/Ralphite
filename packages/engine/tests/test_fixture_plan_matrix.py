@@ -38,9 +38,14 @@ def test_valid_plan_fixtures_resolve_cells_and_nodes(fixture_name: str) -> None:
 
 def test_invalid_v5_fixture_surfaces_routing_diagnostics() -> None:
     plan_path = PLAN_FIXTURES / "invalid_v5_routing.yaml"
-    valid, issues, summary = validate_plan_content(plan_path.read_text(encoding="utf-8"), plan_path=str(plan_path))
+    valid, issues, summary = validate_plan_content(
+        plan_path.read_text(encoding="utf-8"), plan_path=str(plan_path)
+    )
     assert valid is False
-    assert any(str(issue.get("code")) in {"tasks.unassigned", "tasks.routing.missing"} for issue in issues)
+    assert any(
+        str(issue.get("code")) in {"tasks.unassigned", "tasks.routing.missing"}
+        for issue in issues
+    )
     assert summary.get("expected_version", 5) == 5
 
 

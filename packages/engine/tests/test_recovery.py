@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ralphite_engine import LocalOrchestrator
-from ralphite_engine.models import NodeRuntimeState, RunCheckpoint, RunPersistenceState, RunViewState
+from ralphite_engine.models import (
+    NodeRuntimeState,
+    RunCheckpoint,
+    RunPersistenceState,
+    RunViewState,
+)
 
 
 def _build_stub_run(workspace: Path, run_id: str) -> RunViewState:
@@ -44,7 +49,9 @@ def test_recover_run_and_resume_from_checkpoint(tmp_path: Path) -> None:
     orch = LocalOrchestrator(tmp_path)
     orch.run_store.acquire_lock(run_id)
     lock_path = orch.run_store.run_dir(run_id) / "lock"
-    lock_path.write_text('{"pid": 999999, "acquired_at": "2026-01-01T00:00:00Z"}', encoding="utf-8")
+    lock_path.write_text(
+        '{"pid": 999999, "acquired_at": "2026-01-01T00:00:00Z"}', encoding="utf-8"
+    )
 
     state = RunPersistenceState(
         run_id=run_id,
@@ -103,7 +110,9 @@ def test_recovery_preflight_blocks_unresolved_conflict_markers(tmp_path: Path) -
     assert orch.set_recovery_mode(run_id, "manual") is True
 
     conflict_file = tmp_path / "conflict.txt"
-    conflict_file.write_text("<<<<<<< ours\nx\n=======\ny\n>>>>>>> theirs\n", encoding="utf-8")
+    conflict_file.write_text(
+        "<<<<<<< ours\nx\n=======\ny\n>>>>>>> theirs\n", encoding="utf-8"
+    )
 
     handle = orch.active[run_id]  # noqa: SLF001
     handle.run.status = "paused_recovery_required"

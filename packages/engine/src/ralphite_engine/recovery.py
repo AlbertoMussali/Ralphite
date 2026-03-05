@@ -5,9 +5,17 @@ from typing import Iterable
 from ralphite_engine.models import RunCheckpoint, RunPersistenceState, RunViewState
 
 
-def recoverable_run_ids(states: Iterable[RunPersistenceState], *, lock_is_stale: callable) -> list[str]:
+def recoverable_run_ids(
+    states: Iterable[RunPersistenceState], *, lock_is_stale: callable
+) -> list[str]:
     recoverable: list[str] = []
-    active_states = {"running", "checkpointing", "recovering", "paused", "paused_recovery_required"}
+    active_states = {
+        "running",
+        "checkpointing",
+        "recovering",
+        "paused",
+        "paused_recovery_required",
+    }
     for state in states:
         if state.status not in active_states:
             continue
@@ -19,12 +27,18 @@ def recoverable_run_ids(states: Iterable[RunPersistenceState], *, lock_is_stale:
     return sorted(set(recoverable))
 
 
-def to_paused_for_recovery(state: RunPersistenceState, checkpoint: RunCheckpoint | None) -> RunPersistenceState:
+def to_paused_for_recovery(
+    state: RunPersistenceState, checkpoint: RunCheckpoint | None
+) -> RunPersistenceState:
     run = RunViewState.model_validate(state.run.model_dump())
     for node in run.nodes.values():
         if node.status == "running":
             node.status = "queued"
-    run.status = "paused_recovery_required" if state.status == "paused_recovery_required" else "paused"
+    run.status = (
+        "paused_recovery_required"
+        if state.status == "paused_recovery_required"
+        else "paused"
+    )
     run.active_node_id = None
 
     loop_counts = dict(state.loop_counts)

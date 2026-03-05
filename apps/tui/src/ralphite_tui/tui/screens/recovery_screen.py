@@ -47,8 +47,13 @@ class RecoveryScreen(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static("Recovery console", id="recovery-status")
-        yield Static("Step 1: Select mode. Step 2: Run preflight. Step 3: Resume.", id="recovery-step")
-        yield Input(placeholder="Best-effort recovery prompt (optional)", id="recovery-prompt")
+        yield Static(
+            "Step 1: Select mode. Step 2: Run preflight. Step 3: Resume.",
+            id="recovery-step",
+        )
+        yield Input(
+            placeholder="Best-effort recovery prompt (optional)", id="recovery-prompt"
+        )
         with Horizontal(id="recovery-controls"):
             yield Button("Manual", id="mode-manual")
             yield Button("Best Effort Agent", id="mode-agent", variant="warning")
@@ -73,13 +78,37 @@ class RecoveryScreen(Vertical):
         return value or None
 
     def _render_preflight(self, preflight: dict[str, Any]) -> None:
-        checks = preflight.get("checks", []) if isinstance(preflight.get("checks"), list) else []
-        blocking = preflight.get("blocking_reasons", []) if isinstance(preflight.get("blocking_reasons"), list) else []
-        conflict_files = preflight.get("conflict_files", []) if isinstance(preflight.get("conflict_files"), list) else []
-        unresolved = preflight.get("unresolved_conflict_files", []) if isinstance(preflight.get("unresolved_conflict_files"), list) else []
-        next_commands = preflight.get("next_commands", []) if isinstance(preflight.get("next_commands"), list) else []
+        checks = (
+            preflight.get("checks", [])
+            if isinstance(preflight.get("checks"), list)
+            else []
+        )
+        blocking = (
+            preflight.get("blocking_reasons", [])
+            if isinstance(preflight.get("blocking_reasons"), list)
+            else []
+        )
+        conflict_files = (
+            preflight.get("conflict_files", [])
+            if isinstance(preflight.get("conflict_files"), list)
+            else []
+        )
+        unresolved = (
+            preflight.get("unresolved_conflict_files", [])
+            if isinstance(preflight.get("unresolved_conflict_files"), list)
+            else []
+        )
+        next_commands = (
+            preflight.get("next_commands", [])
+            if isinstance(preflight.get("next_commands"), list)
+            else []
+        )
 
-        lines = [f"Preflight: {'PASS' if preflight.get('ok') else 'FAIL'}", "", "Blocking reasons:"]
+        lines = [
+            f"Preflight: {'PASS' if preflight.get('ok') else 'FAIL'}",
+            "",
+            "Blocking reasons:",
+        ]
         lines.extend([f"- {item}" for item in blocking] or ["- none"])
         lines.append("")
         lines.append("Conflict files:")
@@ -92,14 +121,31 @@ class RecoveryScreen(Vertical):
         lines.extend([f"- {item}" for item in next_commands] or ["- none"])
         lines.append("")
         lines.append("Checks:")
-        lines.extend([f"- {'OK' if check.get('ok') else 'FAIL'} {check.get('name')}: {check.get('detail')}" for check in checks])
+        lines.extend(
+            [
+                f"- {'OK' if check.get('ok') else 'FAIL'} {check.get('name')}: {check.get('detail')}"
+                for check in checks
+            ]
+        )
 
         self._guidance().update("\n".join(lines))
 
     def _recommended_mode(self, run) -> tuple[str, str]:
-        recovery = run.metadata.get("recovery", {}) if isinstance(run.metadata.get("recovery"), dict) else {}
-        details = recovery.get("details", {}) if isinstance(recovery.get("details"), dict) else {}
-        conflict_files = details.get("conflict_files", []) if isinstance(details.get("conflict_files"), list) else []
+        recovery = (
+            run.metadata.get("recovery", {})
+            if isinstance(run.metadata.get("recovery"), dict)
+            else {}
+        )
+        details = (
+            recovery.get("details", {})
+            if isinstance(recovery.get("details"), dict)
+            else {}
+        )
+        conflict_files = (
+            details.get("conflict_files", [])
+            if isinstance(details.get("conflict_files"), list)
+            else []
+        )
         if conflict_files:
             return "manual", "conflict files detected"
         return "agent_best_effort", "no explicit conflict files detected"
@@ -121,13 +167,27 @@ class RecoveryScreen(Vertical):
             self._status().update(f"Run {run_id} not found")
             return
 
-        recovery = run.metadata.get("recovery", {}) if isinstance(run.metadata.get("recovery"), dict) else {}
-        details = recovery.get("details", {}) if isinstance(recovery.get("details"), dict) else {}
-        conflict_files = details.get("conflict_files", []) if isinstance(details.get("conflict_files"), list) else []
+        recovery = (
+            run.metadata.get("recovery", {})
+            if isinstance(run.metadata.get("recovery"), dict)
+            else {}
+        )
+        details = (
+            recovery.get("details", {})
+            if isinstance(recovery.get("details"), dict)
+            else {}
+        )
+        conflict_files = (
+            details.get("conflict_files", [])
+            if isinstance(details.get("conflict_files"), list)
+            else []
+        )
         status = present_run_status(run.status)
         mode_label = present_recovery_mode(recovery.get("selected_mode"))
         recommended_mode, recommended_reason = self._recommended_mode(run)
-        ready, reason = self._resume_ready(str(recovery.get("selected_mode") or ""), self._prompt())
+        ready, reason = self._resume_ready(
+            str(recovery.get("selected_mode") or ""), self._prompt()
+        )
         self._status().update(
             f"Run {run.id} | status={status.label} | recovery={recovery.get('status', 'none')} | "
             f"mode={mode_label} | conflicts={len(conflict_files)}\n"
@@ -144,9 +204,13 @@ class RecoveryScreen(Vertical):
         if not run_id:
             return
         if mode == "agent_best_effort" and not self._prompt():
-            self._status().update("Best Effort Agent requires a prompt before mode selection.")
+            self._status().update(
+                "Best Effort Agent requires a prompt before mode selection."
+            )
             return
-        ok = self.shell.orchestrator.set_recovery_mode(run_id, mode, prompt=self._prompt())
+        ok = self.shell.orchestrator.set_recovery_mode(
+            run_id, mode, prompt=self._prompt()
+        )
         if ok:
             self._status().update(f"Recovery mode set: {mode}")
             self._last_preflight = self.shell.orchestrator.recovery_preflight(run_id)
@@ -174,8 +238,14 @@ class RecoveryScreen(Vertical):
                 return
             run = self.shell.orchestrator.get_run(run_id)
             if run:
-                recovery = run.metadata.get("recovery", {}) if isinstance(run.metadata.get("recovery"), dict) else {}
-                ready, reason = self._resume_ready(str(recovery.get("selected_mode") or ""), self._prompt())
+                recovery = (
+                    run.metadata.get("recovery", {})
+                    if isinstance(run.metadata.get("recovery"), dict)
+                    else {}
+                )
+                ready, reason = self._resume_ready(
+                    str(recovery.get("selected_mode") or ""), self._prompt()
+                )
                 if not ready:
                     self._status().update(f"Resume blocked: {reason}")
                     return
@@ -190,7 +260,9 @@ class RecoveryScreen(Vertical):
                 self._status().update("Recovery resumed.")
                 self.shell.show_screen("phase_timeline")
             else:
-                self._status().update("Resume failed. Check preflight output and selected mode.")
+                self._status().update(
+                    "Resume failed. Check preflight output and selected mode."
+                )
         elif button_id == "show-worktree":
             run_id = self.shell.current_run_id
             if not run_id:
@@ -200,8 +272,16 @@ class RecoveryScreen(Vertical):
             if not run:
                 self._status().update(f"Run {run_id} not found")
                 return
-            recovery = run.metadata.get("recovery", {}) if isinstance(run.metadata.get("recovery"), dict) else {}
-            details = recovery.get("details", {}) if isinstance(recovery.get("details"), dict) else {}
+            recovery = (
+                run.metadata.get("recovery", {})
+                if isinstance(run.metadata.get("recovery"), dict)
+                else {}
+            )
+            details = (
+                recovery.get("details", {})
+                if isinstance(recovery.get("details"), dict)
+                else {}
+            )
             worktree = details.get("worktree")
             if not worktree:
                 self._status().update("No recovery worktree path available.")
@@ -213,13 +293,19 @@ class RecoveryScreen(Vertical):
                 self._status().update(f"Unable to open worktree. {result.message}")
         elif button_id == "show-commands":
             preflight = self._last_preflight or {}
-            commands = preflight.get("next_commands") if isinstance(preflight.get("next_commands"), list) else []
+            commands = (
+                preflight.get("next_commands")
+                if isinstance(preflight.get("next_commands"), list)
+                else []
+            )
             if commands:
                 command_text = "\n".join(str(item) for item in commands)
                 copied = copy_text_to_clipboard(command_text)
                 if copied.ok:
                     self._status().update("Recovery commands copied to clipboard.")
                 else:
-                    self._status().update(f"Clipboard copy failed ({copied.message}). Commands remain visible in guidance panel.")
+                    self._status().update(
+                        f"Clipboard copy failed ({copied.message}). Commands remain visible in guidance panel."
+                    )
             else:
                 self._status().update("No recovery commands available.")

@@ -10,7 +10,9 @@ import ralphite_tui.cli as cli_mod
 from ralphite_tui.cli import app
 
 
-def test_quickstart_bootstrap_succeeds_and_initializes_workspace(tmp_path: Path) -> None:
+def test_quickstart_bootstrap_succeeds_and_initializes_workspace(
+    tmp_path: Path,
+) -> None:
     runner = CliRunner()
     result = runner.invoke(
         app,
@@ -55,17 +57,30 @@ def test_quickstart_no_bootstrap_fails_with_doctor_guidance(tmp_path: Path) -> N
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
     assert payload["status"] == "failed"
-    assert any(item.get("code") == "doctor.failed" for item in payload.get("issues", []))
+    assert any(
+        item.get("code") == "doctor.failed" for item in payload.get("issues", [])
+    )
     assert any("doctor" in action.lower() for action in payload.get("next_actions", []))
 
 
-def test_quickstart_strict_doctor_blocks_warned_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_quickstart_strict_doctor_blocks_warned_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def fake_snapshot(_orch, include_fix_suggestions=False):  # noqa: ANN001
         return {
             "ok": True,
-            "checks": [{"check": "stale-artifacts", "status": "WARN", "detail": "worktrees=1 branches=0"}],
+            "checks": [
+                {
+                    "check": "stale-artifacts",
+                    "status": "WARN",
+                    "detail": "worktrees=1 branches=0",
+                }
+            ],
             "plan_failures": [],
-            "stale_artifacts": {"stale_worktrees": [{"run_id": "r1"}], "stale_branches": []},
+            "stale_artifacts": {
+                "stale_worktrees": [{"run_id": "r1"}],
+                "stale_branches": [],
+            },
             "fix_suggestions": [],
         }
 
@@ -110,14 +125,25 @@ def test_quickstart_surfaces_step_timing_and_artifacts(tmp_path: Path) -> None:
     step_timing = data.get("step_timing", [])
     assert isinstance(step_timing, list) and step_timing
     steps = [str(item.get("step")) for item in step_timing if isinstance(item, dict)]
-    assert {"Doctor", "Bootstrap", "Plan Selection", "Capability Approval", "Run"}.issubset(set(steps))
+    assert {
+        "Doctor",
+        "Bootstrap",
+        "Plan Selection",
+        "Capability Approval",
+        "Run",
+    }.issubset(set(steps))
     artifacts = data.get("artifacts", [])
     assert isinstance(artifacts, list)
-    assert any(isinstance(item, dict) and item.get("id") == "machine_bundle" for item in artifacts)
+    assert any(
+        isinstance(item, dict) and item.get("id") == "machine_bundle"
+        for item in artifacts
+    )
 
 
 @pytest.mark.parametrize("template", ["general_sps", "branched", "blue_red", "custom"])
-def test_init_bootstrap_generates_v5_plan_for_template(tmp_path: Path, template: str) -> None:
+def test_init_bootstrap_generates_v5_plan_for_template(
+    tmp_path: Path, template: str
+) -> None:
     runner = CliRunner()
     result = runner.invoke(
         app,
@@ -162,4 +188,6 @@ def test_validate_non_v5_returns_version_invalid(tmp_path: Path) -> None:
     )
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert any(item.get("code") == "version.invalid" for item in payload.get("issues", []))
+    assert any(
+        item.get("code") == "version.invalid" for item in payload.get("issues", [])
+    )

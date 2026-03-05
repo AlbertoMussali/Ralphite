@@ -85,8 +85,12 @@ def compile_execution_structure(
     issues: list[str] = []
     warnings: list[str] = []
     profile_ids = {profile.id for profile in plan.agents}
-    worker_ids = [profile.id for profile in plan.agents if profile.role.value == "worker"]
-    orchestrator_ids = [profile.id for profile in plan.agents if profile.role.value == "orchestrator"]
+    worker_ids = [
+        profile.id for profile in plan.agents if profile.role.value == "worker"
+    ]
+    orchestrator_ids = [
+        profile.id for profile in plan.agents if profile.role.value == "orchestrator"
+    ]
     if not worker_ids:
         issues.append("no worker agent profiles available")
     if not orchestrator_ids:
@@ -97,7 +101,11 @@ def compile_execution_structure(
         for behavior in plan.orchestration.behaviors
         if behavior.enabled
     }
-    first_worker = "worker_default" if "worker_default" in profile_ids else (worker_ids[0] if worker_ids else "")
+    first_worker = (
+        "worker_default"
+        if "worker_default" in profile_ids
+        else (worker_ids[0] if worker_ids else "")
+    )
     first_orchestrator = (
         "orchestrator_default"
         if "orchestrator_default" in profile_ids
@@ -119,7 +127,9 @@ def compile_execution_structure(
         if explicit_behavior_id:
             behavior = behavior_by_id.get(explicit_behavior_id)
             if not behavior:
-                issues.append(f"cell '{cell_id}' references unknown behavior '{explicit_behavior_id}'")
+                issues.append(
+                    f"cell '{cell_id}' references unknown behavior '{explicit_behavior_id}'"
+                )
             else:
                 agent_id = behavior.agent or first_orchestrator
                 if agent_id not in profile_ids:
@@ -145,7 +155,9 @@ def compile_execution_structure(
                     agent_id=agent_id,
                 )
 
-        warnings.append(f"no enabled behavior found for '{fallback_kind.value}' in cell '{cell_id}'; using defaults")
+        warnings.append(
+            f"no enabled behavior found for '{fallback_kind.value}' in cell '{cell_id}'; using defaults"
+        )
         return _BehaviorChoice(
             behavior_id=None,
             behavior_kind=fallback_kind.value,
@@ -234,7 +246,9 @@ def compile_execution_structure(
                 issues.append(f"task '{task.id}' references unknown agent '{agent_id}'")
             suffix = f"::{variant}" if variant else ""
             node_id = f"{phase_id}::task::{task.id}{suffix}"
-            depends_on = list(active_anchor if segment_kind == "parallel" else local_anchor)
+            depends_on = list(
+                active_anchor if segment_kind == "parallel" else local_anchor
+            )
             node = RuntimeNodeSpec(
                 id=node_id,
                 kind="agent",
@@ -287,7 +301,9 @@ def compile_execution_structure(
             cell_id=cell_id,
         )
         if choice.agent_id not in profile_ids:
-            issues.append(f"cell '{cell_id}' references unknown orchestrator agent '{choice.agent_id}'")
+            issues.append(
+                f"cell '{cell_id}' references unknown orchestrator agent '{choice.agent_id}'"
+            )
         if not choice.agent_id:
             issues.append(f"cell '{cell_id}' has no orchestrator agent available")
 
@@ -330,7 +346,9 @@ def compile_execution_structure(
         return [node_id]
 
     if plan.orchestration.template == OrchestrationTemplate.GENERAL_SPS:
-        explicit_cell_map = {task.id: (task.routing_cell or "").strip() for task in pending_tasks}
+        explicit_cell_map = {
+            task.id: (task.routing_cell or "").strip() for task in pending_tasks
+        }
 
         seq_pre: list[ParsedTask] = []
         par_core: list[ParsedTask] = []
@@ -345,7 +363,9 @@ def compile_execution_structure(
                 elif explicit in {"seq_post", "seq_postlude"}:
                     seq_post.append(task)
                 else:
-                    warnings.append(f"task '{task.id}' has unknown routing.cell '{explicit}', defaulting to seq_pre")
+                    warnings.append(
+                        f"task '{task.id}' has unknown routing.cell '{explicit}', defaulting to seq_pre"
+                    )
                     seq_pre.append(task)
             else:
                 seq_pre.append(task)
@@ -357,9 +377,14 @@ def compile_execution_structure(
                 segment_tasks=seq_pre,
                 lane="sequential",
             )
-        append_orchestrator_cell(cell_id="orch_merge_1", fallback_kind=BehaviorKind.MERGE_AND_CONFLICT_RESOLUTION)
+        append_orchestrator_cell(
+            cell_id="orch_merge_1",
+            fallback_kind=BehaviorKind.MERGE_AND_CONFLICT_RESOLUTION,
+        )
         if not par_core:
-            warnings.append("general_sps has no tasks mapped to par_core; continuing with orchestrator merge cells only")
+            warnings.append(
+                "general_sps has no tasks mapped to par_core; continuing with orchestrator merge cells only"
+            )
         for seg_idx, seg_tasks in enumerate([par_core] if par_core else [], start=1):
             append_worker_segment(
                 cell_id=f"par_core_{seg_idx}",
@@ -367,7 +392,10 @@ def compile_execution_structure(
                 segment_tasks=seg_tasks,
                 lane="parallel",
             )
-        append_orchestrator_cell(cell_id="orch_merge_2", fallback_kind=BehaviorKind.MERGE_AND_CONFLICT_RESOLUTION)
+        append_orchestrator_cell(
+            cell_id="orch_merge_2",
+            fallback_kind=BehaviorKind.MERGE_AND_CONFLICT_RESOLUTION,
+        )
         if seq_post:
             append_worker_segment(
                 cell_id="seq_post",
@@ -375,7 +403,10 @@ def compile_execution_structure(
                 segment_tasks=seq_post,
                 lane="sequential",
             )
-        append_orchestrator_cell(cell_id="orch_finalize", fallback_kind=BehaviorKind.MERGE_AND_CONFLICT_RESOLUTION)
+        append_orchestrator_cell(
+            cell_id="orch_finalize",
+            fallback_kind=BehaviorKind.MERGE_AND_CONFLICT_RESOLUTION,
+        )
 
     elif plan.orchestration.template == OrchestrationTemplate.BRANCHED:
         lanes = list(plan.orchestration.branched.lanes)
@@ -401,7 +432,9 @@ def compile_execution_structure(
                 segment_tasks=trunk_pre,
                 lane="trunk",
             )
-        split_anchor = append_orchestrator_cell(cell_id="split_dispatch", fallback_kind=BehaviorKind.PREPARE_DISPATCH)
+        split_anchor = append_orchestrator_cell(
+            cell_id="split_dispatch", fallback_kind=BehaviorKind.PREPARE_DISPATCH
+        )
         lane_merge_nodes: list[str] = []
         for lane in lanes:
             lane_anchor = list(split_anchor)
@@ -436,7 +469,9 @@ def compile_execution_structure(
                 segment_tasks=trunk_post,
                 lane="trunk",
             )
-        append_orchestrator_cell(cell_id="branched_finalize", fallback_kind=BehaviorKind.SUMMARIZE_WORK)
+        append_orchestrator_cell(
+            cell_id="branched_finalize", fallback_kind=BehaviorKind.SUMMARIZE_WORK
+        )
 
     elif plan.orchestration.template == OrchestrationTemplate.BLUE_RED:
         for task in pending_tasks:
@@ -468,7 +503,9 @@ def compile_execution_structure(
                 cell_id=f"{task.id}_merge",
                 fallback_kind=BehaviorKind.MERGE_AND_CONFLICT_RESOLUTION,
             )
-        append_orchestrator_cell(cell_id="blue_red_finalize", fallback_kind=BehaviorKind.SUMMARIZE_WORK)
+        append_orchestrator_cell(
+            cell_id="blue_red_finalize", fallback_kind=BehaviorKind.SUMMARIZE_WORK
+        )
 
     else:
         custom_cells = list(plan.orchestration.custom.cells)
@@ -480,7 +517,9 @@ def compile_execution_structure(
                     if dep_id in cell_outputs:
                         resolved.extend(cell_outputs[dep_id])
                     else:
-                        issues.append(f"custom cell '{cell.id}' depends on unknown cell '{dep_id}'")
+                        issues.append(
+                            f"custom cell '{cell.id}' depends on unknown cell '{dep_id}'"
+                        )
                 base_anchor = resolved
             selected_tasks = []
             if cell.task_ids:
@@ -489,9 +528,15 @@ def compile_execution_structure(
                     if row:
                         selected_tasks.append(row)
                     else:
-                        issues.append(f"custom cell '{cell.id}' references unknown task '{task_id}'")
+                        issues.append(
+                            f"custom cell '{cell.id}' references unknown task '{task_id}'"
+                        )
             else:
-                selected_tasks = [task for task in pending_tasks if (task.routing_cell or "").strip() == cell.id]
+                selected_tasks = [
+                    task
+                    for task in pending_tasks
+                    if (task.routing_cell or "").strip() == cell.id
+                ]
             selected_tasks.sort(key=lambda row: row.order)
 
             if cell.kind.value in {"sequential", "parallel"}:
@@ -499,7 +544,8 @@ def compile_execution_structure(
                     cell_id=cell.id,
                     segment_kind=cell.kind.value,
                     segment_tasks=selected_tasks,
-                    lane=cell.lane or ("parallel" if cell.kind.value == "parallel" else "sequential"),
+                    lane=cell.lane
+                    or ("parallel" if cell.kind.value == "parallel" else "sequential"),
                     team=cell.team,
                     base_anchor=base_anchor,
                 )
@@ -543,13 +589,19 @@ def compile_execution_structure(
         for dep_task_id in task.depends_on:
             dep_node_id = task_to_latest_node_id.get(dep_task_id)
             if not dep_node_id:
-                issues.append(f"task '{task.id}' depends_on '{dep_task_id}' but dependency is not selected for execution")
+                issues.append(
+                    f"task '{task.id}' depends_on '{dep_task_id}' but dependency is not selected for execution"
+                )
                 continue
             if dep_node_id == node.id:
                 issues.append(f"task '{task.id}' has self dependency")
                 continue
             dep_node = node_by_id.get(dep_node_id)
-            if dep_node and dep_node.block_index > node.block_index and dep_node.id != node.id:
+            if (
+                dep_node
+                and dep_node.block_index > node.block_index
+                and dep_node.id != node.id
+            ):
                 issues.append(
                     f"task '{task.id}' depends on '{dep_task_id}' from a later block; forward dependencies are not allowed"
                 )

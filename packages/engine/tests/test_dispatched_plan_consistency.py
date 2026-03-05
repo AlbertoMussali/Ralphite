@@ -20,7 +20,9 @@ VALID_FIXTURES = [
 
 
 @pytest.mark.parametrize("fixture_name", VALID_FIXTURES)
-def test_runtime_dispatched_graph_matches_validate_resolved_graph(tmp_path: Path, fixture_name: str) -> None:
+def test_runtime_dispatched_graph_matches_validate_resolved_graph(
+    tmp_path: Path, fixture_name: str
+) -> None:
     workspace = tmp_path
     plans_dir = workspace / ".ralphite" / "plans"
     plans_dir.mkdir(parents=True, exist_ok=True)
@@ -29,7 +31,9 @@ def test_runtime_dispatched_graph_matches_validate_resolved_graph(tmp_path: Path
     shutil.copy2(source, target)
 
     content = target.read_text(encoding="utf-8")
-    valid, issues, summary = validate_plan_content(content, workspace_root=workspace, plan_path=str(target))
+    valid, issues, summary = validate_plan_content(
+        content, workspace_root=workspace, plan_path=str(target)
+    )
     assert valid is True, issues
     expected = summary.get("resolved_execution", {})
     assert isinstance(expected, dict)
@@ -49,8 +53,12 @@ def test_runtime_dispatched_graph_matches_validate_resolved_graph(tmp_path: Path
     assert isinstance(expected_nodes, list)
     assert isinstance(actual_nodes, list)
 
-    expected_node_ids = {str(node.get("id")) for node in expected_nodes if isinstance(node, dict)}
-    actual_node_ids = {str(node.get("id")) for node in actual_nodes if isinstance(node, dict)}
+    expected_node_ids = {
+        str(node.get("id")) for node in expected_nodes if isinstance(node, dict)
+    }
+    actual_node_ids = {
+        str(node.get("id")) for node in actual_nodes if isinstance(node, dict)
+    }
     assert expected_node_ids == actual_node_ids
 
     expected_cell_ids = {
@@ -66,7 +74,9 @@ def test_runtime_dispatched_graph_matches_validate_resolved_graph(tmp_path: Path
     assert expected_cell_ids == actual_cell_ids
     assert actual.get("task_assignment") == expected.get("task_assignment")
 
-    bundle_artifact = next((item for item in run.artifacts if item.get("id") == "machine_bundle"), None)
+    bundle_artifact = next(
+        (item for item in run.artifacts if item.get("id") == "machine_bundle"), None
+    )
     assert isinstance(bundle_artifact, dict)
     bundle_path = Path(str(bundle_artifact.get("path")))
     assert bundle_path.exists()
@@ -77,6 +87,7 @@ def test_runtime_dispatched_graph_matches_validate_resolved_graph(tmp_path: Path
     assert isinstance(nodes, dict)
     assert set(nodes.keys()) == expected_node_ids
     assert all(
-        isinstance(row, dict) and str(row.get("status")) in {"succeeded", "failed", "blocked"}
+        isinstance(row, dict)
+        and str(row.get("status")) in {"succeeded", "failed", "blocked"}
         for row in nodes.values()
     )

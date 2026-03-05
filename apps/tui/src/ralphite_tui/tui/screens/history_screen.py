@@ -33,7 +33,9 @@ class HistoryScreen(Vertical):
     def compose(self) -> ComposeResult:
         yield Input(placeholder="Filter run history", id="history-query")
         table = DataTable(id="history-table")
-        table.add_columns("Run ID", "Status", "Next Action", "Plan", "Created", "Completed")
+        table.add_columns(
+            "Run ID", "Status", "Next Action", "Plan", "Created", "Completed"
+        )
         yield table
 
     def on_mount(self) -> None:
@@ -49,4 +51,11 @@ class HistoryScreen(Vertical):
         rows = self.shell.orchestrator.list_history(limit=50, query=query or None)
         for run in rows:
             status = present_run_status(run.status)
-            table.add_row(run.id, status.label, status.next_action, run.plan_path, run.created_at, run.completed_at or "-")
+            table.add_row(
+                run.id,
+                status.label,
+                status.next_action,
+                run.plan_path,
+                run.created_at,
+                run.completed_at or "-",
+            )

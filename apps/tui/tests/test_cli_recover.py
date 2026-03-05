@@ -60,13 +60,18 @@ outputs:
 
 def test_cli_recover_returns_no_recoverable_code(tmp_path: Path) -> None:
     runner = CliRunner()
-    result = runner.invoke(app, ["recover", "--workspace", str(tmp_path), "--no-tui", "--json"])
+    result = runner.invoke(
+        app, ["recover", "--workspace", str(tmp_path), "--no-tui", "--json"]
+    )
     assert result.exit_code == RECOVER_EXIT_NO_RECOVERABLE
 
 
 def test_cli_recover_returns_invalid_mode_code(tmp_path: Path) -> None:
     runner = CliRunner()
-    result = runner.invoke(app, ["recover", "--workspace", str(tmp_path), "--mode", "invalid_mode", "--json"])
+    result = runner.invoke(
+        app,
+        ["recover", "--workspace", str(tmp_path), "--mode", "invalid_mode", "--json"],
+    )
     assert result.exit_code == RECOVER_EXIT_INVALID_INPUT
 
 

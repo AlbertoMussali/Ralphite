@@ -93,7 +93,14 @@ def test_in_place_writeback_fails_when_plan_path_is_ignored(tmp_path: Path) -> N
     assert run is not None
     assert run.status == "failed"
 
-    writeback_event = next((event for event in run.events if event.get("event") == "TASK_WRITEBACK_FAILED"), None)
+    writeback_event = next(
+        (
+            event
+            for event in run.events
+            if event.get("event") == "TASK_WRITEBACK_FAILED"
+        ),
+        None,
+    )
     assert writeback_event is not None
     assert isinstance(writeback_event.get("meta"), dict)
     assert str(writeback_event["meta"].get("reason", "")) == "git_add_failed"

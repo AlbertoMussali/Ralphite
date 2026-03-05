@@ -14,7 +14,9 @@ class MaterialsAutodiscoverSpec(BaseModel):
 
 
 class MaterialsSpec(BaseModel):
-    autodiscover: MaterialsAutodiscoverSpec = Field(default_factory=MaterialsAutodiscoverSpec)
+    autodiscover: MaterialsAutodiscoverSpec = Field(
+        default_factory=MaterialsAutodiscoverSpec
+    )
     includes: list[str] = Field(default_factory=list)
     uploads: list[str] = Field(default_factory=list)
 

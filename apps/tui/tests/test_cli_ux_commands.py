@@ -96,7 +96,10 @@ def test_validate_command_returns_fixes_for_invalid_plan(tmp_path: Path) -> None
     assert payload["schema_version"] == "cli-output.v1"
     assert payload["command"] == "validate"
     assert "fixes" in payload["data"]
-    assert any(item.get("code") == "fix.add_default_worker" for item in payload["data"]["fixes"])
+    assert any(
+        item.get("code") == "fix.add_default_worker"
+        for item in payload["data"]["fixes"]
+    )
 
 
 def test_validate_apply_safe_fixes_writes_revision(tmp_path: Path) -> None:
@@ -166,14 +169,24 @@ tasks: []
     )
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert any(item.get("code") == "version.invalid" for item in payload.get("issues", []))
+    assert any(
+        item.get("code") == "version.invalid" for item in payload.get("issues", [])
+    )
 
 
 def test_quickstart_table_output_shows_run_id_and_artifacts(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["quickstart", "--workspace", str(tmp_path), "--no-tui", "--yes", "--output", "table"],
+        [
+            "quickstart",
+            "--workspace",
+            str(tmp_path),
+            "--no-tui",
+            "--yes",
+            "--output",
+            "table",
+        ],
     )
     assert result.exit_code == 0
     assert "Run ID:" in result.stdout
@@ -191,7 +204,9 @@ def test_run_table_output_shows_run_id_and_artifacts(tmp_path: Path) -> None:
     assert "Artifacts:" in result.stdout
 
 
-def test_quickstart_non_strict_allows_noncritical_doctor_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_quickstart_non_strict_allows_noncritical_doctor_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def fake_snapshot(_orch, include_fix_suggestions=False):  # noqa: ANN001
         return {
             "ok": False,
@@ -208,20 +223,39 @@ def test_quickstart_non_strict_allows_noncritical_doctor_failure(tmp_path: Path,
     runner = CliRunner()
     result = runner.invoke(
         app,
-        ["quickstart", "--workspace", str(tmp_path), "--no-tui", "--yes", "--output", "json"],
+        [
+            "quickstart",
+            "--workspace",
+            str(tmp_path),
+            "--no-tui",
+            "--yes",
+            "--output",
+            "json",
+        ],
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["status"] == "succeeded"
 
 
-def test_quickstart_strict_doctor_blocks_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_quickstart_strict_doctor_blocks_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def fake_snapshot(_orch, include_fix_suggestions=False):  # noqa: ANN001
         return {
             "ok": True,
-            "checks": [{"check": "stale-artifacts", "status": "WARN", "detail": "worktrees=1 branches=0"}],
+            "checks": [
+                {
+                    "check": "stale-artifacts",
+                    "status": "WARN",
+                    "detail": "worktrees=1 branches=0",
+                }
+            ],
             "plan_failures": [],
-            "stale_artifacts": {"stale_worktrees": [{"run_id": "x"}], "stale_branches": []},
+            "stale_artifacts": {
+                "stale_worktrees": [{"run_id": "x"}],
+                "stale_branches": [],
+            },
             "fix_suggestions": [],
         }
 
@@ -243,10 +277,14 @@ def test_quickstart_strict_doctor_blocks_warning(tmp_path: Path, monkeypatch: py
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
     assert payload["status"] == "failed"
-    assert any(item.get("code") == "doctor.failed" for item in payload.get("issues", []))
+    assert any(
+        item.get("code") == "doctor.failed" for item in payload.get("issues", [])
+    )
 
 
-def test_release_gate_includes_fixture_confidence_suites(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_release_gate_includes_fixture_confidence_suites(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     seen: list[tuple[list[str], str]] = []
 
     class _Result:
@@ -266,21 +304,46 @@ def test_release_gate_includes_fixture_confidence_suites(tmp_path: Path, monkeyp
         verbose=False,
     )
     assert ok is True
-    assert all(isinstance(row.get("suite"), str) and row.get("suite") for row in results)
+    assert all(
+        isinstance(row.get("suite"), str) and row.get("suite") for row in results
+    )
     commands = [" ".join(row) for row, _cwd in seen]
-    assert any("packages/engine/tests/test_fixture_plan_matrix.py" in row for row in commands)
-    assert any("packages/engine/tests/test_dispatched_plan_consistency.py" in row for row in commands)
+    assert any(
+        "packages/engine/tests/test_fixture_plan_matrix.py" in row for row in commands
+    )
+    assert any(
+        "packages/engine/tests/test_dispatched_plan_consistency.py" in row
+        for row in commands
+    )
     assert any("apps/tui/tests/test_bootstrap_e2e.py" in row for row in commands)
-    assert any("apps/tui/tests/test_run_setup_resolved_preview_contract.py" in row for row in commands)
+    assert any(
+        "apps/tui/tests/test_run_setup_resolved_preview_contract.py" in row
+        for row in commands
+    )
     assert all(cwd.endswith("Ralphite") for _row, cwd in seen)
 
 
-def test_check_release_gate_ignores_doctor_failures(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_check_release_gate_ignores_doctor_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def fake_snapshot(_orch, include_fix_suggestions=False):  # noqa: ANN001
-        return {"ok": False, "checks": [], "plan_failures": [], "stale_artifacts": {}, "fix_suggestions": []}
+        return {
+            "ok": False,
+            "checks": [],
+            "plan_failures": [],
+            "stale_artifacts": {},
+            "fix_suggestions": [],
+        }
 
     def fake_release_gate(*, repo_root, quiet, machine_mode, verbose):  # noqa: ANN001
-        return True, [{"suite": "fake", "command": "pytest -q", "cwd": str(repo_root), "exit_code": 0}]
+        return True, [
+            {
+                "suite": "fake",
+                "command": "pytest -q",
+                "cwd": str(repo_root),
+                "exit_code": 0,
+            }
+        ]
 
     monkeypatch.setattr(cli_mod, "_doctor_snapshot", fake_snapshot)
     monkeypatch.setattr(cli_mod, "_run_release_gate", fake_release_gate)
@@ -294,9 +357,17 @@ def test_check_release_gate_ignores_doctor_failures(tmp_path: Path, monkeypatch:
     assert payload["status"] == "succeeded"
 
 
-def test_check_beta_gate_fails_when_doctor_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_check_beta_gate_fails_when_doctor_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def fake_snapshot(_orch, include_fix_suggestions=False):  # noqa: ANN001
-        return {"ok": False, "checks": [], "plan_failures": [], "stale_artifacts": {}, "fix_suggestions": []}
+        return {
+            "ok": False,
+            "checks": [],
+            "plan_failures": [],
+            "stale_artifacts": {},
+            "fix_suggestions": [],
+        }
 
     monkeypatch.setattr(cli_mod, "_doctor_snapshot", fake_snapshot)
     runner = CliRunner()
@@ -307,18 +378,43 @@ def test_check_beta_gate_fails_when_doctor_fails(tmp_path: Path, monkeypatch: py
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
     assert payload["status"] == "failed"
-    assert any(item.get("code") == "check.beta_gate_doctor_failed" for item in payload.get("issues", []))
+    assert any(
+        item.get("code") == "check.beta_gate_doctor_failed"
+        for item in payload.get("issues", [])
+    )
 
 
-def test_check_beta_gate_runs_backend_and_release_checks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_check_beta_gate_runs_backend_and_release_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def fake_snapshot(_orch, include_fix_suggestions=False):  # noqa: ANN001
-        return {"ok": True, "checks": [], "plan_failures": [], "stale_artifacts": {}, "fix_suggestions": []}
+        return {
+            "ok": True,
+            "checks": [],
+            "plan_failures": [],
+            "stale_artifacts": {},
+            "fix_suggestions": [],
+        }
 
     def fake_backend_smoke(*, orch, repo_root, quiet, machine_mode, verbose):  # noqa: ANN001
-        return True, [{"suite": "backend-codex-smoke", "command": "codex exec", "cwd": str(repo_root), "exit_code": 0}]
+        return True, [
+            {
+                "suite": "backend-codex-smoke",
+                "command": "codex exec",
+                "cwd": str(repo_root),
+                "exit_code": 0,
+            }
+        ]
 
     def fake_release_gate(*, repo_root, quiet, machine_mode, verbose):  # noqa: ANN001
-        return True, [{"suite": "release", "command": "pytest -q", "cwd": str(repo_root), "exit_code": 0}]
+        return True, [
+            {
+                "suite": "release",
+                "command": "pytest -q",
+                "cwd": str(repo_root),
+                "exit_code": 0,
+            }
+        ]
 
     monkeypatch.setattr(cli_mod, "_doctor_snapshot", fake_snapshot)
     monkeypatch.setattr(cli_mod, "_run_backend_smoke", fake_backend_smoke)
@@ -332,4 +428,8 @@ def test_check_beta_gate_runs_backend_and_release_checks(tmp_path: Path, monkeyp
     payload = json.loads(result.stdout)
     assert payload["status"] == "succeeded"
     commands = payload.get("data", {}).get("commands", [])
-    assert any(row.get("suite") == "backend-codex-smoke" for row in commands if isinstance(row, dict))
+    assert any(
+        row.get("suite") == "backend-codex-smoke"
+        for row in commands
+        if isinstance(row, dict)
+    )

@@ -40,7 +40,9 @@ class GitWorktreeManager:
                 return name
         return "main"
 
-    def _git(self, args: list[str], *, cwd: Path | None = None, check: bool = False) -> subprocess.CompletedProcess[str]:
+    def _git(
+        self, args: list[str], *, cwd: Path | None = None, check: bool = False
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["git", *args],
             cwd=cwd or self.workspace_root,
@@ -107,14 +109,23 @@ class GitWorktreeManager:
         if not state["enabled"]:
             return phase_state
 
-        if self._git(["rev-parse", "--verify", phase_branch], check=False).returncode != 0:
-            create = self._git(["branch", phase_branch, state["base_branch"]], check=False)
+        if (
+            self._git(["rev-parse", "--verify", phase_branch], check=False).returncode
+            != 0
+        ):
+            create = self._git(
+                ["branch", phase_branch, state["base_branch"]], check=False
+            )
             if create.returncode != 0:
-                phase_state["prepare_error"] = create.stderr.strip() or create.stdout.strip()
+                phase_state["prepare_error"] = (
+                    create.stderr.strip() or create.stdout.strip()
+                )
         state["cleanup_branches"].append(phase_branch)
         return phase_state
 
-    def prepare_worker(self, state: dict[str, Any], phase: str, node_id: str) -> dict[str, Any]:
+    def prepare_worker(
+        self, state: dict[str, Any], phase: str, node_id: str
+    ) -> dict[str, Any]:
         phase_state = self.prepare_phase(state, phase)
         workers = phase_state["workers"]
         if node_id in workers:
@@ -123,7 +134,9 @@ class GitWorktreeManager:
         # Use a flat suffix instead of a nested ref path to avoid
         # conflicts with the existing phase branch ref.
         branch = f"{phase_state['phase_branch']}--{_slug(node_id)}"
-        worktree = self._worktrees_root() / _slug(self.run_id) / _slug(phase) / _slug(node_id)
+        worktree = (
+            self._worktrees_root() / _slug(self.run_id) / _slug(phase) / _slug(node_id)
+        )
         info = {
             "branch": branch,
             "worktree_path": str(worktree),
@@ -137,12 +150,16 @@ class GitWorktreeManager:
 
         worktree.parent.mkdir(parents=True, exist_ok=True)
         if self._git(["rev-parse", "--verify", branch], check=False).returncode != 0:
-            created = self._git(["branch", branch, phase_state["phase_branch"]], check=False)
+            created = self._git(
+                ["branch", branch, phase_state["phase_branch"]], check=False
+            )
             if created.returncode != 0:
                 info["prepare_error"] = created.stderr.strip() or created.stdout.strip()
                 return info
 
-        added = self._git(["worktree", "add", "--force", str(worktree), branch], check=False)
+        added = self._git(
+            ["worktree", "add", "--force", str(worktree), branch], check=False
+        )
         if added.returncode != 0:
             info["prepare_error"] = added.stderr.strip() or added.stdout.strip()
             return info
@@ -151,30 +168,51 @@ class GitWorktreeManager:
         state["cleanup_branches"].append(branch)
         return info
 
-    def commit_worker(self, state: dict[str, Any], phase: str, node_id: str, message: str) -> tuple[bool, dict[str, Any]]:
+    def commit_worker(
+        self, state: dict[str, Any], phase: str, node_id: str, message: str
+    ) -> tuple[bool, dict[str, Any]]:
         info = self.prepare_worker(state, phase, node_id)
         if info.get("prepare_error"):
-            return False, {"reason": "worktree_prepare_failed", "error": info["prepare_error"]}
+            return False, {
+                "reason": "worktree_prepare_failed",
+                "error": info["prepare_error"],
+            }
 
         if not state.get("enabled"):
             info["committed"] = True
-            return True, {"mode": "simulated", "branch": info["branch"], "worktree": str(self.workspace_root)}
+            return True, {
+                "mode": "simulated",
+                "branch": info["branch"],
+                "worktree": str(self.workspace_root),
+            }
 
         worktree = Path(info["worktree_path"])
         add = self._git(["add", "-A"], cwd=worktree, check=False)
         if add.returncode != 0:
-            return False, {"reason": "git_add_failed", "error": add.stderr.strip() or add.stdout.strip()}
+            return False, {
+                "reason": "git_add_failed",
+                "error": add.stderr.strip() or add.stdout.strip(),
+            }
 
-        commit = self._git(["commit", "--allow-empty", "-m", message], cwd=worktree, check=False)
+        commit = self._git(
+            ["commit", "--allow-empty", "-m", message], cwd=worktree, check=False
+        )
         if commit.returncode != 0:
-            return False, {"reason": "git_commit_failed", "error": commit.stderr.strip() or commit.stdout.strip()}
+            return False, {
+                "reason": "git_commit_failed",
+                "error": commit.stderr.strip() or commit.stdout.strip(),
+            }
 
         info["committed"] = True
         return True, {"branch": info["branch"], "worktree": info["worktree_path"]}
 
     def _simulate_conflict(self, phase: str) -> bool:
         marker_path = self.workspace_root / ".ralphite" / "force_merge_conflict"
-        marker = marker_path.read_text(encoding="utf-8").strip() if marker_path.exists() else ""
+        marker = (
+            marker_path.read_text(encoding="utf-8").strip()
+            if marker_path.exists()
+            else ""
+        )
         return marker == phase
 
     def integrate_phase(
@@ -187,7 +225,9 @@ class GitWorktreeManager:
     ) -> tuple[str, dict[str, Any]]:
         phase_state = self.prepare_phase(state, phase)
         workers = phase_state.get("workers", {})
-        worker_branches = [entry["branch"] for entry in workers.values() if entry.get("committed")]
+        worker_branches = [
+            entry["branch"] for entry in workers.values() if entry.get("committed")
+        ]
 
         if self._simulate_conflict(phase):
             return (
@@ -196,7 +236,9 @@ class GitWorktreeManager:
                     "reason": "simulated_conflict",
                     "phase": phase,
                     "conflict_files": ["SIMULATED_CONFLICT"],
-                    "next_commands": ["Remove .ralphite/force_merge_conflict and retry recovery."],
+                    "next_commands": [
+                        "Remove .ralphite/force_merge_conflict and retry recovery."
+                    ],
                 },
             )
 
@@ -207,24 +249,41 @@ class GitWorktreeManager:
         if recovery_mode == "agent_best_effort" and recovery_prompt:
             phase_state["last_recovery_prompt"] = recovery_prompt
 
-        integration_path = self._worktrees_root() / _slug(self.run_id) / _slug(phase) / "integration"
+        integration_path = (
+            self._worktrees_root() / _slug(self.run_id) / _slug(phase) / "integration"
+        )
         integration_path.parent.mkdir(parents=True, exist_ok=True)
         phase_state["integration_worktree"] = str(integration_path)
         if integration_path.exists():
-            removed = self._git(["worktree", "remove", "--force", str(integration_path)], check=False)
+            removed = self._git(
+                ["worktree", "remove", "--force", str(integration_path)], check=False
+            )
             if removed.returncode != 0 and integration_path.exists():
                 shutil.rmtree(integration_path, ignore_errors=True)
 
         add_wt = self._git(
-            ["worktree", "add", "--force", str(integration_path), phase_state["phase_branch"]],
+            [
+                "worktree",
+                "add",
+                "--force",
+                str(integration_path),
+                phase_state["phase_branch"],
+            ],
             check=False,
         )
         if add_wt.returncode != 0:
-            return "failed", {"reason": "phase_worktree_add_failed", "error": add_wt.stderr.strip() or add_wt.stdout.strip()}
+            return "failed", {
+                "reason": "phase_worktree_add_failed",
+                "error": add_wt.stderr.strip() or add_wt.stdout.strip(),
+            }
         state["cleanup_paths"].append(str(integration_path))
 
         for branch in worker_branches:
-            merged = self._git(["merge", "--no-ff", "--no-edit", branch], cwd=integration_path, check=False)
+            merged = self._git(
+                ["merge", "--no-ff", "--no-edit", branch],
+                cwd=integration_path,
+                check=False,
+            )
             if merged.returncode != 0:
                 return (
                     "recovery_required",
@@ -234,13 +293,17 @@ class GitWorktreeManager:
                         "branch": branch,
                         "error": merged.stderr.strip() or merged.stdout.strip(),
                         "worktree": str(integration_path),
-                        "conflict_files": self._collect_conflict_files(integration_path),
+                        "conflict_files": self._collect_conflict_files(
+                            integration_path
+                        ),
                         "next_commands": self._conflict_next_commands(integration_path),
                     },
                 )
             phase_state["merged_workers"].append(branch)
 
-        merged_to_base = self._git(["merge", "--no-ff", "--no-edit", phase_state["phase_branch"]], check=False)
+        merged_to_base = self._git(
+            ["merge", "--no-ff", "--no-edit", phase_state["phase_branch"]], check=False
+        )
         if merged_to_base.returncode != 0:
             return (
                 "recovery_required",
@@ -248,7 +311,8 @@ class GitWorktreeManager:
                     "reason": "base_merge_conflict",
                     "phase": phase,
                     "branch": phase_state["phase_branch"],
-                    "error": merged_to_base.stderr.strip() or merged_to_base.stdout.strip(),
+                    "error": merged_to_base.stderr.strip()
+                    or merged_to_base.stdout.strip(),
                     "worktree": str(self.workspace_root),
                     "conflict_files": self._collect_conflict_files(self.workspace_root),
                     "next_commands": self._conflict_next_commands(self.workspace_root),
@@ -256,7 +320,10 @@ class GitWorktreeManager:
             )
 
         phase_state["integrated_to_base"] = True
-        return "success", {"phase_branch": phase_state["phase_branch"], "workers": worker_branches}
+        return "success", {
+            "phase_branch": phase_state["phase_branch"],
+            "workers": worker_branches,
+        }
 
     def list_managed_branches(self, state: dict[str, Any]) -> list[str]:
         state = self.bootstrap_state(state)
@@ -312,7 +379,10 @@ class GitWorktreeManager:
                 if not run_dir.is_dir():
                     continue
                 run_key = run_dir.name
-                age = (now - datetime.fromtimestamp(run_dir.stat().st_mtime, tz=timezone.utc)).total_seconds()
+                age = (
+                    now
+                    - datetime.fromtimestamp(run_dir.stat().st_mtime, tz=timezone.utc)
+                ).total_seconds()
                 orphan = run_key not in active and run_key[:8] not in active_short
                 if orphan and age > threshold_seconds:
                     stale_worktrees.append(
@@ -334,7 +404,11 @@ class GitWorktreeManager:
                         continue
                     parts = branch.split("/")
                     run_key = parts[1] if len(parts) > 1 else ""
-                    if run_key and run_key not in active and run_key not in active_short:
+                    if (
+                        run_key
+                        and run_key not in active
+                        and run_key not in active_short
+                    ):
                         stale_branches.append(
                             {
                                 "run_id": run_key,
@@ -352,7 +426,10 @@ class GitWorktreeManager:
         messages: list[str] = []
         phase_state = self.prepare_phase(state, phase)
 
-        worker_paths = [entry.get("worktree_path", "") for entry in phase_state.get("workers", {}).values()]
+        worker_paths = [
+            entry.get("worktree_path", "")
+            for entry in phase_state.get("workers", {}).values()
+        ]
         if phase_state.get("integration_worktree"):
             worker_paths.append(phase_state["integration_worktree"])
 
@@ -361,11 +438,15 @@ class GitWorktreeManager:
                 if not Path(path).exists():
                     messages.append(f"worktree already removed {path}")
                     continue
-                removed = self._git(["worktree", "remove", "--force", path], check=False)
+                removed = self._git(
+                    ["worktree", "remove", "--force", path], check=False
+                )
                 if removed.returncode == 0:
                     messages.append(f"removed worktree {path}")
                 else:
-                    messages.append(f"worktree remove skipped {path}: {removed.stderr.strip() or removed.stdout.strip()}")
+                    messages.append(
+                        f"worktree remove skipped {path}: {removed.stderr.strip() or removed.stdout.strip()}"
+                    )
         else:
             for path in sorted(dict.fromkeys([item for item in worker_paths if item])):
                 messages.append(f"simulated cleanup {path}")
@@ -378,7 +459,9 @@ class GitWorktreeManager:
             messages.extend(self.cleanup_phase(state, phase))
 
         if state.get("enabled"):
-            for branch in reversed(list(dict.fromkeys(self.list_managed_branches(state)))):
+            for branch in reversed(
+                list(dict.fromkeys(self.list_managed_branches(state)))
+            ):
                 if not branch:
                     continue
                 exists = self._git(["rev-parse", "--verify", branch], check=False)
@@ -389,12 +472,20 @@ class GitWorktreeManager:
                 if deleted.returncode == 0:
                     messages.append(f"deleted branch {branch}")
                 else:
-                    messages.append(f"branch delete skipped {branch}: {deleted.stderr.strip() or deleted.stdout.strip()}")
+                    messages.append(
+                        f"branch delete skipped {branch}: {deleted.stderr.strip() or deleted.stdout.strip()}"
+                    )
         return messages
 
-    def commit_workspace_changes(self, message: str, paths: list[str] | None = None) -> tuple[bool, dict[str, Any]]:
+    def commit_workspace_changes(
+        self, message: str, paths: list[str] | None = None
+    ) -> tuple[bool, dict[str, Any]]:
         if not self.git_available:
-            return True, {"mode": "simulated", "message": message, "paths": list(paths or [])}
+            return True, {
+                "mode": "simulated",
+                "message": message,
+                "paths": list(paths or []),
+            }
 
         if paths:
             staged_paths: list[str] = []
@@ -416,20 +507,40 @@ class GitWorktreeManager:
 
             has_staged = self._git(["diff", "--cached", "--quiet"], check=False)
             if has_staged.returncode == 0:
-                return True, {"mode": "noop", "message": "no staged changes to commit", "paths": staged_paths}
+                return True, {
+                    "mode": "noop",
+                    "message": "no staged changes to commit",
+                    "paths": staged_paths,
+                }
         else:
             status = self._git(["status", "--porcelain"], check=False)
             if status.returncode != 0:
-                return False, {"reason": "git_status_failed", "error": status.stderr.strip() or status.stdout.strip()}
+                return False, {
+                    "reason": "git_status_failed",
+                    "error": status.stderr.strip() or status.stdout.strip(),
+                }
             if not status.stdout.strip():
-                return True, {"mode": "noop", "message": "no workspace changes to commit"}
+                return True, {
+                    "mode": "noop",
+                    "message": "no workspace changes to commit",
+                }
 
             add = self._git(["add", "-A"], check=False)
             if add.returncode != 0:
-                return False, {"reason": "git_add_failed", "error": add.stderr.strip() or add.stdout.strip()}
+                return False, {
+                    "reason": "git_add_failed",
+                    "error": add.stderr.strip() or add.stdout.strip(),
+                }
 
         commit = self._git(["commit", "-m", message], check=False)
         if commit.returncode != 0:
-            return False, {"reason": "git_commit_failed", "error": commit.stderr.strip() or commit.stdout.strip()}
+            return False, {
+                "reason": "git_commit_failed",
+                "error": commit.stderr.strip() or commit.stdout.strip(),
+            }
 
-        return True, {"mode": "committed", "message": message, "paths": list(paths or [])}
+        return True, {
+            "mode": "committed",
+            "message": message,
+            "paths": list(paths or []),
+        }

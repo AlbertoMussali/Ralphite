@@ -23,9 +23,19 @@ class BackendExecutionConfig:
 
 def _summarize_acceptance(node: RuntimeNodeSpec) -> str:
     acceptance = node.acceptance if isinstance(node.acceptance, dict) else {}
-    commands = acceptance.get("commands") if isinstance(acceptance.get("commands"), list) else []
-    artifacts = acceptance.get("required_artifacts") if isinstance(acceptance.get("required_artifacts"), list) else []
-    rubric = acceptance.get("rubric") if isinstance(acceptance.get("rubric"), list) else []
+    commands = (
+        acceptance.get("commands")
+        if isinstance(acceptance.get("commands"), list)
+        else []
+    )
+    artifacts = (
+        acceptance.get("required_artifacts")
+        if isinstance(acceptance.get("required_artifacts"), list)
+        else []
+    )
+    rubric = (
+        acceptance.get("rubric") if isinstance(acceptance.get("rubric"), list) else []
+    )
     parts = [
         f"acceptance.commands={len(commands)}",
         f"acceptance.required_artifacts={len(artifacts)}",
@@ -126,7 +136,10 @@ def _parse_cursor_output(stdout: str) -> tuple[str | None, str | None]:
     if not stdout.strip():
         return None, "empty cursor output"
     # Most headless outputs are single JSON objects; fall back to the last JSON line.
-    candidates = [stdout.strip(), *[line.strip() for line in stdout.splitlines() if line.strip().startswith("{")]]
+    candidates = [
+        stdout.strip(),
+        *[line.strip() for line in stdout.splitlines() if line.strip().startswith("{")],
+    ]
     for candidate in reversed(candidates):
         try:
             payload = json.loads(candidate)

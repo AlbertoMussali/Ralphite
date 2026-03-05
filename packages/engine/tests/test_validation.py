@@ -108,10 +108,19 @@ def test_suggest_fixes_adds_missing_worker_agent() -> None:
         "version": 5,
         "plan_id": "missing_worker",
         "name": "missing_worker",
-        "materials": {"autodiscover": {"enabled": False, "path": ".", "include_globs": []}, "includes": [], "uploads": []},
+        "materials": {
+            "autodiscover": {"enabled": False, "path": ".", "include_globs": []},
+            "includes": [],
+            "uploads": [],
+        },
         "constraints": {"max_parallel": 1},
         "agents": [
-            {"id": "orchestrator_default", "role": "orchestrator", "provider": "codex", "model": "gpt-5.3-codex"}
+            {
+                "id": "orchestrator_default",
+                "role": "orchestrator",
+                "provider": "codex",
+                "model": "gpt-5.3-codex",
+            }
         ],
         "tasks": [{"id": "t1", "title": "task", "completed": False}],
         "orchestration": {
@@ -159,11 +168,25 @@ def test_suggest_fixes_removes_forward_dependency() -> None:
         "version": 5,
         "plan_id": "forward_dep",
         "name": "forward_dep",
-        "materials": {"autodiscover": {"enabled": False, "path": ".", "include_globs": []}, "includes": [], "uploads": []},
+        "materials": {
+            "autodiscover": {"enabled": False, "path": ".", "include_globs": []},
+            "includes": [],
+            "uploads": [],
+        },
         "constraints": {"max_parallel": 1},
         "agents": [
-            {"id": "worker_default", "role": "worker", "provider": "codex", "model": "gpt-5.3-codex"},
-            {"id": "orchestrator_default", "role": "orchestrator", "provider": "codex", "model": "gpt-5.3-codex"},
+            {
+                "id": "worker_default",
+                "role": "worker",
+                "provider": "codex",
+                "model": "gpt-5.3-codex",
+            },
+            {
+                "id": "orchestrator_default",
+                "role": "orchestrator",
+                "provider": "codex",
+                "model": "gpt-5.3-codex",
+            },
         ],
         "tasks": [
             {"id": "t1", "title": "one", "completed": False, "deps": ["t2"]},
@@ -261,7 +284,10 @@ outputs:
 """
     valid, issues, summary = validate_plan_content(content)
     assert valid is False
-    keys = [(row.get("code"), row.get("path"), row.get("message"), row.get("level")) for row in issues]
+    keys = [
+        (row.get("code"), row.get("path"), row.get("message"), row.get("level"))
+        for row in issues
+    ]
     assert len(keys) == len(set(keys))
     assert isinstance(summary.get("recommended_commands"), list)
 
@@ -291,7 +317,10 @@ def test_validation_rejects_out_of_bounds_artifact_glob() -> None:
     )
     valid, issues, _summary = validate_plan_content(content)
     assert valid is False
-    assert any(issue.get("code") == "tasks.acceptance.path_glob_out_of_bounds" for issue in issues)
+    assert any(
+        issue.get("code") == "tasks.acceptance.path_glob_out_of_bounds"
+        for issue in issues
+    )
 
 
 def test_legacy_openai_provider_is_warn_only_and_suggests_fix() -> None:
@@ -315,17 +344,34 @@ def test_legacy_openai_provider_is_warn_only_and_suggests_fix() -> None:
     valid, issues, summary = validate_plan_content(content)
     assert valid is True
     assert any(issue.get("code") == "agent.provider.legacy_openai" for issue in issues)
-    assert any("provider to codex/cursor" in cmd for cmd in summary.get("recommended_commands", []))
+    assert any(
+        "provider to codex/cursor" in cmd
+        for cmd in summary.get("recommended_commands", [])
+    )
 
     plan_data = {
         "version": 5,
         "plan_id": "legacy_provider",
         "name": "legacy_provider",
-        "materials": {"autodiscover": {"enabled": False, "path": ".", "include_globs": []}, "includes": [], "uploads": []},
+        "materials": {
+            "autodiscover": {"enabled": False, "path": ".", "include_globs": []},
+            "includes": [],
+            "uploads": [],
+        },
         "constraints": {"max_parallel": 1},
         "agents": [
-            {"id": "worker_default", "role": "worker", "provider": "openai", "model": "gpt-5.3-codex"},
-            {"id": "orchestrator_default", "role": "orchestrator", "provider": "openai", "model": "gpt-5.3-codex"},
+            {
+                "id": "worker_default",
+                "role": "worker",
+                "provider": "openai",
+                "model": "gpt-5.3-codex",
+            },
+            {
+                "id": "orchestrator_default",
+                "role": "orchestrator",
+                "provider": "openai",
+                "model": "gpt-5.3-codex",
+            },
         ],
         "tasks": [{"id": "t1", "title": "task", "completed": False}],
         "orchestration": {
@@ -349,7 +395,12 @@ def test_legacy_openai_provider_is_warn_only_and_suggests_fix() -> None:
     migration_fixes = [
         fix
         for fix in fixes
-        if fix.code in {"fix.migrate_agent_provider", "fix.migrate_agent_model", "fix.migrate_agent_reasoning"}
+        if fix.code
+        in {
+            "fix.migrate_agent_provider",
+            "fix.migrate_agent_model",
+            "fix.migrate_agent_reasoning",
+        }
     ]
     updated = plan_data
     for fix in migration_fixes:

@@ -72,7 +72,9 @@ class CommandPaletteScreen(ModalScreen[str | None]):
             self._filtered = [
                 command
                 for command in self.commands
-                if value in command.title.lower() or value in command.id.lower() or value in command.scope.lower()
+                if value in command.title.lower()
+                or value in command.id.lower()
+                or value in command.scope.lower()
             ]
         self._refresh_table()
 

@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from ralphite_engine.config import LocalConfig, load_config, resolve_default_plan_path, save_config, validate_local_config
+from ralphite_engine.config import (
+    LocalConfig,
+    load_config,
+    resolve_default_plan_path,
+    save_config,
+    validate_local_config,
+)
 
 
 def _config(tmp_path: Path) -> LocalConfig:
@@ -52,7 +58,9 @@ def test_resolve_default_plan_path_finds_plan_in_workspace(tmp_path: Path) -> No
     assert resolved == plan.resolve()
 
 
-def test_load_config_treats_string_policy_entries_as_single_values(tmp_path: Path) -> None:
+def test_load_config_treats_string_policy_entries_as_single_values(
+    tmp_path: Path,
+) -> None:
     cfg_path = tmp_path / ".ralphite" / "config.toml"
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     cfg_path.write_text(

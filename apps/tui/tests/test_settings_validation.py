@@ -37,7 +37,9 @@ def test_save_settings_with_rollback_rejects_invalid_mode(tmp_path: Path) -> Non
     assert loaded.allow_tools == ["tool:*"]
 
 
-def test_save_settings_with_rollback_rejects_missing_default_plan(tmp_path: Path) -> None:
+def test_save_settings_with_rollback_rejects_missing_default_plan(
+    tmp_path: Path,
+) -> None:
     cfg = _valid_config(tmp_path)
     save_config(tmp_path, cfg)
 

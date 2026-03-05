@@ -18,7 +18,9 @@ class LocalConfig(BaseModel):
     deny_mcps: list[str] = Field(default_factory=list)
     compact_timeline: bool = False
     default_plan: str | None = None
-    task_writeback_mode: Literal["in_place", "revision_only", "disabled"] = "revision_only"
+    task_writeback_mode: Literal["in_place", "revision_only", "disabled"] = (
+        "revision_only"
+    )
     default_backend: Literal["codex", "cursor"] = "codex"
     default_model: str = "gpt-5.3-codex"
     default_reasoning_effort: Literal["low", "medium", "high"] = "medium"
@@ -53,7 +55,9 @@ def _dedupe_preserve(values: list[str]) -> list[str]:
     return unique
 
 
-def _sanitize_entries(values: list[str], pattern: re.Pattern[str], *, fallback: list[str]) -> list[str]:
+def _sanitize_entries(
+    values: list[str], pattern: re.Pattern[str], *, fallback: list[str]
+) -> list[str]:
     cleaned = [item for item in _dedupe_preserve(values) if pattern.match(item)]
     if cleaned:
         return cleaned
@@ -104,11 +108,21 @@ def load_config(workspace_root: Path, *, create_if_missing: bool = True) -> Loca
 
     profile_name = str(profile.get("name", "default") or "default")
     default_plan_raw = run.get("default_plan")
-    default_plan = str(default_plan_raw).strip() if isinstance(default_plan_raw, str) else None
+    default_plan = (
+        str(default_plan_raw).strip() if isinstance(default_plan_raw, str) else None
+    )
     default_model_raw = run.get("default_model")
-    default_model = str(default_model_raw).strip() if isinstance(default_model_raw, str) and default_model_raw.strip() else "gpt-5.3-codex"
+    default_model = (
+        str(default_model_raw).strip()
+        if isinstance(default_model_raw, str) and default_model_raw.strip()
+        else "gpt-5.3-codex"
+    )
     cursor_command_raw = run.get("cursor_command")
-    cursor_command = str(cursor_command_raw).strip() if isinstance(cursor_command_raw, str) and cursor_command_raw.strip() else "agent"
+    cursor_command = (
+        str(cursor_command_raw).strip()
+        if isinstance(cursor_command_raw, str) and cursor_command_raw.strip()
+        else "agent"
+    )
     candidate = LocalConfig(
         workspace_root=str(paths["root"]),
         profile_name=profile_name,
@@ -129,23 +143,35 @@ def load_config(workspace_root: Path, *, create_if_missing: bool = True) -> Loca
         return candidate
 
     sanitized_default_plan = candidate.default_plan
-    if sanitized_default_plan and resolve_default_plan_path(paths["root"], sanitized_default_plan) is None:
+    if (
+        sanitized_default_plan
+        and resolve_default_plan_path(paths["root"], sanitized_default_plan) is None
+    ):
         sanitized_default_plan = None
     return LocalConfig(
         workspace_root=str(paths["root"]),
         profile_name=candidate.profile_name or "default",
-        allow_tools=_sanitize_entries(candidate.allow_tools, _TOOL_ENTRY_RE, fallback=["tool:*"]),
+        allow_tools=_sanitize_entries(
+            candidate.allow_tools, _TOOL_ENTRY_RE, fallback=["tool:*"]
+        ),
         deny_tools=_sanitize_entries(candidate.deny_tools, _TOOL_ENTRY_RE, fallback=[]),
-        allow_mcps=_sanitize_entries(candidate.allow_mcps, _MCP_ENTRY_RE, fallback=["mcp:*"]),
+        allow_mcps=_sanitize_entries(
+            candidate.allow_mcps, _MCP_ENTRY_RE, fallback=["mcp:*"]
+        ),
         deny_mcps=_sanitize_entries(candidate.deny_mcps, _MCP_ENTRY_RE, fallback=[]),
         compact_timeline=bool(candidate.compact_timeline),
         default_plan=sanitized_default_plan,
         task_writeback_mode=(
             candidate.task_writeback_mode
-            if candidate.task_writeback_mode in {"in_place", "revision_only", "disabled"}
+            if candidate.task_writeback_mode
+            in {"in_place", "revision_only", "disabled"}
             else "revision_only"
         ),
-        default_backend=(candidate.default_backend if candidate.default_backend in {"codex", "cursor"} else "codex"),  # type: ignore[arg-type]
+        default_backend=(
+            candidate.default_backend
+            if candidate.default_backend in {"codex", "cursor"}
+            else "codex"
+        ),  # type: ignore[arg-type]
         default_model=candidate.default_model.strip() or "gpt-5.3-codex",
         default_reasoning_effort=(
             candidate.default_reasoning_effort
@@ -156,7 +182,9 @@ def load_config(workspace_root: Path, *, create_if_missing: bool = True) -> Loca
     )
 
 
-def resolve_default_plan_path(workspace_root: Path, default_plan: str | None) -> Path | None:
+def resolve_default_plan_path(
+    workspace_root: Path, default_plan: str | None
+) -> Path | None:
     raw = (default_plan or "").strip()
     if not raw:
         return None
@@ -171,7 +199,9 @@ def resolve_default_plan_path(workspace_root: Path, default_plan: str | None) ->
     return None
 
 
-def validate_local_config(config: LocalConfig, workspace_root: Path | None = None) -> list[str]:
+def validate_local_config(
+    config: LocalConfig, workspace_root: Path | None = None
+) -> list[str]:
     issues: list[str] = []
     seen: set[str] = set()
 
@@ -239,7 +269,7 @@ def save_config(workspace_root: Path, config: LocalConfig) -> Path:
         [
             "# Ralphite local profile",
             "[profile]",
-            f'name = {json.dumps(config.profile_name)}',
+            f"name = {json.dumps(config.profile_name)}",
             "",
             "[policy]",
             f"allow_tools = {_toml_list(config.allow_tools)}",

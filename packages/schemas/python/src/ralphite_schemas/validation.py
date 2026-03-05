@@ -30,7 +30,9 @@ class ValidationError(Exception):
         super().__init__("plan validation failed")
 
 
-def _task_is_branched_mapped(task_lane: str | None, task_group: str | None, task_cell: str | None) -> bool:
+def _task_is_branched_mapped(
+    task_lane: str | None, task_group: str | None, task_cell: str | None
+) -> bool:
     if task_lane:
         return True
     if task_group and task_group.lower() == "trunk":
@@ -58,10 +60,16 @@ def validate_plan(plan: PlanSpecV5) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
 
     if plan.version != 5:
-        issues.append(ValidationIssue("version.invalid", "version must be 5", "version"))
+        issues.append(
+            ValidationIssue("version.invalid", "version must be 5", "version")
+        )
 
     if not plan.tasks:
-        issues.append(ValidationIssue("tasks.empty", "tasks must contain at least one item", "tasks"))
+        issues.append(
+            ValidationIssue(
+                "tasks.empty", "tasks must contain at least one item", "tasks"
+            )
+        )
 
     agent_ids: set[str] = set()
     role_counts: dict[str, int] = defaultdict(int)
@@ -87,9 +95,21 @@ def validate_plan(plan: PlanSpecV5) -> list[ValidationIssue]:
             )
 
     if role_counts.get("worker", 0) == 0:
-        issues.append(ValidationIssue("agent.missing_worker", "at least one worker agent is required", "agents"))
+        issues.append(
+            ValidationIssue(
+                "agent.missing_worker",
+                "at least one worker agent is required",
+                "agents",
+            )
+        )
     if role_counts.get("orchestrator", 0) == 0:
-        issues.append(ValidationIssue("agent.missing_orchestrator", "at least one orchestrator agent is required", "agents"))
+        issues.append(
+            ValidationIssue(
+                "agent.missing_orchestrator",
+                "at least one orchestrator agent is required",
+                "agents",
+            )
+        )
 
     behavior_ids: set[str] = set()
     for idx, behavior in enumerate(plan.orchestration.behaviors):
@@ -118,7 +138,13 @@ def validate_plan(plan: PlanSpecV5) -> list[ValidationIssue]:
     for idx, task in enumerate(plan.tasks):
         path_prefix = f"tasks[{idx}]"
         if task.id in task_ids:
-            issues.append(ValidationIssue("task.duplicate_id", f"duplicate task id '{task.id}'", f"{path_prefix}.id"))
+            issues.append(
+                ValidationIssue(
+                    "task.duplicate_id",
+                    f"duplicate task id '{task.id}'",
+                    f"{path_prefix}.id",
+                )
+            )
         task_ids.add(task.id)
         position[task.id] = idx
         if not task.completed:
@@ -135,7 +161,13 @@ def validate_plan(plan: PlanSpecV5) -> list[ValidationIssue]:
 
         for dep in task.deps:
             if dep == task.id:
-                issues.append(ValidationIssue("task.self_dep", f"task '{task.id}' has self dependency", f"{path_prefix}.deps"))
+                issues.append(
+                    ValidationIssue(
+                        "task.self_dep",
+                        f"task '{task.id}' has self dependency",
+                        f"{path_prefix}.deps",
+                    )
+                )
         for artifact_idx, artifact in enumerate(task.acceptance.required_artifacts):
             if not _is_worktree_relative_glob(artifact.path_glob):
                 issues.append(
@@ -220,7 +252,11 @@ def validate_plan(plan: PlanSpecV5) -> list[ValidationIssue]:
                     )
                 )
             cell_ids.add(cell.id)
-            if cell.kind == CustomCellKind.ORCHESTRATOR and cell.behavior and cell.behavior not in behavior_ids:
+            if (
+                cell.kind == CustomCellKind.ORCHESTRATOR
+                and cell.behavior
+                and cell.behavior not in behavior_ids
+            ):
                 issues.append(
                     ValidationIssue(
                         "orchestration.custom.unknown_behavior",
@@ -239,7 +275,10 @@ def validate_plan(plan: PlanSpecV5) -> list[ValidationIssue]:
                     )
 
     for idx, task in enumerate(plan.tasks):
-        if plan.orchestration.template != OrchestrationTemplate.GENERAL_SPS and not task.completed:
+        if (
+            plan.orchestration.template != OrchestrationTemplate.GENERAL_SPS
+            and not task.completed
+        ):
             # For non-SPS templates, require at least one routing signal unless template-level mapping exists.
             if not (task.routing.lane or task.routing.cell or task.routing.group):
                 issues.append(
@@ -285,7 +324,9 @@ def _compile_plan(plan: PlanSpecV5) -> CompiledPlan:
                 queue.append(nxt)
 
     if len(topo) != len(indegree):
-        raise ValidationError([ValidationIssue("tasks.illegal_cycle", "tasks introduce a cycle", "tasks")])
+        raise ValidationError(
+            [ValidationIssue("tasks.illegal_cycle", "tasks introduce a cycle", "tasks")]
+        )
 
     node_levels: dict[str, int] = {}
     for node_id in topo:
