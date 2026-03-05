@@ -1,13 +1,13 @@
 # Test Matrix
 
 Owners: engine, cli, release
-Last verified against commit: 70b0c1f
+Last verified against commit: a7aaeed
 
 ## Fast Confidence
 
 - `tests/engine/test_headless_agent.py`: backend command + failure contracts
 - `tests/cli/test_cli_ux_commands.py`: CLI gate and backend-smoke command contracts
-- `tests/engine/test_examples_plans.py`: tracked starter plans validate/compile
+- `tests/engine/test_examples_plans.py`: all tracked canonical plans (`examples/plans/*.yaml`, including starter + app examples) validate/compile
 
 ## Strict Check Suites
 

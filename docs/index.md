@@ -1,7 +1,7 @@
 # Ralphite Documentation Hub
 
 Owners: engine, cli, schemas, release
-Last verified against commit: 70b0c1f
+Last verified against commit: a7aaeed
 
 Verification commands:
 
@@ -24,6 +24,7 @@ uv run --no-sync ralphite check --workspace /tmp/ralphite-strict-check --strict 
 2. Runtime model: [docs/architecture/runtime-execution.md](architecture/runtime-execution.md)
 3. Gate and release policy: [docs/workflows/release-readiness.md](workflows/release-readiness.md)
 4. Plan/spec references: [docs/references/plan-schema-reference.md](references/plan-schema-reference.md)
+5. Canonical app examples: [docs/workflows/example-calendar-math-cli.md](workflows/example-calendar-math-cli.md), [docs/workflows/example-thermal-1d.md](workflows/example-thermal-1d.md)
 
 ## Source-of-Truth Policy
 
