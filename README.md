@@ -20,6 +20,15 @@ What this should do:
 - `quickstart` runs `doctor`, bootstraps missing workspace state, shows the selected plan/backend/model/capability scope, and starts a first run.
 - `run` executes the selected plan directly and returns a result with run id, next action, and artifact paths.
 
+## Starter Templates
+
+Tracked starter templates live under [examples/plans](examples/plans/) and are meant to be copied, renamed, and customized:
+
+- [starter_bugfix.yaml](examples/plans/starter_bugfix.yaml): reproduce a reported issue, ship a scoped fix, and run a regression/review loop.
+- [starter_refactor.yaml](examples/plans/starter_refactor.yaml): capture invariants, perform a safe internal cleanup, and verify behavior parity.
+- [starter_docs_update.yaml](examples/plans/starter_docs_update.yaml): update docs and examples from code/test truth, then verify links and commands.
+- [starter_release_prep.yaml](examples/plans/starter_release_prep.yaml): coordinate release scope, deterministic gates, cold-start checks, and sign-off.
+
 If the happy path fails:
 
 - `uv run ralphite doctor --workspace . --output table`

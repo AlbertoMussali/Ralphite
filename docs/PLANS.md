@@ -9,11 +9,17 @@ Last verified against commit: a7aaeed
 - centralized defaults: `examples/agent_defaults.yaml`
 - schema contracts: `src/ralphite/schemas/json/plan-spec.schema.json`
 
-## Canonical Tracked Examples
+## Starter Templates
 
-- `examples/plans/starter_general_sps.yaml`
-- `examples/plans/starter_branched.yaml`
-- `examples/plans/starter_blue_red.yaml`
+- `examples/plans/starter_bugfix.yaml`
+- `examples/plans/starter_refactor.yaml`
+- `examples/plans/starter_docs_update.yaml`
+- `examples/plans/starter_release_prep.yaml`
+
+These are the public job-focused starters. Their underlying orchestration templates stay visible in the YAML, but the top-level product surface is organized around common work types instead of orchestration jargon.
+
+## Worked Examples
+
 - `examples/plans/example_easy_calendar_math_cli.yaml`
 - `examples/plans/example_medium_thermal_1d_branched.yaml`
 

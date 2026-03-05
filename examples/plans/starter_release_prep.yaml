@@ -1,0 +1,95 @@
+# Starter template for release preparation.
+# Use this when you need a coordinated release-readiness pass across deterministic gates and a fresh cold-start check.
+# Customize first: plan_id, name, lane names if needed, and the exact commands/artifacts that represent your release bar.
+# Task titles assume one release candidate that needs scope confirmation, parallel validation, and a sign-off summary.
+version: 1
+plan_id: starter_release_prep
+name: Starter Release Prep
+materials:
+  autodiscover:
+    enabled: true
+    path: .
+    include_globs:
+      - '**/*.yaml'
+      - '**/*.yml'
+      - '**/*.md'
+      - '**/*.txt'
+  includes: []
+  uploads: []
+constraints:
+  max_runtime_seconds: 3600
+  max_total_steps: 120
+  max_cost_usd: 10.0
+  fail_fast: true
+  max_parallel: 3
+  acceptance_timeout_seconds: 120
+  max_retries_per_node: 0
+agent_defaults_ref: ../agent_defaults.yaml
+tasks:
+  - id: task_define_release_scope
+    title: Confirm release scope, version intent, blockers, and the sign-off bar before running gates.
+    completed: false
+    routing:
+      group: trunk
+      tags: [release, planning]
+    acceptance:
+      commands: []
+      required_artifacts: []
+      rubric:
+        - Release scope, blockers, and required sign-off criteria are explicit.
+        - The run defines what would fail the release instead of treating checks as advisory.
+  - id: task_run_deterministic_gates
+    title: Run deterministic quality gates and capture pass or fail evidence for the release candidate.
+    completed: false
+    deps: [task_define_release_scope]
+    routing:
+      lane: lane_gates
+      tags: [release, gates]
+    acceptance:
+      commands: []
+      required_artifacts: []
+      rubric:
+        - Replace this placeholder with the lint, test, or policy commands required for your release bar.
+        - Evidence is sufficient for another maintainer to audit what passed, failed, or was waived.
+  - id: task_run_cold_start_check
+    title: Run a fresh-workspace or first-run verification pass and capture operator-facing results.
+    completed: false
+    deps: [task_define_release_scope]
+    routing:
+      lane: lane_cold_start
+      tags: [release, cold-start]
+    acceptance:
+      commands: []
+      required_artifacts: []
+      rubric:
+        - Replace this placeholder with the cold-start or smoke-flow command that represents release readiness.
+        - Operator-facing output is reviewed for clarity, not just exit-code success.
+  - id: task_publish_release_summary
+    title: Merge gate evidence into one release summary with pass or fail status, waivers, and next actions.
+    completed: false
+    deps: [task_run_deterministic_gates, task_run_cold_start_check]
+    routing:
+      group: trunk
+      cell: trunk_post
+      tags: [release, signoff]
+    acceptance:
+      commands: []
+      required_artifacts: []
+      rubric:
+        - Final summary states whether the release candidate is ready, blocked, or conditionally approved.
+        - Remaining risks, waivers, and follow-up owners are explicit instead of implied.
+orchestration:
+  template: branched
+  inference_mode: mixed
+  branched:
+    lanes: [lane_gates, lane_cold_start]
+  blue_red:
+    loop_unit: per_task
+  custom:
+    cells: []
+outputs:
+  required_artifacts:
+    - id: final_report
+      format: markdown
+    - id: machine_bundle
+      format: json

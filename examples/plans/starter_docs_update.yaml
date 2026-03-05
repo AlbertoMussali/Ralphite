@@ -1,0 +1,81 @@
+# Starter template for documentation work.
+# Use this when docs, examples, or operator guidance must be updated to match current behavior.
+# Customize first: plan_id, name, the source-of-truth files to audit, and the commands that verify docs stayed consistent.
+# Task titles assume one docs change set that starts from code/tests truth rather than inferred intent.
+version: 1
+plan_id: starter_docs_update
+name: Starter Docs Update
+materials:
+  autodiscover:
+    enabled: true
+    path: .
+    include_globs:
+      - '**/*.yaml'
+      - '**/*.yml'
+      - '**/*.md'
+      - '**/*.txt'
+  includes: []
+  uploads: []
+constraints:
+  max_runtime_seconds: 3600
+  max_total_steps: 120
+  max_cost_usd: 10.0
+  fail_fast: true
+  max_parallel: 3
+  acceptance_timeout_seconds: 120
+  max_retries_per_node: 0
+agent_defaults_ref: ../agent_defaults.yaml
+tasks:
+  - id: task_confirm_docs_scope
+    title: Confirm audience, source-of-truth code paths, and the exact docs surfaces that need updating.
+    completed: false
+    routing:
+      cell: seq_pre
+      tags: [docs, planning]
+    acceptance:
+      commands: []
+      required_artifacts: []
+      rubric:
+        - Audience, source-of-truth code/tests, and required doc surfaces are explicit.
+        - Scope separates factual documentation updates from product or runtime changes.
+  - id: task_update_docs_and_examples
+    title: Update the targeted docs, examples, and operator guidance to match current behavior.
+    completed: false
+    deps: [task_confirm_docs_scope]
+    routing:
+      cell: par_core
+      tags: [docs, authoring]
+    acceptance:
+      commands: []
+      required_artifacts: []
+      rubric:
+        - Updated docs reflect code-and-test truth instead of inferred intent.
+        - Replace this placeholder with the doc checks, screenshots, or generated outputs that matter here.
+  - id: task_verify_docs_consistency
+    title: Verify commands, links, terminology, and cross-doc consistency before sign-off.
+    completed: false
+    deps: [task_update_docs_and_examples]
+    routing:
+      cell: seq_post
+      tags: [docs, verification]
+    acceptance:
+      commands: []
+      required_artifacts: []
+      rubric:
+        - Validation confirms commands, links, and naming stay coherent across the edited docs set.
+        - Final notes call out any intentionally deferred doc debt or follow-up ADR work.
+orchestration:
+  template: general_sps
+  inference_mode: mixed
+  branched:
+    lanes: [lane_a, lane_b]
+  blue_red:
+    loop_unit: per_task
+  custom:
+    cells: []
+outputs:
+  required_artifacts:
+    - id: final_report
+      format: markdown
+    - id: machine_bundle
+      format: json

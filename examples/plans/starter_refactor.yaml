@@ -1,0 +1,81 @@
+# Starter template for refactor work.
+# Use this when behavior should stay stable while internals, boundaries, or structure get cleaner.
+# Customize first: plan_id, name, the invariants that must not change, and the verification commands that prove parity.
+# Task titles assume one bounded refactor slice with explicit before/after verification.
+version: 1
+plan_id: starter_refactor
+name: Starter Refactor
+materials:
+  autodiscover:
+    enabled: true
+    path: .
+    include_globs:
+      - '**/*.yaml'
+      - '**/*.yml'
+      - '**/*.md'
+      - '**/*.txt'
+  includes: []
+  uploads: []
+constraints:
+  max_runtime_seconds: 3600
+  max_total_steps: 120
+  max_cost_usd: 10.0
+  fail_fast: true
+  max_parallel: 3
+  acceptance_timeout_seconds: 120
+  max_retries_per_node: 0
+agent_defaults_ref: ../agent_defaults.yaml
+tasks:
+  - id: task_capture_invariants
+    title: Capture current behavior, safety constraints, and the refactor boundary before moving code.
+    completed: false
+    routing:
+      cell: seq_pre
+      tags: [refactor, planning]
+    acceptance:
+      commands: []
+      required_artifacts: []
+      rubric:
+        - Existing behavior, public contracts, and no-regression invariants are explicit.
+        - The refactor boundary is narrow enough to verify without bundling unrelated cleanup.
+  - id: task_perform_refactor
+    title: Restructure the targeted code paths without changing intended behavior.
+    completed: false
+    deps: [task_capture_invariants]
+    routing:
+      cell: par_core
+      tags: [refactor, implementation]
+    acceptance:
+      commands: []
+      required_artifacts: []
+      rubric:
+        - Internal structure is meaningfully improved while the agreed behavior contract remains intact.
+        - Replace this placeholder with the focused checks or artifacts that prove the refactor is safe.
+  - id: task_verify_parity
+    title: Verify behavior parity, remove dead edges, and summarize any follow-up debt.
+    completed: false
+    deps: [task_perform_refactor]
+    routing:
+      cell: seq_post
+      tags: [refactor, verification]
+    acceptance:
+      commands: []
+      required_artifacts: []
+      rubric:
+        - Verification shows no intentional product behavior change beyond the documented refactor goal.
+        - Final notes call out any debt deferred instead of silently expanding scope.
+orchestration:
+  template: general_sps
+  inference_mode: mixed
+  branched:
+    lanes: [lane_a, lane_b]
+  blue_red:
+    loop_unit: per_task
+  custom:
+    cells: []
+outputs:
+  required_artifacts:
+    - id: final_report
+      format: markdown
+    - id: machine_bundle
+      format: json
