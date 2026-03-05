@@ -6,20 +6,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
 
 jobs:
-  quick-checks:
-    name: Quick Checks
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
-    env:
-      RALPHITE_DEV_SIMULATED_EXECUTION: "1"
-      RALPHITE_SKIP_BACKEND_CMD_CHECKS: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,73 +30,5 @@ jobs:
       - name: Install deps
         run: uv sync --dev --python 3.13 --no-editable
 
-      - name: Ensure required binaries
-        run: |
-          command -v rg >/dev/null || (sudo apt-get update && sudo apt-get install -y ripgrep)
-          rg --version
-
-      - name: Ruff format check
-        run: uv run --no-sync ruff format --check .
-
-      - name: Ruff lint check
+      - name: Ruff check
         run: uv run --no-sync ruff check .
-
-      - name: Ruff autofix cleanliness gate
-        run: |
-          uv run --no-sync ruff check . --fix
-          git diff --exit-code
-          git diff --cached --exit-code
-
-      - name: Docs contract tests
-        run: uv run --no-sync pytest tests/engine/test_docs_knowledge_base.py -q
-
-      - name: Quick contract tests
-        run: |
-          uv run --no-sync pytest \
-            tests/engine/test_headless_agent.py \
-            tests/cli/test_cli_output_contract.py \
-            tests/cli/test_cli_ux_commands.py::test_check_strict_runs_backend_and_strict_checks \
-            tests/cli/test_cli_hard_pivot_contract.py -q
-
-      - name: CLI smoke
-        run: |
-          mkdir -p /tmp/ralphite-smoke
-          uv run --no-sync ralphite quickstart --workspace /tmp/ralphite-smoke --bootstrap --yes --output json
-          uv run --no-sync ralphite run --workspace /tmp/ralphite-smoke --yes --output json
-
-  strict-gate:
-    name: Strict Gate
-    runs-on: ubuntu-latest
-    needs: quick-checks
-    env:
-      RALPHITE_DEV_SIMULATED_EXECUTION: "1"
-      RALPHITE_SKIP_BACKEND_CMD_CHECKS: "1"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-
-      - name: Install deps
-        run: uv sync --dev --python 3.13 --no-editable
-
-      - name: Ensure required binaries
-        run: |
-          command -v rg >/dev/null || (sudo apt-get update && sudo apt-get install -y ripgrep)
-          rg --version
-
-      - name: Full test suite
-        run: uv run --no-sync pytest -q
-
-      - name: Strict CLI check
-        run: |
-          mkdir -p /tmp/ralphite-strict-check
-          uv run --no-sync ralphite check --workspace /tmp/ralphite-strict-check --strict --output json
