@@ -84,13 +84,15 @@ def recover_command(
     """Recover and resume a checkpointed run with explicit recovery mode and automation semantics."""
     orch = _orchestrator(workspace)
     output_mode = _normalize_output(output, json_mode=json_mode)
-    if not bool(orch.git_runtime_status().get("ok")):
+    git_status = orch.git_runtime_status()
+    if not bool(git_status.get("ok")):
         _git_required_payload(
             command="recover",
             workspace=workspace,
             title="Recovery",
             output=output_mode,
             run_id=run_id,
+            git_status=git_status,
         )
         raise typer.Exit(code=RECOVER_EXIT_INVALID_INPUT)
 

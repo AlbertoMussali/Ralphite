@@ -15,6 +15,7 @@ from typer.testing import CliRunner
 import ralphite.cli.checks.suites as suite_mod
 import ralphite.cli.commands.check_cmd as check_mod
 import ralphite.cli.commands.quickstart_cmd as quickstart_mod
+import ralphite.cli.commands.run_cmd as run_mod
 from ralphite.cli.cli import app
 from ralphite.cli.core import _orchestrator
 
@@ -123,6 +124,46 @@ def test_quickstart_json_output(tmp_path: Path) -> None:
     assert payload["schema_version"] == "cli-output.v1"
     assert payload["command"] == "quickstart"
     assert payload["status"] == "succeeded"
+
+
+def test_run_json_reports_dirty_worktree_detail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _FakeConfig:
+        default_backend = "codex"
+        default_model = "gpt-5.3-codex"
+        default_reasoning_effort = "medium"
+
+    class _FakeOrchestrator:
+        config = _FakeConfig()
+
+        def git_runtime_status(self) -> dict[str, object]:
+            return {
+                "ok": False,
+                "reason": "git_required",
+                "detail": "worktree is dirty in a blocking way",
+                "remediation": 'git add -A && git commit -m "save state"',
+            }
+
+    monkeypatch.setattr(run_mod, "_orchestrator", lambda _workspace: _FakeOrchestrator())
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--workspace",
+            str(tmp_path),
+            "--yes",
+            "--output",
+            "json",
+        ],
+    )
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "failed"
+    assert payload["exit_code"] == 1
+    assert payload["issues"][0]["code"] == "git.required"
+    assert payload["issues"][0]["message"] == "worktree is dirty in a blocking way"
+    assert 'git add -A && git commit -m "save state"' in payload["next_actions"]
 
 
 def test_validate_command_returns_fixes_for_invalid_plan(tmp_path: Path) -> None:

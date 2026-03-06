@@ -1,0 +1,182 @@
+version: 1
+plan_id: product_readiness_polish
+name: Product Readiness Polish
+materials:
+  autodiscover:
+    enabled: true
+    path: .
+    include_globs:
+      - "**/*.py"
+      - "**/*.md"
+      - "**/*.toml"
+      - "**/*.yaml"
+      - "**/*.yml"
+  includes: []
+  uploads: []
+constraints:
+  max_runtime_seconds: 5400
+  max_total_steps: 180
+  max_cost_usd: 15.0
+  fail_fast: true
+  max_parallel: 5
+  acceptance_timeout_seconds: 180
+  max_retries_per_node: 0
+agents:
+  - id: worker_default
+    role: worker
+    provider: codex
+    model: gpt-5.3-codex
+    tools_allow: [tool:*]
+  - id: orchestrator_default
+    role: orchestrator
+    provider: codex
+    model: gpt-5.3-codex
+tasks:
+  - id: task_define_polish_scope
+    title: Confirm the product-readiness scope, success bar, and repo surfaces for docs, onboarding, recovery, reports, and cold-start behavior before implementation.
+    completed: false
+    routing:
+      group: trunk
+      tags: [readiness, planning]
+    acceptance:
+      commands: []
+      required_artifacts: []
+      rubric:
+        - Scope explicitly covers doc entrypoint consolidation, init/onboarding UX, recovery guidance quality, final report contract quality, and cold-start dirty-worktree scenarios.
+        - The implementation plan distinguishes product-facing polish from non-goals and leaves a clear verification bar for the final merge task.
+
+  - id: task_consolidate_docs_entrypoints
+    title: Tighten the operator and contributor docs path so users can find the canonical starting points without guessing between README, USER_GUIDE, workflows, and references.
+    completed: false
+    deps: [task_define_polish_scope]
+    routing:
+      lane: lane_docs
+      tags: [docs, ia]
+    acceptance:
+      commands: []
+      required_artifacts: []
+      rubric:
+        - One clear operator path and one clear contributor path are established.
+        - Duplicate or conflicting entrypoint guidance is reduced instead of expanded.
+        - Updated docs remain aligned with actual CLI behavior and current repository policy.
+
+  - id: task_polish_init_onboarding
+    title: Improve init onboarding so starter templates are easier to choose, defaults are clearer, and the created workspace state is explained in product terms.
+    completed: false
+    deps: [task_define_polish_scope]
+    routing:
+      lane: lane_onboarding
+      tags: [init, onboarding]
+    acceptance:
+      commands: []
+      required_artifacts: []
+      rubric:
+        - Init output explains what was created and which starter path was selected.
+        - Starter-template descriptions and defaults feel product-facing rather than power-user oriented.
+        - The onboarding flow stays compatible with current plan/runtime contracts.
+
+  - id: task_recovery_recommendations
+    title: Upgrade recovery from listing modes to recommending the best mode and next action for the current state.
+    completed: false
+    deps: [task_define_polish_scope]
+    routing:
+      lane: lane_recovery
+      tags: [recovery, guidance]
+    acceptance:
+      commands: []
+      required_artifacts: []
+      rubric:
+        - Recovery output recommends a mode when enough runtime context exists.
+        - Recommended actions are specific to the run state instead of generic CLI reminders.
+        - The change preserves existing recovery contracts and machine-readable output compatibility.
+
+  - id: task_harden_final_report_contract
+    title: Strengthen the final report as a product surface with clearer minimum structure, stronger coverage, and consistent surfacing in CLI flows.
+    completed: false
+    deps: [task_define_polish_scope]
+    routing:
+      lane: lane_report
+      tags: [reporting, ux]
+    acceptance:
+      commands: []
+      required_artifacts: []
+      rubric:
+        - Final report structure and minimum content become explicit and test-covered.
+        - The CLI consistently points users to the report and previews the most useful summary context.
+        - Report behavior does not regress across stream, table, and recovery-adjacent workflows.
+
+  - id: task_expand_environment_scenarios
+    title: Add first-class coverage and guidance for fresh non-git directories, repos without an initial commit, dirty worktrees, and healthy committed workspaces.
+    completed: false
+    deps: [task_define_polish_scope]
+    routing:
+      lane: lane_environment
+      tags: [doctor, release, environment]
+    acceptance:
+      commands: []
+      required_artifacts: []
+      rubric:
+        - Cold-start and dirty-worktree behavior is covered by explicit tests and operator guidance.
+        - Release/readiness docs reflect the real git-runtime prerequisites and expected remediation path.
+        - The implementation distinguishes environment prerequisites from actual product failures.
+
+  - id: task_merge_and_verify_readiness
+    title: Merge the docs, onboarding, recovery, report, and environment improvements into one coherent product-readiness pass and prove the repo still meets its quality bar.
+    completed: false
+    deps:
+      - task_consolidate_docs_entrypoints
+      - task_polish_init_onboarding
+      - task_recovery_recommendations
+      - task_harden_final_report_contract
+      - task_expand_environment_scenarios
+    routing:
+      group: trunk
+      cell: trunk_post
+      tags: [readiness, verification]
+    acceptance:
+      commands:
+        - uv run ruff check .
+        - uv run --no-sync pytest -q
+        - uv run --no-sync ralphite check --workspace /tmp/ralphite-strict-check --full --output json
+        - uv run --no-sync ralphite check --workspace /tmp/ralphite-strict-check --strict --output json
+      required_artifacts:
+        - id: final_report
+          path_glob: ".ralphite/artifacts/*/final_report.md"
+          format: markdown
+      rubric:
+        - The final result explains what changed for docs, onboarding, recovery, reporting, and environment readiness.
+        - Verification evidence is strong enough for a maintainer to decide whether the repo is product-ready or still blocked.
+        - Remaining follow-up work is explicitly separated from the completed readiness pass.
+orchestration:
+  template: branched
+  inference_mode: mixed
+  behaviors:
+    - id: prepare_dispatch_default
+      kind: prepare_dispatch
+      agent: orchestrator_default
+      enabled: true
+    - id: merge_default
+      kind: merge_and_conflict_resolution
+      agent: orchestrator_default
+      enabled: true
+    - id: summarize_default
+      kind: summarize_work
+      agent: orchestrator_default
+      enabled: true
+  branched:
+    lanes:
+      - lane_docs
+      - lane_onboarding
+      - lane_recovery
+      - lane_report
+      - lane_environment
+  blue_red:
+    loop_unit: per_task
+  custom:
+    cells: []
+outputs:
+  required_artifacts:
+    - id: final_report
+      format: markdown
+    - id: machine_bundle
+      format: json

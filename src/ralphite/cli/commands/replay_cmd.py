@@ -34,13 +34,15 @@ def replay_command(
     """Replay a previous run in rerun-failed mode."""
     orch = _orchestrator(workspace)
     mode = _normalize_output(output)
-    if not bool(orch.git_runtime_status().get("ok")):
+    git_status = orch.git_runtime_status()
+    if not bool(git_status.get("ok")):
         _git_required_payload(
             command="replay",
             workspace=workspace,
             title="Replay",
             output=mode,
             run_id=run_id,
+            git_status=git_status,
         )
         raise typer.Exit(code=1)
 

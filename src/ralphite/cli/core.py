@@ -259,20 +259,25 @@ def _git_required_payload(
     output: str,
     run_id: str | None = None,
     data: dict[str, Any] | None = None,
+    git_status: dict[str, Any] | None = None,
     exit_code: int = 1,
 ) -> None:
     advice = classify_failure("git_required")
-    status = GitWorktreeManager(
+    status = git_status or GitWorktreeManager(
         workspace.expanduser().resolve(), "cli"
     ).runtime_status()
+    detail = str(status.get("detail") or advice.message).strip() or advice.message
+    remediation = str(status.get("remediation") or "").strip()
     payload = _result_payload(
         command=command,
         ok=False,
         status="failed",
         run_id=run_id,
         exit_code=exit_code,
-        issues=[{"code": "git.required", "message": advice.message}],
-        next_actions=_dedupe_strings([advice.next_action, advice.command_hint]),
+        issues=[{"code": "git.required", "message": detail}],
+        next_actions=_dedupe_strings(
+            [remediation, advice.next_action, advice.command_hint]
+        ),
         data={"git": status, **(data or {})},
     )
     _emit_payload(output, payload, title=title)

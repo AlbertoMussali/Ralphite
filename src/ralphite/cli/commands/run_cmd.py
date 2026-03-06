@@ -53,12 +53,14 @@ def run_command(
     """Run a plan immediately in headless mode."""
     orch = _orchestrator(workspace)
     output_mode = _normalize_output(output)
-    if not bool(orch.git_runtime_status().get("ok")):
+    git_status = orch.git_runtime_status()
+    if not bool(git_status.get("ok")):
         _git_required_payload(
             command="run",
             workspace=workspace,
             title="Run Result",
             output=output_mode,
+            git_status=git_status,
         )
         raise typer.Exit(code=1)
     selected_backend = backend or orch.config.default_backend
