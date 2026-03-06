@@ -37,3 +37,12 @@ Ralphite follows a strict documentation policy. If you change behavior, you MUST
 - **Architecture changes**: Add an Architecture Decision Record (ADR) in `docs/decisions/`.
 
 Refer to `AGENTS.md` for a full list of source-of-truth files.
+
+## Contributor Docs Path
+
+Use this order to avoid jumping between competing entrypoints:
+
+1. [CONTRIBUTING.md](CONTRIBUTING.md) (this file) for local setup and required verification commands.
+2. [docs/index.md](docs/index.md) for audience navigation and canonical doc map.
+3. [docs/design-docs/index.md](docs/design-docs/index.md) for contributor-facing technical context.
+4. [docs/references/index.md](docs/references/index.md) only when you need exact CLI/schema/test contracts.

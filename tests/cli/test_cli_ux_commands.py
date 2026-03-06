@@ -15,9 +15,12 @@ from typer.testing import CliRunner
 import ralphite.cli.checks.suites as suite_mod
 import ralphite.cli.commands.check_cmd as check_mod
 import ralphite.cli.commands.quickstart_cmd as quickstart_mod
+import ralphite.cli.commands.recover_cmd as recover_mod
+import ralphite.cli.commands.replay_cmd as replay_mod
 import ralphite.cli.commands.run_cmd as run_mod
 from ralphite.cli.cli import app
 from ralphite.cli.core import _orchestrator
+from ralphite.cli.exit_codes import RECOVER_EXIT_PENDING
 
 
 def _init_repo(path: Path) -> None:
@@ -164,6 +167,121 @@ def test_run_json_reports_dirty_worktree_detail(
     assert payload["issues"][0]["code"] == "git.required"
     assert payload["issues"][0]["message"] == "worktree is dirty in a blocking way"
     assert 'git add -A && git commit -m "save state"' in payload["next_actions"]
+
+
+def test_recover_allows_dirty_workspace_with_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _FakeOrchestrator:
+        def git_repository_status(self) -> dict[str, object]:
+            return {
+                "ok": True,
+                "detail": "git worktree detected (base branch: main)",
+                "dirty": True,
+            }
+
+        def git_runtime_status(self) -> dict[str, object]:
+            return {
+                "ok": False,
+                "detail": "worktree is dirty in a blocking way",
+                "dirty": True,
+                "remediation": 'git add -A && git commit -m "save state"',
+            }
+
+        def list_recoverable_runs(self) -> list[str]:
+            return ["run-123"]
+
+        def recover_run(self, run_id: str) -> bool:
+            return run_id == "run-123"
+
+        def set_recovery_mode(self, run_id: str, mode: str, prompt=None) -> bool:  # noqa: ANN001
+            return run_id == "run-123" and mode == "manual"
+
+        def recovery_preflight(self, run_id: str) -> dict[str, object]:
+            return {"ok": True, "blocking_reasons": [], "next_commands": []}
+
+        def get_run(self, run_id: str):  # noqa: ANN001
+            class _Run:
+                plan_path = str(tmp_path / ".ralphite" / "plans" / "starter.yaml")
+                metadata = {"run_metrics": {"failure_reason_counts": {}}}
+                artifacts = []
+                status = "paused"
+
+            return _Run()
+
+    monkeypatch.setattr(
+        recover_mod, "_orchestrator", lambda _workspace: _FakeOrchestrator()
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "recover",
+            "--workspace",
+            str(tmp_path),
+            "--json",
+            "--no-resume",
+        ],
+    )
+    assert result.exit_code == RECOVER_EXIT_PENDING
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "paused"
+    assert payload["data"]["git_warning"].startswith("Workspace has uncommitted changes.")
+    assert all(item.get("code") != "git.required" for item in payload["issues"])
+
+
+def test_replay_allows_dirty_workspace_with_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _FakeOrchestrator:
+        def git_repository_status(self) -> dict[str, object]:
+            return {
+                "ok": True,
+                "detail": "git worktree detected (base branch: main)",
+                "dirty": True,
+            }
+
+        def git_runtime_status(self) -> dict[str, object]:
+            return {
+                "ok": False,
+                "detail": "worktree is dirty in a blocking way",
+                "dirty": True,
+                "remediation": 'git add -A && git commit -m "save state"',
+            }
+
+        def rerun_failed(self, run_id: str) -> str:
+            assert run_id == "old-run"
+            return "new-run"
+
+        def wait_for_run(self, run_id: str, timeout: float) -> bool:
+            return True
+
+        def get_run(self, run_id: str):  # noqa: ANN001
+            class _Run:
+                status = "succeeded"
+                artifacts = []
+
+            return _Run()
+
+    monkeypatch.setattr(
+        replay_mod, "_orchestrator", lambda _workspace: _FakeOrchestrator()
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "replay",
+            "old-run",
+            "--workspace",
+            str(tmp_path),
+            "--output",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "succeeded"
+    assert payload["data"]["git_warning"].startswith("Workspace has uncommitted changes.")
 
 
 def test_validate_command_returns_fixes_for_invalid_plan(tmp_path: Path) -> None:
@@ -317,6 +435,32 @@ def test_run_stream_output_surfaces_final_report_preview(tmp_path: Path) -> None
     assert "final_report.md" in result.stdout
 
 
+def test_doctor_reports_repository_and_execution_separately_for_dirty_repo(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "README.md").write_text("dirty change\n", encoding="utf-8")
+    result = subprocess.run(
+        ["uv", "run", "ralphite", "doctor", "--workspace", str(tmp_path), "--output", "json"],
+        cwd=Path(__file__).resolve().parents[2],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    payload = json.loads(result.stdout)
+    checks = payload["data"]["checks"]
+    assert any(
+        item.get("check") == "git-repository" and item.get("status") == "OK"
+        for item in checks
+        if isinstance(item, dict)
+    )
+    assert any(
+        item.get("check") == "git-execution" and item.get("status") == "WARN"
+        for item in checks
+        if isinstance(item, dict)
+    )
+
+
 def test_run_requires_git_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -353,11 +497,42 @@ def test_quickstart_blocks_non_git_workspace(
     checks = payload.get("data", {}).get("doctor", {}).get("checks", [])
     assert any(
         isinstance(item, dict)
-        and item.get("check") == "git-worktree"
+        and item.get("check") == "git-repository"
         and item.get("status") == "FAIL"
         for item in checks
     )
     assert any("git init" in action for action in payload.get("next_actions", []))
+
+
+def test_quickstart_blocks_dirty_workspace_before_run(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("dirty change\n", encoding="utf-8")
+    result = subprocess.run(
+        [
+            "uv",
+            "run",
+            "ralphite",
+            "quickstart",
+            "--workspace",
+            str(tmp_path),
+            "--yes",
+            "--output",
+            "json",
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "failed"
+    checks = payload.get("data", {}).get("doctor", {}).get("checks", [])
+    assert any(
+        isinstance(item, dict)
+        and item.get("check") == "git-execution"
+        and item.get("status") == "WARN"
+        for item in checks
+    )
 
 
 def test_quickstart_non_strict_allows_noncritical_doctor_failure(

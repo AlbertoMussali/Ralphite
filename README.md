@@ -44,14 +44,12 @@ git add -A
 git commit -m "initial workspace state"
 ```
 
-## What To Read Next
+## Canonical Starting Points
 
-- First-run operator guide: [docs/workflows/first-run.md](docs/workflows/first-run.md)
-- Doc hub: [docs/index.md](docs/index.md)
-- User workflows: [docs/workflows/index.md](docs/workflows/index.md)
-- Architecture detail: [docs/architecture/index.md](docs/architecture/index.md)
-- CLI and schema references: [docs/references/index.md](docs/references/index.md)
-- Release readiness runbook: [docs/workflows/release-readiness.md](docs/workflows/release-readiness.md)
+- Operators: start here in `README.md`, then follow [First Run](docs/workflows/first-run.md), then [Workflows Index](docs/workflows/index.md).
+- Contributors: start with [CONTRIBUTING.md](CONTRIBUTING.md), then use the [Documentation Hub](docs/index.md).
+- References (CLI/schema/contracts): use [docs/references/index.md](docs/references/index.md) after completing an operator or contributor start path.
+- `USER_GUIDE.md` is a compact conceptual refresher, not the canonical entrypoint.
 
 ## Defaults and Compatibility
 

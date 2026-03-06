@@ -109,20 +109,40 @@ def _doctor_snapshot(
             {"check": f"cmd:{cmd}", "status": status, "detail": found or "not in PATH"}
         )
 
-    git_status = orch.git_runtime_status()
-    git_status_ok = bool(git_status.get("ok"))
-    git_detail = str(git_status.get("detail", ""))
-    git_remediation = git_status.get("remediation")
-    if git_remediation and not git_status_ok:
-        git_detail += f" (remediation: {git_remediation})"
+    git_repo_status = orch.git_repository_status()
+    git_repo_ok = bool(git_repo_status.get("ok"))
+    git_repo_detail = str(git_repo_status.get("detail", ""))
+    git_repo_remediation = git_repo_status.get("remediation")
+    if git_repo_remediation and not git_repo_ok:
+        git_repo_detail += f" (remediation: {git_repo_remediation})"
     checks.append(
         {
-            "check": "git-worktree",
-            "status": "OK" if git_status_ok else "FAIL",
-            "detail": git_detail,
+            "check": "git-repository",
+            "status": "OK" if git_repo_ok else "FAIL",
+            "detail": git_repo_detail,
         }
     )
-    if not bool(git_status.get("ok")):
+    if not git_repo_ok:
+        ok = False
+
+    git_execution_status = orch.git_runtime_status()
+    git_execution_ok = bool(git_execution_status.get("ok"))
+    git_execution_detail = str(git_execution_status.get("detail", ""))
+    git_execution_remediation = git_execution_status.get("remediation")
+    if git_execution_remediation and not git_execution_ok:
+        git_execution_detail += f" (remediation: {git_execution_remediation})"
+    checks.append(
+        {
+            "check": "git-execution",
+            "status": (
+                "OK"
+                if git_execution_ok
+                else ("WARN" if git_repo_ok else "FAIL")
+            ),
+            "detail": git_execution_detail,
+        }
+    )
+    if not git_execution_ok and not git_repo_ok:
         ok = False
 
     default_backend = str(orch.config.default_backend or "codex").strip().lower()
@@ -220,7 +240,7 @@ def _doctor_snapshot(
 
     tasks_ok = True
     resolver_ok = True
-    git_ready_ok = bool(git_status.get("ok"))
+    git_ready_ok = git_repo_ok
     for plan in plans:
         valid, _issues, summary = validate_plan_content(
             plan.read_text(encoding="utf-8"),

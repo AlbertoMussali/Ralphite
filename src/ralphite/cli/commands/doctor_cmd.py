@@ -67,7 +67,7 @@ def doctor_command(
                     ]
                     if any(
                         isinstance(item, dict)
-                        and item.get("check") == "git-worktree"
+                        and item.get("check") in {"git-repository", "git-execution"}
                         and str(item.get("status", "")).upper() not in {"OK", "PASS"}
                         for item in snapshot.get("checks", [])
                     )

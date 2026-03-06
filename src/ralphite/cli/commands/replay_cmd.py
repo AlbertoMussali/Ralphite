@@ -34,7 +34,7 @@ def replay_command(
     """Replay a previous run in rerun-failed mode."""
     orch = _orchestrator(workspace)
     mode = _normalize_output(output)
-    git_status = orch.git_runtime_status()
+    git_status = orch.git_repository_status()
     if not bool(git_status.get("ok")):
         _git_required_payload(
             command="replay",
@@ -45,6 +45,15 @@ def replay_command(
             git_status=git_status,
         )
         raise typer.Exit(code=1)
+    execution_status = orch.git_runtime_status()
+    dirty_warning = ""
+    if bool(execution_status.get("dirty")):
+        dirty_warning = (
+            "Workspace has uncommitted changes. Replay can proceed, but local edits "
+            "may still create merge conflicts."
+        )
+        if not quiet and mode != "json":
+            console.print(f"[yellow]{dirty_warning}[/yellow]")
 
     new_run_id = orch.rerun_failed(run_id)
     if not quiet and mode != "json":
@@ -64,7 +73,12 @@ def replay_command(
         run_id=new_run_id,
         exit_code=0 if status == "succeeded" else 1,
         next_actions=[present_run_status(status).next_action],
-        data={"source_run_id": run_id, "artifacts": run.artifacts if run else []},
+        data={
+            "source_run_id": run_id,
+            "artifacts": run.artifacts if run else [],
+            "git": git_status,
+            "git_warning": dirty_warning,
+        },
     )
     _emit_payload(mode, payload, title="Replay")
     if status != "succeeded":

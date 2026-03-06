@@ -13,12 +13,12 @@ uv run --no-sync ralphite check --workspace /tmp/ralphite-strict-check --strict 
 
 ## Audience Navigation
 
-- Operators: [docs/workflows/index.md](workflows/index.md)
-- Contributors: [docs/design-docs/index.md](design-docs/index.md)
+- Operators (canonical start): [README.md](../README.md) -> [docs/workflows/first-run.md](workflows/first-run.md) -> [docs/workflows/index.md](workflows/index.md)
+- Contributors (canonical start): [CONTRIBUTING.md](../CONTRIBUTING.md) -> this hub (`docs/index.md`) -> [docs/design-docs/index.md](design-docs/index.md)
 - Maintainers: [docs/architecture/index.md](architecture/index.md)
 - Coding agents: [AGENTS.md](../AGENTS.md), [docs/references/index.md](references/index.md)
 
-## Start Here
+## Follow-On Reading
 
 1. Product and quickstart: [README.md](../README.md)
 2. Runtime model: [docs/architecture/runtime-execution.md](architecture/runtime-execution.md)

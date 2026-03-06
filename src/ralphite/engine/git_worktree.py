@@ -55,7 +55,7 @@ class GitWorktreeManager:
                 return name
         return "main"
 
-    def runtime_status(self) -> dict[str, Any]:
+    def repository_status(self) -> dict[str, Any]:
         try:
             subprocess.run(
                 ["git", "rev-parse", "--is-inside-work-tree"],
@@ -84,21 +84,32 @@ class GitWorktreeManager:
             }
 
         status = self._git(["status", "--porcelain"], check=False)
-        if status.returncode == 0 and status.stdout.strip():
-            return {
-                "ok": False,
-                "reason": "git_required",
-                "workspace_root": str(self.workspace_root),
-                "detail": "worktree is dirty in a blocking way",
-                "remediation": 'git add -A && git commit -m "save state"',
-            }
-
         return {
             "ok": True,
             "workspace_root": str(self.workspace_root),
             "base_branch": self.base_branch,
+            "dirty": status.returncode == 0 and bool(status.stdout.strip()),
             "detail": f"git worktree detected (base branch: {self.base_branch})",
         }
+
+    def execution_status(self) -> dict[str, Any]:
+        repo = self.repository_status()
+        if not bool(repo.get("ok")):
+            return repo
+        if bool(repo.get("dirty")):
+            return {
+                "ok": False,
+                "reason": "git_required",
+                "workspace_root": str(self.workspace_root),
+                "base_branch": self.base_branch,
+                "dirty": True,
+                "detail": "worktree is dirty in a blocking way",
+                "remediation": 'git add -A && git commit -m "save state"',
+            }
+        return {**repo, "dirty": False}
+
+    def runtime_status(self) -> dict[str, Any]:
+        return self.execution_status()
 
     def _ensure_git_available(self) -> None:
         if not self.git_available:

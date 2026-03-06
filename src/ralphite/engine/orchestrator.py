@@ -302,10 +302,22 @@ class LocalOrchestrator:
         return "revision_only", self.paths["plans"] / filename
 
     def git_runtime_status(self) -> dict[str, Any]:
-        return GitWorktreeManager(self.workspace_root, "runtime-check").runtime_status()
+        return GitWorktreeManager(
+            self.workspace_root, "runtime-check"
+        ).execution_status()
+
+    def git_repository_status(self) -> dict[str, Any]:
+        return GitWorktreeManager(
+            self.workspace_root, "runtime-check"
+        ).repository_status()
 
     def require_git_workspace(self) -> None:
         status = self.git_runtime_status()
+        if not bool(status.get("ok")):
+            raise GitRequiredError(self.workspace_root)
+
+    def require_git_repository(self) -> None:
+        status = self.git_repository_status()
         if not bool(status.get("ok")):
             raise GitRequiredError(self.workspace_root)
 
@@ -355,8 +367,12 @@ class LocalOrchestrator:
         reasoning_effort_override: str | None = None,
         permission_snapshot: dict[str, list[str]] | None = None,
         metadata: dict[str, Any] | None = None,
+        require_clean_git: bool = True,
     ) -> str:
-        self.require_git_workspace()
+        if require_clean_git:
+            self.require_git_workspace()
+        else:
+            self.require_git_repository()
         compile_started = time.perf_counter()
         if plan_content is None:
             source_path = self._resolve_plan_path(plan_ref)
@@ -540,6 +556,7 @@ class LocalOrchestrator:
         return self.start_run(
             plan_ref=previous.plan_path,
             metadata={"replay_of": run_id, "mode": "rerun_failed"},
+            require_clean_git=False,
         )
 
     def list_recoverable_runs(self) -> list[str]:
@@ -568,7 +585,7 @@ class LocalOrchestrator:
         )
 
     def recover_run(self, run_id: str) -> bool:
-        self.require_git_workspace()
+        self.require_git_repository()
         if run_id in self.active:
             return True
 

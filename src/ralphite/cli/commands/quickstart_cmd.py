@@ -108,13 +108,23 @@ def quickstart_command(
     doctor_started = time.perf_counter()
     snapshot = _doctor_snapshot(orch, include_fix_suggestions=False)
     blocking_checks, warning_checks = _doctor_evaluation(snapshot, strict=strict_doctor)
+    git_execution_blockers = [
+        item
+        for item in snapshot.get("checks", [])
+        if isinstance(item, dict)
+        and item.get("check") == "git-execution"
+        and str(item.get("status", "")).upper() not in {"OK", "PASS"}
+    ]
+    for item in git_execution_blockers:
+        if item not in blocking_checks:
+            blocking_checks.append(item)
     doctor_detail = f"blocking={len(blocking_checks)} warnings={len(warning_checks)} strict={strict_doctor}"
     record_step("Doctor", doctor_started, doctor_detail)
     if blocking_checks:
         recommended = _collect_recommended_commands(snapshot)
         git_failure = any(
             isinstance(item, dict)
-            and item.get("check") == "git-worktree"
+            and item.get("check") in {"git-repository", "git-execution"}
             and str(item.get("status", "")).upper() not in {"OK", "PASS"}
             for item in blocking_checks
         )

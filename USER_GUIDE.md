@@ -2,6 +2,13 @@
 
 Ralphite is a local-first multi-agent orchestrator. Use this guide to understand the core concepts and how to execute your first plan.
 
+> [!IMPORTANT]
+> Canonical starting points:
+> - Operators: [README.md](README.md) -> [docs/workflows/first-run.md](docs/workflows/first-run.md)
+> - Contributors: [CONTRIBUTING.md](CONTRIBUTING.md) -> [docs/index.md](docs/index.md)
+>
+> This page is a compact conceptual refresher, not the primary entrypoint.
+
 ## Core Concepts
 
 ### 1. Workspaces

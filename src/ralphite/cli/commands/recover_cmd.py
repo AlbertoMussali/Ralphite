@@ -84,7 +84,7 @@ def recover_command(
     """Recover and resume a checkpointed run with explicit recovery mode and automation semantics."""
     orch = _orchestrator(workspace)
     output_mode = _normalize_output(output, json_mode=json_mode)
-    git_status = orch.git_runtime_status()
+    git_status = orch.git_repository_status()
     if not bool(git_status.get("ok")):
         _git_required_payload(
             command="recover",
@@ -95,6 +95,15 @@ def recover_command(
             git_status=git_status,
         )
         raise typer.Exit(code=RECOVER_EXIT_INVALID_INPUT)
+    execution_status = orch.git_runtime_status()
+    dirty_warning = ""
+    if bool(execution_status.get("dirty")):
+        dirty_warning = (
+            "Workspace has uncommitted changes. Recovery can proceed, but local edits "
+            "may still create merge conflicts."
+        )
+        if output_mode != "json" and not quiet:
+            console.print(f"[yellow]{dirty_warning}[/yellow]")
 
     allowed_modes = {"manual", "agent_best_effort", "abort_phase"}
     if mode not in allowed_modes:
@@ -195,6 +204,8 @@ def recover_command(
                 "recovery_mode": mode,
                 "recovery_mode_label": recovery_label,
                 "primary_failure_reason": _primary_failure_reason(recovered_run),
+                "git": git_status,
+                "git_warning": dirty_warning,
             },
         )
         _emit_payload(output_mode, payload, title="Recovery Preflight")
@@ -222,6 +233,8 @@ def recover_command(
                 "recovery_mode": mode,
                 "recovery_mode_label": recovery_label,
                 "primary_failure_reason": _primary_failure_reason(recovered_run),
+                "git": git_status,
+                "git_warning": dirty_warning,
             },
         )
         _emit_payload(output_mode, payload, title="Recovery")
@@ -241,6 +254,8 @@ def recover_command(
                 "recovery_mode": mode,
                 "recovery_mode_label": recovery_label,
                 "primary_failure_reason": _primary_failure_reason(recovered_run),
+                "git": git_status,
+                "git_warning": dirty_warning,
             },
         )
         _emit_payload(output_mode, payload, title="Recovery")
@@ -267,6 +282,8 @@ def recover_command(
                 "recovery_mode": mode,
                 "recovery_mode_label": recovery_label,
                 "primary_failure_reason": _primary_failure_reason(recovered_run),
+                "git": git_status,
+                "git_warning": dirty_warning,
             },
         )
         _emit_payload(output_mode, payload, title="Recovery")
@@ -309,6 +326,8 @@ def recover_command(
             "recovery_mode": mode,
             "recovery_mode_label": recovery_label,
             "primary_failure_reason": _primary_failure_reason(run),
+            "git": git_status,
+            "git_warning": dirty_warning,
         },
     )
     _emit_payload(output_mode, payload, title="Recovery Result")
