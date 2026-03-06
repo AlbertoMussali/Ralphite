@@ -34,7 +34,7 @@ agents:
 tasks:
   - id: task_define_polish_scope
     title: Confirm the product-readiness scope, success bar, and repo surfaces for docs, onboarding, recovery, reports, and cold-start behavior before implementation.
-    completed: false
+    completed: true
     routing:
       group: trunk
       tags: [readiness, planning]

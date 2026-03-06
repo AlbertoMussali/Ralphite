@@ -28,7 +28,7 @@ Ralphite supports multiple execution backends:
 - **Codex**: The default headless agent (uses `gpt-5.3-codex`).
 - **Cursor**: Leverages the Cursor agent command.
 
-## Getting Started
+## Quick Commands (After Canonical Start)
 
 ### Installation
 Ralphite is designed to be run with `uv`:
@@ -42,7 +42,7 @@ uv run ralphite init --workspace .
 ```
 
 ### The "Happy Path"
-For a quick start, use the `quickstart` command which combines environment checking, bootstrapping, and execution:
+After following the canonical start path in `README.md` (operators) or `CONTRIBUTING.md` + `docs/index.md` (contributors), use `quickstart` for environment checking, bootstrapping, and execution:
 ```bash
 uv run ralphite quickstart --workspace . --yes
 ```
