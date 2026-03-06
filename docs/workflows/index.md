@@ -3,6 +3,10 @@
 Owners: cli, engine, release
 Last verified against commit: a7aaeed
 
+Canonical navigation:
+- Operators should start at [README.md](../../README.md) and run [First Run](first-run.md) before using this index.
+- Contributors should start at [CONTRIBUTING.md](../../CONTRIBUTING.md) and [docs/index.md](../index.md), then use workflows as needed.
+
 - [First Run](first-run.md)
 - [Recovery](recovery.md)
 - [Release Readiness](release-readiness.md)
