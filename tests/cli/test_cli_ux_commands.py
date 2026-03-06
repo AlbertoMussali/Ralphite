@@ -18,6 +18,7 @@ import ralphite.cli.commands.quickstart_cmd as quickstart_mod
 import ralphite.cli.commands.recover_cmd as recover_mod
 import ralphite.cli.commands.replay_cmd as replay_mod
 import ralphite.cli.commands.run_cmd as run_mod
+import ralphite.cli.commands.watch_cmd as watch_mod
 from ralphite.cli.cli import app
 from ralphite.cli.core import _orchestrator
 from ralphite.cli.exit_codes import RECOVER_EXIT_PENDING
@@ -424,6 +425,49 @@ def test_run_table_output_shows_run_id_and_artifacts(tmp_path: Path) -> None:
     assert "Run ID:" in result.stdout
 
 
+def test_run_table_output_prints_watch_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _FakeConfig:
+        default_backend = "codex"
+        default_model = "gpt-5.3-codex"
+        default_reasoning_effort = "medium"
+
+    class _FakeRun:
+        status = "succeeded"
+        artifacts = []
+        metadata = {"run_metrics": {"total_seconds": 0.1}}
+
+    class _FakeOrchestrator:
+        config = _FakeConfig()
+
+        def git_runtime_status(self) -> dict[str, object]:
+            return {"ok": True}
+
+        def collect_requirements(self, plan_ref=None):  # noqa: ANN001
+            return {"tools": [], "mcps": []}
+
+        def start_run(self, **kwargs):  # noqa: ANN003
+            return "run-123"
+
+        def wait_for_run(self, run_id: str, timeout: float) -> bool:
+            return True
+
+        def get_run(self, run_id: str):  # noqa: ANN001
+            return _FakeRun()
+
+    monkeypatch.setattr(run_mod, "_orchestrator", lambda _workspace: _FakeOrchestrator())
+    monkeypatch.setattr(run_mod, "_resolve_plan_ref", lambda orch, plan: tmp_path / "plan.yaml")
+    runner = CliRunner()
+    result = runner.invoke(
+        app, ["run", "--workspace", str(tmp_path), "--yes", "--output", "table"]
+    )
+    assert result.exit_code == 0
+    assert "Watch this run:" in result.stdout
+    assert "uv run ralphite watch --workspace" in result.stdout
+    assert "--run-id run-123" in result.stdout
+
+
 def test_run_stream_output_surfaces_final_report_preview(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(
@@ -433,6 +477,36 @@ def test_run_stream_output_surfaces_final_report_preview(tmp_path: Path) -> None
     assert "Final Report:" in result.stdout
     assert "## Outcome" in result.stdout
     assert "final_report.md" in result.stdout
+
+
+def test_watch_uses_latest_run_when_no_id_passed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    watched: list[tuple[str, bool]] = []
+
+    class _Run:
+        id = "latest-run"
+
+    class _FakeOrchestrator:
+        def list_history(self, limit=20, query=None):  # noqa: ANN001
+            return [_Run()]
+
+        def get_run(self, run_id: str):  # noqa: ANN001
+            return _Run()
+
+    monkeypatch.setattr(
+        watch_mod, "_orchestrator", lambda _workspace: _FakeOrchestrator()
+    )
+    monkeypatch.setattr(
+        watch_mod,
+        "_print_run_stream",
+        lambda orch, run_id, verbose=False: watched.append((run_id, verbose)),
+    )
+    runner = CliRunner()
+    result = runner.invoke(app, ["watch", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "Watching run:" in result.stdout
+    assert watched == [("latest-run", False)]
 
 
 def test_doctor_reports_repository_and_execution_separately_for_dirty_repo(

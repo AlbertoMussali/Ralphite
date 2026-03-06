@@ -7,6 +7,7 @@ from .recover_cmd import recover_command
 from .replay_cmd import replay_command
 from .run_cmd import run_command
 from .validate_cmd import validate_command
+from .watch_cmd import watch_command
 
 __all__ = [
     "check_command",
@@ -18,4 +19,5 @@ __all__ = [
     "replay_command",
     "run_command",
     "validate_command",
+    "watch_command",
 ]

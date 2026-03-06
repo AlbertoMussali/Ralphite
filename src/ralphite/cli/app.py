@@ -12,6 +12,7 @@ from .commands import (
     replay_command,
     run_command,
     validate_command,
+    watch_command,
 )
 
 app = typer.Typer(
@@ -25,6 +26,7 @@ app.command(name="quickstart")(quickstart_command)
 app.command(name="validate")(validate_command)
 app.command(name="doctor")(doctor_command)
 app.command(name="run")(run_command)
+app.command(name="watch")(watch_command)
 app.command(name="recover")(recover_command)
 app.command(name="history")(history_command)
 app.command(name="replay")(replay_command)
