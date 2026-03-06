@@ -157,6 +157,98 @@ class GitWorktreeManager:
                 changed_files.append({"status": status, "path": parts[1]})
         return {"commit": commit_sha, "changed_files": changed_files}
 
+    def _workspace_local_changes(self, cwd: Path | None = None) -> list[str]:
+        status = self._git(
+            ["status", "--porcelain", "--untracked-files=all"],
+            cwd=cwd,
+            check=False,
+        )
+        if status.returncode != 0:
+            return []
+        files: list[str] = []
+        for raw in status.stdout.splitlines():
+            line = raw.rstrip()
+            if len(line) < 4:
+                continue
+            payload = line[3:]
+            if " -> " in payload:
+                payload = payload.split(" -> ", 1)[1]
+            candidate = payload.strip()
+            if candidate:
+                files.append(candidate)
+        return sorted(dict.fromkeys(files))
+
+    def _phase_touched_files(self, branch: str) -> list[str]:
+        diff = self._git(
+            ["diff", "--name-only", f"{self.base_branch}...{branch}"], check=False
+        )
+        if diff.returncode != 0:
+            return []
+        return sorted({line.strip() for line in diff.stdout.splitlines() if line.strip()})
+
+    def _parse_merge_blocked_files(self, output: str) -> list[str]:
+        lines = output.splitlines()
+        files: list[str] = []
+        capture = False
+        for raw in lines:
+            line = raw.rstrip()
+            lowered = line.lower().strip()
+            if (
+                "would be overwritten by merge" in lowered
+                or "the following untracked working tree files would be overwritten by merge" in lowered
+            ):
+                capture = True
+                continue
+            if not capture:
+                continue
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("Please ") or stripped.startswith("Aborting"):
+                break
+            files.append(stripped)
+        return sorted(dict.fromkeys(files))
+
+    def _tracked_unmerged_files(self, worktree: Path) -> list[str]:
+        result = self._git(
+            ["diff", "--name-only", "--diff-filter=U"],
+            cwd=worktree,
+            check=False,
+        )
+        if result.returncode != 0:
+            return []
+        return sorted({line.strip() for line in result.stdout.splitlines() if line.strip()})
+
+    def _collect_merge_conflict_details(
+        self,
+        worktree: Path,
+        *,
+        output: str = "",
+    ) -> dict[str, Any]:
+        current_run_conflict_files = self._tracked_unmerged_files(worktree)
+        blocking_files = self._parse_merge_blocked_files(output)
+        conflict_files = (
+            current_run_conflict_files if current_run_conflict_files else blocking_files
+        )
+        return {
+            "conflict_files": conflict_files,
+            "current_run_conflict_files": current_run_conflict_files,
+            "blocking_files": blocking_files,
+        }
+
+    def pre_base_integration_check(
+        self, phase_branch: str
+    ) -> dict[str, Any]:
+        local_files = self._workspace_local_changes()
+        phase_files = self._phase_touched_files(phase_branch)
+        overlap_files = sorted(set(local_files).intersection(phase_files))
+        return {
+            "ok": len(overlap_files) == 0,
+            "local_files": local_files,
+            "phase_files": phase_files,
+            "overlap_files": overlap_files,
+        }
+
     def _conflict_next_commands(self, worktree: Path) -> list[str]:
         return [
             f"cd {worktree}",
@@ -376,36 +468,65 @@ class GitWorktreeManager:
                 check=False,
             )
             if merged.returncode != 0:
+                merge_output = merged.stderr.strip() or merged.stdout.strip()
+                conflict_details = self._collect_merge_conflict_details(
+                    integration_path, output=merge_output
+                )
                 return (
                     "recovery_required",
                     {
                         "reason": "worker_merge_conflict",
                         "phase": phase,
                         "branch": branch,
-                        "error": merged.stderr.strip() or merged.stdout.strip(),
+                        "error": merge_output,
                         "worktree": str(integration_path),
-                        "conflict_files": self._collect_conflict_files(
-                            integration_path
-                        ),
+                        **conflict_details,
                         "next_commands": self._conflict_next_commands(integration_path),
                     },
                 )
             phase_state["merged_workers"].append(branch)
 
+        precheck = self.pre_base_integration_check(phase_state["phase_branch"])
+        if not bool(precheck.get("ok")):
+            return (
+                "recovery_required",
+                {
+                    "reason": "base_integration_blocked_by_local_changes",
+                    "phase": phase,
+                    "branch": phase_state["phase_branch"],
+                    "worktree": str(self.workspace_root),
+                    "overlap_files": list(precheck.get("overlap_files") or []),
+                    "base_local_files": list(precheck.get("local_files") or []),
+                    "phase_touched_files": list(precheck.get("phase_files") or []),
+                    "conflict_files": [],
+                    "current_run_conflict_files": [],
+                    "next_commands": [
+                        "git status --short",
+                        "Commit, stash, or reconcile the overlapping files before resuming recovery.",
+                        "Run `uv run ralphite recover --workspace . --preflight-only --output table` to inspect the blocked run.",
+                    ],
+                },
+            )
+
         merged_to_base = self._git(
             ["merge", "--no-ff", "--no-edit", phase_state["phase_branch"]], check=False
         )
         if merged_to_base.returncode != 0:
+            merge_output = (
+                merged_to_base.stderr.strip() or merged_to_base.stdout.strip()
+            )
+            conflict_details = self._collect_merge_conflict_details(
+                self.workspace_root, output=merge_output
+            )
             return (
                 "recovery_required",
                 {
                     "reason": "base_merge_conflict",
                     "phase": phase,
                     "branch": phase_state["phase_branch"],
-                    "error": merged_to_base.stderr.strip()
-                    or merged_to_base.stdout.strip(),
+                    "error": merge_output,
                     "worktree": str(self.workspace_root),
-                    "conflict_files": self._collect_conflict_files(self.workspace_root),
+                    **conflict_details,
                     "next_commands": self._conflict_next_commands(self.workspace_root),
                 },
             )
@@ -517,6 +638,8 @@ class GitWorktreeManager:
         self._ensure_git_available()
         messages: list[str] = []
         phase_state = self.prepare_phase(state, phase)
+        removed_paths: list[str] = []
+        removed_branches: list[str] = []
 
         worker_paths = [
             entry.get("worktree_path", "")
@@ -532,10 +655,51 @@ class GitWorktreeManager:
             removed = self._git(["worktree", "remove", "--force", path], check=False)
             if removed.returncode == 0:
                 messages.append(f"removed worktree {path}")
+                removed_paths.append(path)
             else:
                 messages.append(
                     f"worktree remove skipped {path}: {removed.stderr.strip() or removed.stdout.strip()}"
                 )
+
+        phase_branches = [phase_state.get("phase_branch", "")]
+        phase_branches.extend(
+            str(entry.get("branch", ""))
+            for entry in phase_state.get("workers", {}).values()
+            if isinstance(entry, dict)
+        )
+        for branch in reversed(list(dict.fromkeys([item for item in phase_branches if item]))):
+            exists = self._git(["rev-parse", "--verify", branch], check=False)
+            if exists.returncode != 0:
+                messages.append(f"branch already removed {branch}")
+                continue
+            deleted = self._git(["branch", "-D", branch], check=False)
+            if deleted.returncode == 0:
+                messages.append(f"deleted branch {branch}")
+                removed_branches.append(branch)
+            else:
+                messages.append(
+                    f"branch delete skipped {branch}: {deleted.stderr.strip() or deleted.stdout.strip()}"
+                )
+
+        state["cleanup_paths"] = [
+            item for item in state.get("cleanup_paths", []) if item not in removed_paths
+        ]
+        state["cleanup_branches"] = [
+            item
+            for item in state.get("cleanup_branches", [])
+            if item not in removed_branches
+        ]
+        for worker in phase_state.get("workers", {}).values():
+            if not isinstance(worker, dict):
+                continue
+            if str(worker.get("worktree_path") or "") in removed_paths:
+                worker["worktree_path"] = ""
+            if str(worker.get("branch") or "") in removed_branches:
+                worker["branch"] = ""
+        if str(phase_state.get("integration_worktree") or "") in removed_paths:
+            phase_state["integration_worktree"] = ""
+        if str(phase_state.get("phase_branch") or "") in removed_branches:
+            phase_state["phase_branch"] = ""
         return messages
 
     def cleanup_all(self, state: dict[str, Any]) -> list[str]:
@@ -544,21 +708,6 @@ class GitWorktreeManager:
         phases = list(self.bootstrap_state(state).get("phases", {}).keys())
         for phase in phases:
             messages.extend(self.cleanup_phase(state, phase))
-
-        for branch in reversed(list(dict.fromkeys(self.list_managed_branches(state)))):
-            if not branch:
-                continue
-            exists = self._git(["rev-parse", "--verify", branch], check=False)
-            if exists.returncode != 0:
-                messages.append(f"branch already removed {branch}")
-                continue
-            deleted = self._git(["branch", "-D", branch], check=False)
-            if deleted.returncode == 0:
-                messages.append(f"deleted branch {branch}")
-            else:
-                messages.append(
-                    f"branch delete skipped {branch}: {deleted.stderr.strip() or deleted.stdout.strip()}"
-                )
         return messages
 
     def commit_workspace_changes(

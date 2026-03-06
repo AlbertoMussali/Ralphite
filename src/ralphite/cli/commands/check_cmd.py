@@ -17,6 +17,7 @@ from ..core import (
     console,
 )
 from ..doctoring import _doctor_snapshot, _render_doctor_table
+from ..doctoring import _doctor_evaluation
 
 
 def check_command(
@@ -49,10 +50,11 @@ def check_command(
     capture_subprocess_output = machine_mode or quiet
 
     snapshot = _doctor_snapshot(orch, include_fix_suggestions=False)
+    blocking_checks, _warning_checks = _doctor_evaluation(snapshot, strict=strict)
     if not machine_mode and not quiet and not strict:
         _render_doctor_table(snapshot)
     command_results: list[dict[str, object]] = []
-    if strict and not bool(snapshot.get("ok")):
+    if strict and (blocking_checks or not bool(snapshot.get("ok"))):
         envelope = _result_payload(
             command="check",
             ok=False,

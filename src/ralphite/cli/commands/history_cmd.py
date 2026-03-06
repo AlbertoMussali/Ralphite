@@ -42,6 +42,18 @@ def history_command(
             if isinstance(run.metadata.get("run_metrics"), dict)
             else {}
         )
+        interruptions = (
+            metrics.get("interruption_reason_counts")
+            if isinstance(metrics.get("interruption_reason_counts"), dict)
+            else {}
+        )
+        if interruptions:
+            return str(
+                max(
+                    interruptions.items(),
+                    key=lambda item: int(item[1]) if isinstance(item[1], int) else 0,
+                )[0]
+            )
         counts = (
             metrics.get("failure_reason_counts")
             if isinstance(metrics.get("failure_reason_counts"), dict)
@@ -74,7 +86,8 @@ def history_command(
             ),
             "retry_count": int(run.retry_count or 0),
             "failure_reasons": (
-                run.metadata.get("run_metrics", {}).get("failure_reason_counts")
+                run.metadata.get("run_metrics", {}).get("interruption_reason_counts")
+                or run.metadata.get("run_metrics", {}).get("failure_reason_counts")
                 if isinstance(run.metadata.get("run_metrics"), dict)
                 else {}
             ),

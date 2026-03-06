@@ -58,7 +58,7 @@ def test_git_worktree_worker_merge_and_cleanup_idempotent(tmp_path: Path) -> Non
     cleanup_first = manager.cleanup_all(state)
     cleanup_second = manager.cleanup_all(state)
     assert cleanup_first
-    assert cleanup_second
+    assert cleanup_second == []
 
 
 def test_git_worktree_conflict_fail_closed_reports_details(tmp_path: Path) -> None:
@@ -83,7 +83,55 @@ def test_git_worktree_conflict_fail_closed_reports_details(tmp_path: Path) -> No
     assert status == "recovery_required"
     assert details.get("reason") in {"base_merge_conflict", "worker_merge_conflict"}
     assert isinstance(details.get("conflict_files"), list)
+    assert isinstance(details.get("current_run_conflict_files"), list)
     assert details.get("next_commands")
+
+
+def test_pre_base_integration_check_blocks_overlapping_local_changes(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    manager = GitWorktreeManager(tmp_path, "runblock123")
+    state = manager.bootstrap_state()
+
+    manager.prepare_phase(state, "phase-1")
+    worker = manager.prepare_worker(state, "phase-1", "phase-1::parallel::t1")
+    worker_path = Path(str(worker["worktree_path"]))
+    (worker_path / "shared.txt").write_text("worker-change\n", encoding="utf-8")
+    ok, _meta = manager.commit_worker(
+        state, "phase-1", "phase-1::parallel::t1", "worker changes shared file"
+    )
+    assert ok is True
+
+    (tmp_path / "shared.txt").write_text("local change without commit\n", encoding="utf-8")
+
+    status, details = manager.integrate_phase(state, "phase-1")
+    assert status == "recovery_required"
+    assert details.get("reason") == "base_integration_blocked_by_local_changes"
+    assert "shared.txt" in details.get("overlap_files", [])
+
+
+def test_cleanup_phase_prunes_state_after_successful_merge(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    manager = GitWorktreeManager(tmp_path, "runclean123")
+    state = manager.bootstrap_state()
+
+    manager.prepare_phase(state, "phase-1")
+    worker = manager.prepare_worker(state, "phase-1", "phase-1::parallel::t1")
+    worker_path = Path(str(worker["worktree_path"]))
+    (worker_path / "worker.txt").write_text("worker output\n", encoding="utf-8")
+    ok, _meta = manager.commit_worker(
+        state, "phase-1", "phase-1::parallel::t1", "worker commit"
+    )
+    assert ok is True
+
+    status, _meta = manager.integrate_phase(state, "phase-1")
+    assert status == "success"
+
+    notes = manager.cleanup_phase(state, "phase-1")
+    assert notes
+    assert state["cleanup_paths"] == []
+    assert state["cleanup_branches"] == []
+    phase_state = state["phases"]["phase-1"]
+    assert phase_state.get("integration_worktree") == ""
 
 
 def test_detect_stale_artifacts_reports_orphans(tmp_path: Path) -> None:

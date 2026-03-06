@@ -13,8 +13,9 @@ A single deterministic release signal is needed for release readiness.
 `check --strict` requires:
 
 1. doctor success (blocking checks)
-2. backend smoke success for selected default backend
-3. all strict check suites passing
+2. no doctor hygiene warnings for recoverable runs or stale managed artifacts
+3. backend smoke success for selected default backend
+4. all strict check suites passing
 
 Cursor support is optional unless selected in config/CLI.
 
@@ -28,6 +29,7 @@ Cursor support is optional unless selected in config/CLI.
 
 - Stronger readiness confidence.
 - Slightly stricter local environment requirements.
+- Repeated operator loops now fail strict checks until stale recovery state is resolved.
 
 ## Rollback / Migration Plan
 

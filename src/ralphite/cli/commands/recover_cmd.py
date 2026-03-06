@@ -37,7 +37,9 @@ def _primary_failure_reason(run: object) -> str:
     metrics = metadata.get("run_metrics", {})
     if not isinstance(metrics, dict):
         return ""
-    histogram = metrics.get("failure_reason_counts", {})
+    histogram = metrics.get("interruption_reason_counts", {})
+    if not isinstance(histogram, dict) or not histogram:
+        histogram = metrics.get("failure_reason_counts", {})
     if not isinstance(histogram, dict) or not histogram:
         return ""
     ranked = sorted(
@@ -93,6 +95,12 @@ def _recommend_recovery_mode(
             "manual",
             present_recovery_mode("manual"),
             "Conflict files are present. Resolve merge markers manually before resuming.",
+        )
+    if reason == "base_integration_blocked_by_local_changes":
+        return (
+            "manual",
+            present_recovery_mode("manual"),
+            "The primary workspace has overlapping local edits. Preserve those edits and resolve the overlap manually before resuming.",
         )
     if reason in {"worktree_prepare_failed", "phase_worktree_add_failed"}:
         return (

@@ -125,6 +125,27 @@ FAILURE_MAP: dict[str, FailureAdvice] = {
         next_action="Inspect event timeline and rerun failed nodes.",
         command_hint="uv run ralphite history --workspace . --output table",
     ),
+    "base_integration_blocked_by_local_changes": FailureAdvice(
+        code="base_integration_blocked_by_local_changes",
+        title="Base Integration Blocked",
+        message="Merge to the primary workspace was blocked by overlapping local changes.",
+        next_action="Commit, stash, or manually reconcile the overlapping workspace edits before resuming recovery.",
+        command_hint="uv run ralphite recover --workspace . --preflight-only --output table",
+    ),
+    "stale_recovery_state_present": FailureAdvice(
+        code="stale_recovery_state_present",
+        title="Stale Recovery State Present",
+        message="A previous recoverable run or managed git artifact is still active in this workspace.",
+        next_action="Resolve the existing run first, or clean the stale managed artifacts before starting a new run.",
+        command_hint="uv run ralphite history --workspace . --output table",
+    ),
+    "recovery_conflict_files_present": FailureAdvice(
+        code="recovery_conflict_files_present",
+        title="Recovery Conflicts Still Present",
+        message="Recovery cannot continue because unresolved conflict files remain in the recovery worktree.",
+        next_action="Resolve the listed conflicts, stage the result, and resume recovery.",
+        command_hint="uv run ralphite recover --workspace . --output table",
+    ),
     "acceptance_command_timeout": FailureAdvice(
         code="acceptance_command_timeout",
         title="Acceptance Timeout",

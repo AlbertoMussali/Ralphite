@@ -295,6 +295,37 @@ def _git_required_payload(
     _emit_payload(output, payload, title=title)
 
 
+def _run_start_blocked_payload(
+    *,
+    command: str,
+    title: str,
+    output: str,
+    preflight: dict[str, Any],
+    data: dict[str, Any] | None = None,
+    exit_code: int = 1,
+) -> None:
+    advice = classify_failure("stale_recovery_state_present")
+    detail = str(preflight.get("detail") or advice.message).strip() or advice.message
+    payload = _result_payload(
+        command=command,
+        ok=False,
+        status="failed",
+        exit_code=exit_code,
+        issues=[
+            {
+                "code": str(preflight.get("reason") or advice.code),
+                "message": detail,
+            }
+        ],
+        next_actions=_dedupe_strings(
+            list(preflight.get("next_commands") or [])
+            + [advice.next_action, advice.command_hint]
+        ),
+        data={"run_start_preflight": preflight, **(data or {})},
+    )
+    _emit_payload(output, payload, title=title)
+
+
 def _normalize_output(output: str, json_mode: bool = False) -> str:
     if json_mode:
         return "json"

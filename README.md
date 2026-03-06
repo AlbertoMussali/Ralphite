@@ -19,6 +19,7 @@ What this should do:
 - `init` creates `.ralphite/config.toml` and a starter v1 plan.
 - `quickstart` runs `doctor`, verifies git/worktree readiness, bootstraps missing workspace state, shows the selected plan/backend/model/capability scope, and starts a first run.
 - `run` executes the selected plan directly and returns a result with run id, next action, and artifact paths.
+- `run` and `quickstart` accept `--first-failure-recovery agent_best_effort` when you want one automatic agent recovery attempt at the first recoverable integration failure.
 - Successful runs always leave behind a human-facing `final_report.md` with outcome, changed files, acceptance results, failures, and next steps.
 
 ## Starter Templates
@@ -35,6 +36,8 @@ If the happy path fails:
 - `uv run ralphite doctor --workspace . --output table`
 - `uv run ralphite history --workspace . --output table`
 - `uv run ralphite recover --workspace . --output table`
+
+If `run`, `quickstart`, or `replay` stop before execution with stale recovery-state guidance, resolve the paused run first and remove the reported stale managed worktrees or branches before starting another run.
 
 If `doctor` reports `git-worktree` as failed, initialize the workspace first:
 

@@ -293,7 +293,11 @@ def _doctor_snapshot(
 
     recoverable = orch.list_recoverable_runs()
     checks.append(
-        {"check": "recoverable-runs", "status": "OK", "detail": str(len(recoverable))}
+        {
+            "check": "recoverable-runs",
+            "status": "WARN" if recoverable else "OK",
+            "detail": str(len(recoverable)),
+        }
     )
 
     stale = orch.stale_artifact_report(max_age_hours=24)
@@ -449,6 +453,18 @@ def _render_doctor_table(snapshot: dict[str, Any]) -> None:
     )
     if stale_worktrees or stale_branches:
         lines = []
+        recoverable = next(
+            (
+                row.get("detail")
+                for row in snapshot.get("checks", [])
+                if isinstance(row, dict) and row.get("check") == "recoverable-runs"
+            ),
+            "0",
+        )
+        if str(recoverable) != "0":
+            lines.append(
+                f"  - recoverable runs={recoverable}; resolve or resume them before starting a new run"
+            )
         for item in stale_worktrees[:10]:
             if not isinstance(item, dict):
                 continue

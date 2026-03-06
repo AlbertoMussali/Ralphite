@@ -272,13 +272,31 @@ def _build_failures(run: RunViewState, catalog: dict[str, dict[str, Any]]) -> li
         lines.append(f"- Recovery blocker: `{recovery_reason}`")
     if recovery_error:
         lines.append(f"- Recovery detail: {recovery_error}")
+    overlap_files = (
+        details.get("overlap_files")
+        if isinstance(details.get("overlap_files"), list)
+        else []
+    )
+    for item in overlap_files:
+        lines.append(f"- Overlapping workspace file: `{item}`")
     conflicts = (
-        details.get("conflict_files")
+        details.get("current_run_conflict_files")
+        if isinstance(details.get("current_run_conflict_files"), list)
+        else details.get("conflict_files")
         if isinstance(details.get("conflict_files"), list)
         else []
     )
     for item in conflicts:
         lines.append(f"- Unresolved conflict: `{item}`")
+    auto_recovery = (
+        details.get("auto_recovery")
+        if isinstance(details.get("auto_recovery"), dict)
+        else {}
+    )
+    if auto_recovery:
+        lines.append(
+            f"- Automatic recovery: `{auto_recovery.get('status', 'unknown')}`"
+        )
 
     for event in run.events:
         if str(event.get("event")) == "TASK_WRITEBACK_FAILED":

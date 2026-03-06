@@ -26,4 +26,11 @@ Source file: `src/ralphite/engine/taxonomy.py`
 - `task_writeback_failed`
 - `task_writeback_commit_failed`
 
+## Integration/Recovery Failures
+
+- `base_integration_blocked_by_local_changes`
+- `base_merge_conflict`
+- `stale_recovery_state_present`
+- `recovery_conflict_files_present`
+
 Each failure maps to user-facing advice and command hints through `classify_failure()`.

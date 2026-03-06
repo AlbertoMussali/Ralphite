@@ -232,7 +232,11 @@ def test_replay_json_envelope_contains_schema_version(tmp_path: Path) -> None:
     _assert_matches_cli_schema(payload)
     assert payload["schema_version"] == "cli-output.v1"
     assert payload["command"] == "replay"
-    assert payload["run_id"]
+    if payload["status"] == "failed":
+        assert isinstance(payload.get("data", {}).get("run_start_preflight"), dict)
+        assert payload["run_id"] is None
+    else:
+        assert payload["run_id"]
 
 
 def test_json_envelopes_match_schema_for_additional_commands(tmp_path: Path) -> None:

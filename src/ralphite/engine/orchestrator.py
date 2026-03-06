@@ -70,6 +70,12 @@ class RuntimeHandle:
     thread: threading.Thread | None = None
 
 
+class RunStartBlockedError(RuntimeError):
+    def __init__(self, details: dict[str, Any]) -> None:
+        self.details = details
+        super().__init__(str(details.get("detail") or "run start preflight failed"))
+
+
 class LocalOrchestrator:
     def __init__(self, workspace_root: str | Path, *, bootstrap: bool = True) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
@@ -185,7 +191,48 @@ class LocalOrchestrator:
         path.write_text(dump_yaml(plan), encoding="utf-8")
         return path
 
-    def _runtime_metadata(self, runtime: RuntimeExecutionPlan) -> dict[str, Any]:
+    def _task_surface_map(self, tasks: list[Any]) -> dict[str, list[str]]:
+        shared_keywords = {
+            "readme",
+            "contributing",
+            "user_guide",
+            "docs",
+            "doc",
+            "cli",
+            "first-run",
+            "references",
+            "index",
+        }
+        mapping: dict[str, list[str]] = {}
+        for task in tasks:
+            surfaces: set[str] = set()
+            for tag in getattr(task, "routing_tags", []) or []:
+                value = str(tag).strip().lower()
+                if value:
+                    surfaces.add(value)
+            for artifact in getattr(task, "acceptance_required_artifacts", []) or []:
+                path_glob = str(artifact.get("path_glob") or "").strip().lower()
+                if not path_glob:
+                    continue
+                if "/" in path_glob:
+                    surfaces.add(path_glob.split("/", 1)[0])
+                else:
+                    surfaces.add(path_glob)
+            text = " ".join(
+                [
+                    str(getattr(task, "title", "")),
+                    str(getattr(task, "description", "")),
+                ]
+            ).lower()
+            for token in shared_keywords:
+                if token in text:
+                    surfaces.add(token)
+            mapping[str(getattr(task, "id", ""))] = sorted(surfaces)
+        return mapping
+
+    def _runtime_metadata(
+        self, runtime: RuntimeExecutionPlan, *, tasks: list[Any]
+    ) -> dict[str, Any]:
         lane_map: dict[str, str] = {}
         phase_map: dict[str, str] = {}
         role_map: dict[str, str] = {}
@@ -193,6 +240,8 @@ class LocalOrchestrator:
         cell_map: dict[str, str] = {}
         team_map: dict[str, str] = {}
         behavior_map: dict[str, str] = {}
+        task_surface_map = self._task_surface_map(tasks)
+        node_surface_map: dict[str, list[str]] = {}
 
         for node in runtime.nodes:
             lane_map[node.id] = node.lane
@@ -204,6 +253,10 @@ class LocalOrchestrator:
                 team_map[node.id] = node.team
             if node.behavior_kind:
                 behavior_map[node.id] = node.behavior_kind
+            if node.source_task_id:
+                node_surface_map[node.id] = list(
+                    task_surface_map.get(node.source_task_id, [])
+                )
 
         return {
             "plan_version": 1,
@@ -215,6 +268,8 @@ class LocalOrchestrator:
             "behavior_map": behavior_map,
             "phase_nodes": dict(phase_nodes),
             "parallel_limit": int(runtime.parallel_limit),
+            "task_surface_map": task_surface_map,
+            "node_surface_map": node_surface_map,
             "task_blocks": [
                 {
                     "index": block.index,
@@ -288,7 +343,7 @@ class LocalOrchestrator:
                 for issue in compile_issues
             ]
             raise ValueError(f"validation_error: {json.dumps(details)}")
-        return runtime, self._runtime_metadata(runtime)
+        return runtime, self._runtime_metadata(runtime, tasks=tasks)
 
     def _writeback_target(
         self, source: Path, plan: PlanSpec
@@ -320,6 +375,66 @@ class LocalOrchestrator:
         status = self.git_repository_status()
         if not bool(status.get("ok")):
             raise GitRequiredError(self.workspace_root)
+
+    def run_start_preflight(self) -> dict[str, Any]:
+        recoverable_runs = self.list_recoverable_runs()
+        stale = self.stale_artifact_report(max_age_hours=0)
+        stale_worktrees = (
+            stale.get("stale_worktrees", [])
+            if isinstance(stale.get("stale_worktrees"), list)
+            else []
+        )
+        stale_branches = (
+            stale.get("stale_branches", [])
+            if isinstance(stale.get("stale_branches"), list)
+            else []
+        )
+        blocking_reasons: list[str] = []
+        issues: list[dict[str, Any]] = []
+        if recoverable_runs:
+            blocking_reasons.append(
+                "recoverable runs are still present in this workspace"
+            )
+            issues.append(
+                {
+                    "code": "stale_recovery_state_present",
+                    "message": "recoverable runs exist and must be resolved before starting a new run",
+                    "run_ids": list(recoverable_runs),
+                }
+            )
+        if stale_worktrees or stale_branches:
+            blocking_reasons.append(
+                "stale managed git artifacts are still present in this workspace"
+            )
+            issues.append(
+                {
+                    "code": "stale_recovery_state_present",
+                    "message": "stale managed worktrees or branches were detected",
+                    "stale_worktrees": stale_worktrees,
+                    "stale_branches": stale_branches,
+                }
+            )
+        detail = (
+            "workspace has unresolved recoverable runs or stale managed artifacts"
+            if blocking_reasons
+            else "workspace is clear for a new run"
+        )
+        next_commands = [
+            "uv run ralphite history --workspace . --output table",
+            "uv run ralphite recover --workspace . --output table",
+        ]
+        return {
+            "ok": len(blocking_reasons) == 0,
+            "reason": (
+                "stale_recovery_state_present" if blocking_reasons else "ok"
+            ),
+            "detail": detail,
+            "blocking_reasons": blocking_reasons,
+            "recoverable_runs": recoverable_runs,
+            "stale_artifacts": stale,
+            "next_commands": next_commands,
+            "issues": issues,
+        }
 
     def collect_requirements(
         self, plan_ref: str | None = None, plan_content: str | None = None
@@ -368,11 +483,15 @@ class LocalOrchestrator:
         permission_snapshot: dict[str, list[str]] | None = None,
         metadata: dict[str, Any] | None = None,
         require_clean_git: bool = True,
+        first_failure_recovery: str | None = None,
     ) -> str:
         if require_clean_git:
             self.require_git_workspace()
         else:
             self.require_git_repository()
+        start_preflight = self.run_start_preflight()
+        if not bool(start_preflight.get("ok")):
+            raise RunStartBlockedError(start_preflight)
         compile_started = time.perf_counter()
         if plan_content is None:
             source_path = self._resolve_plan_path(plan_ref)
@@ -433,6 +552,11 @@ class LocalOrchestrator:
         )
         if execution_reasoning_effort not in {"low", "medium", "high"}:
             execution_reasoning_effort = "medium"
+        first_failure_recovery_mode = (
+            str(first_failure_recovery or "none").strip().lower() or "none"
+        )
+        if first_failure_recovery_mode not in {"none", "agent_best_effort"}:
+            first_failure_recovery_mode = "none"
         git_manager = GitWorktreeManager(self.workspace_root, run_id)
         run = RunViewState(
             id=run_id,
@@ -452,6 +576,7 @@ class LocalOrchestrator:
                     "reasoning_effort": execution_reasoning_effort,
                     "cursor_command": self.config.cursor_command,
                 },
+                "first_failure_recovery": first_failure_recovery_mode,
                 **runtime_meta,
                 "git_state": git_manager.bootstrap_state(),
                 **(metadata or {}),
@@ -557,6 +682,11 @@ class LocalOrchestrator:
             plan_ref=previous.plan_path,
             metadata={"replay_of": run_id, "mode": "rerun_failed"},
             require_clean_git=False,
+            first_failure_recovery=str(
+                previous.metadata.get("first_failure_recovery") or "none"
+            )
+            if isinstance(previous.metadata, dict)
+            else "none",
         )
 
     def list_recoverable_runs(self) -> list[str]:
@@ -619,6 +749,12 @@ class LocalOrchestrator:
         run.metadata.setdefault("team_map", runtime_meta.get("team_map", {}))
         run.metadata.setdefault("behavior_map", runtime_meta.get("behavior_map", {}))
         run.metadata.setdefault("phase_nodes", runtime_meta.get("phase_nodes", {}))
+        run.metadata.setdefault(
+            "task_surface_map", runtime_meta.get("task_surface_map", {})
+        )
+        run.metadata.setdefault(
+            "node_surface_map", runtime_meta.get("node_surface_map", {})
+        )
         run.metadata.setdefault("task_blocks", runtime_meta.get("task_blocks", []))
         run.metadata.setdefault(
             "resolved_execution", runtime_meta.get("resolved_execution", {})
@@ -643,6 +779,7 @@ class LocalOrchestrator:
             "git_state",
             GitWorktreeManager(self.workspace_root, run_id).bootstrap_state(),
         )
+        run.metadata.setdefault("first_failure_recovery", "none")
 
         snapshot = run.metadata.get("permission_snapshot")
         if not isinstance(snapshot, dict):
@@ -868,6 +1005,10 @@ class LocalOrchestrator:
             preflight = self.recovery_preflight(run_id)
             if not bool(preflight.get("ok")):
                 recovery["status"] = "preflight_failed"
+                if preflight.get("unresolved_conflict_files"):
+                    self._record_interruption_reason(
+                        handle.run, "recovery_conflict_files_present"
+                    )
                 self._emit(
                     handle,
                     stage="orchestrator",
@@ -952,6 +1093,216 @@ class LocalOrchestrator:
             task_id=task_id,
             meta=meta,
         )
+
+    def _record_interruption_reason(self, run: RunViewState, reason: str) -> None:
+        normalized = str(reason or "").strip()
+        if not normalized:
+            return
+        reasons = run.metadata.setdefault("interruption_reasons", [])
+        if isinstance(reasons, list):
+            reasons.append(normalized)
+
+    def _build_auto_recovery_prompt(
+        self,
+        *,
+        node: RuntimeNodeSpec,
+        details: dict[str, Any],
+        worktree: Path,
+    ) -> str:
+        overlap_files = details.get("overlap_files")
+        conflict_files = details.get("current_run_conflict_files") or details.get(
+            "conflict_files"
+        )
+        lines = [
+            f"Recover the blocked Ralphite merge/integration step for phase '{node.phase}'.",
+            "Preserve every existing local user change.",
+            "Do not run git reset, git checkout --, git clean -fd, or any destructive revert.",
+            "If files contain conflict markers, resolve them conservatively and commit the resolution.",
+            "If the workspace is already consistent and committed, make no unnecessary changes.",
+            f"Affected worktree: {worktree}",
+        ]
+        if isinstance(overlap_files, list) and overlap_files:
+            lines.append(
+                f"Overlapping local files: {', '.join(str(item) for item in overlap_files[:12])}"
+            )
+        if isinstance(conflict_files, list) and conflict_files:
+            lines.append(
+                f"Conflict files: {', '.join(str(item) for item in conflict_files[:12])}"
+            )
+        error = str(details.get("error") or "").strip()
+        if error:
+            lines.append(f"Merge error: {error}")
+        lines.append(
+            "End by printing a concise summary of what you changed and whether the worktree is ready for merge retry."
+        )
+        return "\n".join(lines)
+
+    def _attempt_inline_auto_recovery(
+        self,
+        handle: RuntimeHandle,
+        node: RuntimeNodeSpec,
+        details: dict[str, Any],
+        git_manager: GitWorktreeManager,
+    ) -> tuple[str, dict[str, Any]]:
+        recovery_mode = str(
+            handle.run.metadata.get("first_failure_recovery") or "none"
+        ).strip()
+        recovery = handle.run.metadata.setdefault("recovery", {})
+        if recovery_mode != "agent_best_effort":
+            return "recovery_required", details
+        if bool(recovery.get("auto_attempted")):
+            return "recovery_required", details
+
+        reason = str(details.get("reason") or "").strip()
+        worktree_raw = str(details.get("worktree") or self.workspace_root).strip()
+        worktree = Path(worktree_raw).expanduser().resolve()
+        prompt = self._build_auto_recovery_prompt(
+            node=node, details=details, worktree=worktree
+        )
+        recovery.update(
+            {
+                "selected_mode": "agent_best_effort",
+                "prompt": prompt,
+                "auto_attempted": True,
+                "auto_attempt_status": "started",
+            }
+        )
+        details["auto_recovery"] = {
+            "mode": "agent_best_effort",
+            "status": "started",
+        }
+
+        if reason == "base_integration_blocked_by_local_changes":
+            recovery["auto_attempt_status"] = "unsafe_skipped"
+            details["auto_recovery"] = {
+                "mode": "agent_best_effort",
+                "status": "unsafe_skipped",
+                "reason": "primary workspace has overlapping local edits",
+            }
+            self._emit(
+                handle,
+                stage="orchestrator",
+                event="RECOVERY_AUTO_SKIPPED",
+                level="warn",
+                message="automatic recovery skipped because overlapping local edits were detected in the primary workspace",
+                group=node.phase,
+                task_id=node.id,
+                meta={"reason": reason, "worktree": str(worktree)},
+            )
+            return "recovery_required", details
+
+        profile = handle.profile_map.get(node.agent_profile_id)
+        if not profile:
+            recovery["auto_attempt_status"] = "failed"
+            details["auto_recovery"] = {
+                "mode": "agent_best_effort",
+                "status": "failed",
+                "reason": "orchestrator profile missing",
+            }
+            return "recovery_required", details
+
+        self._emit(
+            handle,
+            stage="orchestrator",
+            event="RECOVERY_AUTO_STARTED",
+            level="warn",
+            message="automatic best-effort recovery started",
+            group=node.phase,
+            task_id=node.id,
+            meta={"reason": reason, "worktree": str(worktree)},
+        )
+        synthetic_node = RuntimeNodeSpec(
+            id=f"{node.id}::auto-recovery",
+            kind=node.kind,
+            group=node.group,
+            depends_on=[],
+            task=prompt,
+            agent_profile_id=node.agent_profile_id,
+            role="orchestrator",
+            phase=node.phase,
+            lane=node.lane,
+            cell_id=node.cell_id,
+            team=node.team,
+            behavior_id=node.behavior_id,
+            behavior_kind=node.behavior_kind,
+            source_task_id=node.source_task_id,
+            block_index=node.block_index,
+        )
+        agent_ok, agent_result = self._execute_agent(
+            handle,
+            synthetic_node,
+            profile,
+            handle.permission_snapshot,
+            worktree=worktree,
+        )
+        if not agent_ok:
+            recovery["auto_attempt_status"] = "failed"
+            details["auto_recovery"] = {
+                "mode": "agent_best_effort",
+                "status": "failed",
+                "error": agent_result,
+            }
+            self._emit(
+                handle,
+                stage="orchestrator",
+                event="RECOVERY_AUTO_FAILED",
+                level="error",
+                message="automatic best-effort recovery agent failed",
+                group=node.phase,
+                task_id=node.id,
+                meta=agent_result,
+            )
+            return "recovery_required", details
+
+        status, merge_meta = git_manager.integrate_phase(
+            handle.run.metadata.setdefault("git_state", {}),
+            node.phase,
+            recovery_mode="agent_best_effort",
+            recovery_prompt=prompt,
+        )
+        if status == "success":
+            recovery["auto_attempt_status"] = "succeeded"
+            details["auto_recovery"] = {
+                "mode": "agent_best_effort",
+                "status": "succeeded",
+            }
+            self._emit(
+                handle,
+                stage="orchestrator",
+                event="RECOVERY_AUTO_DONE",
+                level="info",
+                message="automatic best-effort recovery succeeded",
+                group=node.phase,
+                task_id=node.id,
+                meta={"status": status},
+            )
+            return "success", {
+                "auto_recovery": {
+                    "mode": "agent_best_effort",
+                    "status": "succeeded",
+                    "agent_result": agent_result,
+                },
+                "integration": merge_meta,
+            }
+
+        recovery["auto_attempt_status"] = "failed"
+        merge_meta["auto_recovery"] = {
+            "mode": "agent_best_effort",
+            "status": "failed",
+        }
+        self._emit(
+            handle,
+            stage="orchestrator",
+            event="RECOVERY_AUTO_DONE",
+            level="error",
+            message="automatic best-effort recovery did not clear the integration failure",
+            group=node.phase,
+            task_id=node.id,
+            meta={"status": status, "reason": merge_meta.get("reason")},
+        )
+        if status == "failed":
+            return "failure", {"reason": "runtime_error", **merge_meta}
+        return "recovery_required", merge_meta
 
     def _tool_allowed(self, tool_id: str, snapshot: dict[str, list[str]]) -> bool:
         deny = set(snapshot.get("deny_tools", []))
@@ -1139,6 +1490,9 @@ class LocalOrchestrator:
         recovery["phase"] = node.phase
         recovery["details"] = details
         recovery["attempts"] = int(recovery.get("attempts") or 0) + 1
+        self._record_interruption_reason(
+            handle.run, str(details.get("reason") or "runtime_error")
+        )
 
         self._emit(
             handle,
@@ -1258,6 +1612,7 @@ class LocalOrchestrator:
         node_status_counts: dict[str, int] = {}
         node_role_counts: dict[str, int] = {}
         failure_reason_counts: dict[str, int] = {}
+        interruption_reason_counts: dict[str, int] = {}
         role_map = (
             run.metadata.get("role_map", {})
             if isinstance(run.metadata.get("role_map"), dict)
@@ -1275,6 +1630,18 @@ class LocalOrchestrator:
                 failure_reason_counts[reason] = (
                     int(failure_reason_counts.get(reason, 0)) + 1
                 )
+        interruption_reasons = (
+            run.metadata.get("interruption_reasons", [])
+            if isinstance(run.metadata.get("interruption_reasons"), list)
+            else []
+        )
+        for reason in interruption_reasons:
+            normalized = str(reason or "").strip()
+            if not normalized:
+                continue
+            interruption_reason_counts[normalized] = (
+                int(interruption_reason_counts.get(normalized, 0)) + 1
+            )
 
         return RunMetrics(
             compile_seconds=round(
@@ -1286,6 +1653,7 @@ class LocalOrchestrator:
             node_status_counts=node_status_counts,
             node_role_counts=node_role_counts,
             failure_reason_counts=failure_reason_counts,
+            interruption_reason_counts=interruption_reason_counts,
             retry_count=int(run.retry_count or 0),
         )
 
@@ -1340,6 +1708,75 @@ class LocalOrchestrator:
             run_id=run.id, artifacts_dir=str(artifacts_dir), items=items
         )
 
+    def _node_surfaces(
+        self, handle: RuntimeHandle, node: RuntimeNodeSpec
+    ) -> set[str]:
+        node_surface_map = (
+            handle.run.metadata.get("node_surface_map", {})
+            if isinstance(handle.run.metadata.get("node_surface_map"), dict)
+            else {}
+        )
+        surfaces = node_surface_map.get(node.id, [])
+        if not isinstance(surfaces, list):
+            return set()
+        return {str(item).strip().lower() for item in surfaces if str(item).strip()}
+
+    def _high_overlap_surfaces(
+        self, handle: RuntimeHandle, nodes: list[RuntimeNodeSpec]
+    ) -> list[str]:
+        if len(nodes) < 2:
+            return []
+        token_counts: dict[str, int] = {}
+        for node in nodes:
+            for token in self._node_surfaces(handle, node):
+                token_counts[token] = int(token_counts.get(token, 0)) + 1
+        return sorted(token for token, count in token_counts.items() if count > 1)
+
+    def _cleanup_completed_phases(
+        self, handle: RuntimeHandle, git_manager: GitWorktreeManager
+    ) -> None:
+        phase_done = (
+            handle.run.metadata.get("phase_done", [])
+            if isinstance(handle.run.metadata.get("phase_done"), list)
+            else []
+        )
+        cleaned = handle.run.metadata.setdefault("phase_cleanup_done", [])
+        if not isinstance(cleaned, list):
+            cleaned = []
+            handle.run.metadata["phase_cleanup_done"] = cleaned
+        for phase in phase_done:
+            if phase in cleaned:
+                continue
+            phase_node_ids = (
+                handle.run.metadata.get("phase_nodes", {}).get(phase, [])
+                if isinstance(handle.run.metadata.get("phase_nodes"), dict)
+                else []
+            )
+            if not isinstance(phase_node_ids, list) or not phase_node_ids:
+                continue
+            statuses = [
+                handle.run.nodes[node_id].status
+                for node_id in phase_node_ids
+                if node_id in handle.run.nodes
+            ]
+            if not statuses or not all(status == "succeeded" for status in statuses):
+                continue
+            cleanup_notes = git_manager.cleanup_phase(
+                handle.run.metadata.setdefault("git_state", {}),
+                str(phase),
+            )
+            if cleanup_notes:
+                self._emit(
+                    handle,
+                    stage="orchestrator",
+                    event="PHASE_CLEANUP_DONE",
+                    level="info",
+                    message="phase git artifacts cleaned after successful phase completion",
+                    group=str(phase),
+                    meta={"items": cleanup_notes},
+                )
+            cleaned.append(str(phase))
+
     def _choose_batch(
         self, handle: RuntimeHandle, ready_nodes: list[RuntimeNodeSpec]
     ) -> list[RuntimeNodeSpec]:
@@ -1360,6 +1797,43 @@ class LocalOrchestrator:
 
         # Branched lanes can run concurrently even if each lane segment is sequential.
         if worker_same_block and len({node.lane for node in worker_same_block}) > 1:
+            overlap_tokens = self._high_overlap_surfaces(handle, worker_same_block)
+            if overlap_tokens:
+                serialized = handle.run.metadata.setdefault(
+                    "serialized_overlap_blocks", []
+                )
+                already_recorded = any(
+                    isinstance(item, dict)
+                    and int(item.get("block_index", -1)) == int(first_block)
+                    for item in serialized
+                )
+                if not already_recorded:
+                    serialized.append(
+                        {
+                            "block_index": first_block,
+                            "phase": worker_same_block[0].phase,
+                            "lanes": sorted(
+                                {node.lane for node in worker_same_block if node.lane}
+                            ),
+                            "surfaces": overlap_tokens,
+                        }
+                    )
+                    self._emit(
+                        handle,
+                        stage="orchestrator",
+                        event="DISPATCH_SERIALIZED_FOR_OVERLAP",
+                        level="warn",
+                        message="high-overlap multi-lane block serialized",
+                        group=worker_same_block[0].phase,
+                        meta={
+                            "block_index": first_block,
+                            "lanes": sorted(
+                                {node.lane for node in worker_same_block if node.lane}
+                            ),
+                            "surfaces": overlap_tokens,
+                        },
+                    )
+                return [worker_same_block[0]]
             return worker_same_block[:parallel_limit]
 
         return [same_block[0]]
@@ -1898,6 +2372,10 @@ class LocalOrchestrator:
                     rec = run.nodes[current.id]
 
                     if outcome == "recovery_required":
+                        outcome, result = self._attempt_inline_auto_recovery(
+                            handle, current, dict(result), git_manager
+                        )
+                    if outcome == "recovery_required":
                         rec.status = "queued"
                         rec.result = result
                         self._handle_recovery_required(handle, current, result)
@@ -1926,6 +2404,8 @@ class LocalOrchestrator:
                     self._checkpoint(handle, status="paused_recovery_required")
                     self._persist_runtime_state(handle, "paused_recovery_required")
                     break
+
+                self._cleanup_completed_phases(handle, git_manager)
 
                 self._checkpoint(handle, status="running")
 

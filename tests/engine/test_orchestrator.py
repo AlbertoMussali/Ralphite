@@ -6,8 +6,12 @@ import tempfile
 from types import MethodType
 
 import pytest
-from ralphite.engine import LocalOrchestrator
+from ralphite.engine import LocalOrchestrator, parse_plan_yaml
 from ralphite.engine.git_worktree import GitRequiredError
+from ralphite.engine.models import RunViewState
+from ralphite.engine.orchestrator import RunStartBlockedError
+from ralphite.engine.orchestrator import RuntimeHandle
+from ralphite.engine.structure_compiler import RuntimeExecutionPlan, RuntimeNodeSpec
 import yaml
 
 _AGENT_DEFAULTS = """\
@@ -196,6 +200,62 @@ outputs:
 """
 
 
+def _branched_overlap_plan_content() -> str:
+    return """
+version: 1
+plan_id: overlap
+name: overlap
+materials:
+  autodiscover:
+    enabled: false
+    path: .
+    include_globs: []
+  includes: []
+  uploads: []
+constraints:
+  max_parallel: 2
+agents:
+  - id: worker_default
+    role: worker
+    provider: codex
+    model: gpt-5.3-codex
+    tools_allow: [tool:*]
+  - id: orchestrator_default
+    role: orchestrator
+    provider: codex
+    model: gpt-5.3-codex
+orchestration:
+  template: branched
+  inference_mode: mixed
+  behaviors:
+    - id: merge_default
+      kind: merge_and_conflict_resolution
+      agent: orchestrator_default
+      enabled: true
+  branched:
+    lanes: [lane_a, lane_b]
+  blue_red:
+    loop_unit: per_task
+  custom:
+    cells: []
+tasks:
+  - id: t1
+    title: Update docs index
+    completed: false
+    routing:
+      lane: lane_a
+      tags: [docs, cli]
+  - id: t2
+    title: Refresh docs first-run guide
+    completed: false
+    routing:
+      lane: lane_b
+      tags: [docs, cli]
+outputs:
+  required_artifacts: []
+"""
+
+
 def _single_task_plan(
     *,
     acceptance_commands: list[str] | None = None,
@@ -339,6 +399,107 @@ def test_conflict_triggers_recovery_and_abort_mode(workspace: Path) -> None:
     assert final.status == "failed"
 
 
+def test_start_run_blocks_when_recoverable_run_exists(workspace: Path) -> None:
+    orch = LocalOrchestrator(workspace)
+    (workspace / ".ralphite" / "force_merge_conflict").write_text(
+        "phase-1", encoding="utf-8"
+    )
+    blocked_run = orch.start_run(plan_content=_conflict_plan_content())
+    assert orch.wait_for_run(blocked_run, timeout=8.0) is True
+
+    with pytest.raises(RunStartBlockedError):
+        orch.start_run(plan_content=_single_task_plan())
+
+
+def test_first_failure_agent_recovery_can_resume_inline(workspace: Path) -> None:
+    orch = LocalOrchestrator(workspace)
+    marker = workspace / ".ralphite" / "force_merge_conflict"
+    marker.write_text("phase-1", encoding="utf-8")
+
+    def auto_recovery_agent(self, handle, node, profile, snapshot, *, worktree):  # type: ignore[no-untyped-def]
+        if node.id.endswith("auto-recovery") and marker.exists():
+            marker.unlink()
+        return True, {"summary": "ok"}
+
+    orch._execute_agent = MethodType(auto_recovery_agent, orch)  # type: ignore[method-assign]
+    run_id = orch.start_run(
+        plan_content=_conflict_plan_content(),
+        first_failure_recovery="agent_best_effort",
+    )
+    assert orch.wait_for_run(run_id, timeout=8.0) is True
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "succeeded"
+    recovery = run.metadata.get("recovery", {})
+    assert isinstance(recovery, dict)
+    assert recovery.get("auto_attempt_status") == "succeeded"
+
+
+def test_high_overlap_branched_work_is_serialized(workspace: Path) -> None:
+    orch = LocalOrchestrator(workspace)
+    handle = RuntimeHandle(
+        run=RunViewState(
+            id="run-overlap",
+            plan_path=str(workspace / ".ralphite" / "plans" / "overlap.yaml"),
+            metadata={
+                "node_surface_map": {
+                    "node-a": ["docs", "cli"],
+                    "node-b": ["docs", "cli"],
+                }
+            },
+        ),
+        plan=parse_plan_yaml(
+            _branched_overlap_plan_content(), workspace_root=workspace
+        ),
+        runtime=RuntimeExecutionPlan(
+            nodes=[],
+            node_payload={},
+            node_levels={},
+            groups={},
+            parallel_limit=2,
+            task_parse_issues=[],
+            blocks=[],
+            node_block_index={},
+            resolved_cells=[],
+            task_assignment={},
+            compile_warnings=[],
+        ),
+        profile_map={},
+        permission_snapshot=orch.default_permission_snapshot(),
+    )
+    node_a = RuntimeNodeSpec(
+        id="node-a",
+        kind="agent",
+        group="phase-1",
+        depends_on=[],
+        task="Update docs index",
+        agent_profile_id="worker_default",
+        role="worker",
+        phase="phase-1",
+        lane="lane_a",
+        cell_id="lane_a",
+        source_task_id="t1",
+        block_index=1,
+    )
+    node_b = RuntimeNodeSpec(
+        id="node-b",
+        kind="agent",
+        group="phase-1",
+        depends_on=[],
+        task="Refresh first-run docs",
+        agent_profile_id="worker_default",
+        role="worker",
+        phase="phase-1",
+        lane="lane_b",
+        cell_id="lane_b",
+        source_task_id="t2",
+        block_index=1,
+    )
+    batch = orch._choose_batch(handle, [node_a, node_b])  # noqa: SLF001
+    assert [node.id for node in batch] == ["node-a"]
+    assert handle.run.metadata.get("serialized_overlap_blocks")
+
+
 def test_start_run_applies_execution_overrides_to_metadata(workspace: Path) -> None:
     orch = LocalOrchestrator(workspace)
     run_id = orch.start_run(
@@ -449,6 +610,11 @@ def test_recovery_required_run_is_reported_in_final_report(workspace: Path) -> N
     run = orch.get_run(run_id)
     assert run is not None
     assert run.status == "paused_recovery_required"
+    metrics = run.metadata.get("run_metrics", {})
+    assert isinstance(metrics, dict)
+    interruptions = metrics.get("interruption_reason_counts", {})
+    assert isinstance(interruptions, dict)
+    assert interruptions.get("simulated_conflict") == 1
     report = _artifact_text(run, "final_report")
     assert "## Outcome" in report
     assert "## Changed Files" in report

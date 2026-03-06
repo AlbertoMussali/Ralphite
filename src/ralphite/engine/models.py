@@ -87,6 +87,7 @@ class RunMetrics(BaseModel):
     node_status_counts: dict[str, int] = Field(default_factory=dict)
     node_role_counts: dict[str, int] = Field(default_factory=dict)
     failure_reason_counts: dict[str, int] = Field(default_factory=dict)
+    interruption_reason_counts: dict[str, int] = Field(default_factory=dict)
     retry_count: int = 0
 
 

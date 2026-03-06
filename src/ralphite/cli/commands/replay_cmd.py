@@ -6,6 +6,7 @@ from typing import Annotated
 import typer
 
 from ralphite.engine import present_run_status
+from ralphite.engine.orchestrator import RunStartBlockedError
 
 from ..core import (
     _emit_payload,
@@ -13,6 +14,7 @@ from ..core import (
     _normalize_output,
     _orchestrator,
     _print_run_stream,
+    _run_start_blocked_payload,
     _result_payload,
     console,
 )
@@ -55,7 +57,21 @@ def replay_command(
         if not quiet and mode != "json":
             console.print(f"[yellow]{dirty_warning}[/yellow]")
 
-    new_run_id = orch.rerun_failed(run_id)
+    try:
+        new_run_id = orch.rerun_failed(run_id)
+    except RunStartBlockedError as exc:
+        _run_start_blocked_payload(
+            command="replay",
+            title="Replay",
+            output=mode,
+            preflight=exc.details,
+            data={
+                "source_run_id": run_id,
+                "git": git_status,
+                "git_warning": dirty_warning,
+            },
+        )
+        raise typer.Exit(code=1) from exc
     if not quiet and mode != "json":
         console.print(f"Replay started: {new_run_id} (from {run_id})")
 

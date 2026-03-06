@@ -6,6 +6,7 @@ from typing import Annotated
 import typer
 
 from ralphite.engine import present_run_status
+from ralphite.engine.orchestrator import RunStartBlockedError
 
 from ..core import (
     _build_capability_summary,
@@ -17,6 +18,7 @@ from ..core import (
     _print_preflight_summary,
     _print_run_stream,
     _resolve_plan_ref,
+    _run_start_blocked_payload,
     _result_payload,
     console,
 )
@@ -49,6 +51,13 @@ def run_command(
     verbose: Annotated[
         bool, typer.Option("--verbose", help="Show extra event guidance")
     ] = False,
+    first_failure_recovery: Annotated[
+        str,
+        typer.Option(
+            "--first-failure-recovery",
+            help="Automatic recovery policy for the first recoverable integration failure: none | agent_best_effort",
+        ),
+    ] = "none",
 ) -> None:
     """Run a plan immediately in headless mode."""
     orch = _orchestrator(workspace)
@@ -94,13 +103,30 @@ def run_command(
                 console.print("Run aborted by user.")
             raise typer.Exit(code=1)
 
-    run_id = orch.start_run(
-        plan_ref=plan_ref,
-        backend_override=backend,
-        model_override=model,
-        reasoning_effort_override=reasoning_effort,
-        metadata={"source": "cli.run", "goal": goal},
-    )
+    try:
+        run_id = orch.start_run(
+            plan_ref=plan_ref,
+            backend_override=backend,
+            model_override=model,
+            reasoning_effort_override=reasoning_effort,
+            metadata={"source": "cli.run", "goal": goal},
+            first_failure_recovery=first_failure_recovery,
+        )
+    except RunStartBlockedError as exc:
+        _run_start_blocked_payload(
+            command="run",
+            title="Run Result",
+            output=output_mode,
+            preflight=exc.details,
+            data={
+                "plan_path": selected_plan_path,
+                "backend": selected_backend,
+                "model": selected_model,
+                "reasoning_effort": selected_reasoning_effort,
+                "first_failure_recovery": first_failure_recovery,
+            },
+        )
+        raise typer.Exit(code=1) from exc
     if not quiet and output_mode != "json":
         console.print(f"Started run: [bold]{run_id}[/bold]")
         console.print(
@@ -129,6 +155,7 @@ def run_command(
             "backend": selected_backend,
             "model": selected_model,
             "reasoning_effort": selected_reasoning_effort,
+            "first_failure_recovery": first_failure_recovery,
             "execution_summary": _build_execution_summary(
                 plan_path=selected_plan_path,
                 backend=selected_backend,

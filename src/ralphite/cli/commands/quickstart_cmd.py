@@ -7,6 +7,7 @@ from typing import Annotated, Any
 import typer
 
 from ralphite.engine import present_run_status
+from ralphite.engine.orchestrator import RunStartBlockedError
 from ralphite.engine.taxonomy import classify_failure
 
 from ..core import (
@@ -19,6 +20,7 @@ from ..core import (
     _orchestrator,
     _print_preflight_summary,
     _print_run_stream,
+    _run_start_blocked_payload,
     _result_payload,
     console,
 )
@@ -66,6 +68,13 @@ def quickstart_command(
     verbose: Annotated[
         bool, typer.Option("--verbose", help="Show extra event guidance")
     ] = False,
+    first_failure_recovery: Annotated[
+        str,
+        typer.Option(
+            "--first-failure-recovery",
+            help="Automatic recovery policy for the first recoverable integration failure: none | agent_best_effort",
+        ),
+    ] = "none",
 ) -> None:
     """Run guided first-run flow: doctor -> plan -> run."""
     flow_started = time.perf_counter()
@@ -315,13 +324,46 @@ def quickstart_command(
         console.print("Starting execution...")
 
     run_started = time.perf_counter()
-    run_id = orch.start_run(
-        plan_ref=plan_ref,
-        backend_override=backend,
-        model_override=model,
-        reasoning_effort_override=reasoning_effort,
-        metadata={"source": "cli.quickstart", "goal": goal},
-    )
+    try:
+        run_id = orch.start_run(
+            plan_ref=plan_ref,
+            backend_override=backend,
+            model_override=model,
+            reasoning_effort_override=reasoning_effort,
+            metadata={"source": "cli.quickstart", "goal": goal},
+            first_failure_recovery=first_failure_recovery,
+        )
+    except RunStartBlockedError as exc:
+        _run_start_blocked_payload(
+            command="quickstart",
+            title="Quickstart",
+            output=mode,
+            preflight=exc.details,
+            data={
+                "plan_path": str(plan_ref) if plan_ref else "",
+                "required_tools": requirements["tools"],
+                "required_mcps": requirements["mcps"],
+                "doctor_warnings": warning_checks,
+                "bootstrap_paths": list(dict.fromkeys(bootstrap_paths)),
+                "backend": selected_backend,
+                "model": selected_model,
+                "reasoning_effort": selected_reasoning_effort,
+                "first_failure_recovery": first_failure_recovery,
+                "step_timing": steps,
+                "execution_summary": _build_execution_summary(
+                    plan_path=str(plan_ref) if plan_ref else "",
+                    backend=selected_backend,
+                    model=selected_model,
+                    reasoning_effort=selected_reasoning_effort,
+                    capabilities=capabilities,
+                    duration_seconds=round(
+                        max(0.0, time.perf_counter() - flow_started), 3
+                    ),
+                    artifacts_count=0,
+                ),
+            },
+        )
+        raise typer.Exit(code=1) from exc
     run_status = "running"
     if mode == "stream":
         _print_run_stream(orch, run_id, verbose=verbose)
@@ -355,6 +397,7 @@ def quickstart_command(
             "backend": selected_backend,
             "model": selected_model,
             "reasoning_effort": selected_reasoning_effort,
+            "first_failure_recovery": first_failure_recovery,
             "execution_summary": _build_execution_summary(
                 plan_path=str(plan_ref) if plan_ref else "",
                 backend=selected_backend,

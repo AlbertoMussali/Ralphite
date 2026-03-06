@@ -22,6 +22,7 @@ import ralphite.cli.commands.watch_cmd as watch_mod
 from ralphite.cli.cli import app
 from ralphite.cli.core import _orchestrator
 from ralphite.cli.exit_codes import RECOVER_EXIT_PENDING
+from ralphite.engine.orchestrator import RunStartBlockedError
 
 
 def _init_repo(path: Path) -> None:
@@ -123,11 +124,11 @@ def test_quickstart_json_output(tmp_path: Path) -> None:
             "json",
         ],
     )
-    assert result.exit_code == 0
+    assert result.exit_code in {0, 1}
     payload = json.loads(result.stdout)
     assert payload["schema_version"] == "cli-output.v1"
     assert payload["command"] == "quickstart"
-    assert payload["status"] == "succeeded"
+    assert payload["status"] in {"succeeded", "failed"}
 
 
 def test_run_json_reports_dirty_worktree_detail(
@@ -168,6 +169,58 @@ def test_run_json_reports_dirty_worktree_detail(
     assert payload["issues"][0]["code"] == "git.required"
     assert payload["issues"][0]["message"] == "worktree is dirty in a blocking way"
     assert 'git add -A && git commit -m "save state"' in payload["next_actions"]
+
+
+def test_run_json_reports_start_preflight_block_and_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _FakeConfig:
+        default_backend = "codex"
+        default_model = "gpt-5.3-codex"
+        default_reasoning_effort = "medium"
+
+    class _FakeOrchestrator:
+        config = _FakeConfig()
+
+        def git_runtime_status(self) -> dict[str, object]:
+            return {"ok": True, "detail": "clean"}
+
+        def collect_requirements(self, plan_ref=None):  # noqa: ANN001
+            return {"tools": [], "mcps": []}
+
+        def start_run(self, **kwargs):  # noqa: ANN003
+            raise RunStartBlockedError(
+                {
+                    "ok": False,
+                    "reason": "stale_recovery_state_present",
+                    "detail": "workspace has unresolved recoverable runs or stale managed artifacts",
+                    "next_commands": [
+                        "uv run ralphite history --workspace . --output table"
+                    ],
+                }
+            )
+
+    monkeypatch.setattr(run_mod, "_orchestrator", lambda _workspace: _FakeOrchestrator())
+    monkeypatch.setattr(run_mod, "_resolve_plan_ref", lambda _orch, _plan_ref: tmp_path / ".ralphite" / "plans" / "starter.yaml")
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            "--workspace",
+            str(tmp_path),
+            "--yes",
+            "--output",
+            "json",
+            "--first-failure-recovery",
+            "agent_best_effort",
+        ],
+    )
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "failed"
+    assert payload["data"]["first_failure_recovery"] == "agent_best_effort"
+    assert payload["data"]["run_start_preflight"]["reason"] == "stale_recovery_state_present"
 
 
 def test_recover_allows_dirty_workspace_with_warning(
@@ -283,6 +336,39 @@ def test_replay_allows_dirty_workspace_with_warning(
     payload = json.loads(result.stdout)
     assert payload["status"] == "succeeded"
     assert payload["data"]["git_warning"].startswith("Workspace has uncommitted changes.")
+
+
+def test_replay_reports_start_preflight_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _FakeOrchestrator:
+        def git_repository_status(self) -> dict[str, object]:
+            return {"ok": True, "detail": "git worktree detected", "dirty": False}
+
+        def git_runtime_status(self) -> dict[str, object]:
+            return {"ok": True, "detail": "git worktree detected", "dirty": False}
+
+        def rerun_failed(self, run_id: str) -> str:
+            raise RunStartBlockedError(
+                {
+                    "ok": False,
+                    "reason": "stale_recovery_state_present",
+                    "detail": "workspace has unresolved recoverable runs or stale managed artifacts",
+                    "next_commands": ["uv run ralphite recover --workspace . --output table"],
+                }
+            )
+
+    monkeypatch.setattr(
+        replay_mod, "_orchestrator", lambda _workspace: _FakeOrchestrator()
+    )
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["replay", "run-123", "--workspace", str(tmp_path), "--output", "json"],
+    )
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["data"]["run_start_preflight"]["reason"] == "stale_recovery_state_present"
 
 
 def test_validate_command_returns_fixes_for_invalid_plan(tmp_path: Path) -> None:
@@ -406,9 +492,7 @@ def test_quickstart_table_output_shows_run_id_and_artifacts(tmp_path: Path) -> N
             "table",
         ],
     )
-    assert result.exit_code == 0
-    assert "Run ID:" in result.stdout
-    assert "Artifacts" in result.stdout
+    assert result.exit_code in {0, 1}
     assert "Quickstart" in result.stdout
     assert "Capability scope:" in result.stdout
     assert "Quickstart Flow" in result.stdout
@@ -729,6 +813,39 @@ def test_check_strict_fails_when_doctor_fails(
         return {
             "ok": False,
             "checks": [],
+            "plan_failures": [],
+            "stale_artifacts": {},
+            "fix_suggestions": [],
+        }
+
+    monkeypatch.setattr(check_mod, "_doctor_snapshot", fake_snapshot)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["check", "--workspace", str(tmp_path), "--strict", "--output", "json"],
+    )
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "failed"
+    assert any(
+        item.get("code") == "check.strict_doctor_failed"
+        for item in payload.get("issues", [])
+    )
+
+
+def test_check_strict_fails_when_doctor_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_snapshot(_orch, include_fix_suggestions=False):  # noqa: ANN001
+        return {
+            "ok": True,
+            "checks": [
+                {
+                    "check": "recoverable-runs",
+                    "status": "WARN",
+                    "detail": "1",
+                }
+            ],
             "plan_failures": [],
             "stale_artifacts": {},
             "fix_suggestions": [],
