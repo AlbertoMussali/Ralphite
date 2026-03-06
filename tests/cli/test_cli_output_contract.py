@@ -263,6 +263,36 @@ def test_json_envelopes_match_schema_for_additional_commands(tmp_path: Path) -> 
         _assert_matches_cli_schema(payload)
 
 
+def test_recover_json_includes_recommendation_fields(tmp_path: Path) -> None:
+    orch = LocalOrchestrator(tmp_path)
+    (tmp_path / ".ralphite" / "force_merge_conflict").write_text(
+        "phase-1", encoding="utf-8"
+    )
+    run_id = orch.start_run(plan_content=_plan_content())
+    assert orch.wait_for_run(run_id, timeout=8.0)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "recover",
+            "--workspace",
+            str(tmp_path),
+            "--run-id",
+            run_id,
+            "--mode",
+            "manual",
+            "--preflight-only",
+            "--json",
+        ],
+    )
+    payload = json.loads(result.stdout)
+    data = payload.get("data", {})
+    assert isinstance(data.get("recommended_recovery_mode"), str)
+    assert isinstance(data.get("recommended_recovery_mode_label"), str)
+    assert isinstance(data.get("recommended_recovery_reason"), str)
+
+
 def test_check_quiet_suppresses_subprocess_output(tmp_path: Path) -> None:
     LocalOrchestrator(tmp_path)
     runner = CliRunner()

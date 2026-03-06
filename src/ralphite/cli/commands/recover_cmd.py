@@ -5,7 +5,7 @@ from typing import Annotated
 
 import typer
 
-from ralphite.engine import present_recovery_mode, present_run_status
+from ralphite.engine import present_recovery_mode
 
 from ..core import (
     _emit_payload,
@@ -47,6 +47,113 @@ def _primary_failure_reason(run: object) -> str:
     )
     code, count = ranked[0]
     return f"{code} ({count})"
+
+
+def _recovery_details(run: object) -> dict[str, object]:
+    metadata = (
+        getattr(run, "metadata", {})
+        if isinstance(getattr(run, "metadata", {}), dict)
+        else {}
+    )
+    recovery = metadata.get("recovery", {})
+    return recovery if isinstance(recovery, dict) else {}
+
+
+def _recommend_recovery_mode(
+    *,
+    preflight: dict[str, object] | None,
+    run: object,
+) -> tuple[str, str, str]:
+    recovery = _recovery_details(run)
+    details = recovery.get("details")
+    details = details if isinstance(details, dict) else {}
+    conflict_files = (
+        preflight.get("conflict_files")
+        if isinstance(preflight, dict)
+        and isinstance(preflight.get("conflict_files"), list)
+        else []
+    )
+    unresolved_conflicts = (
+        preflight.get("unresolved_conflict_files")
+        if isinstance(preflight, dict)
+        and isinstance(preflight.get("unresolved_conflict_files"), list)
+        else []
+    )
+    blocking_reasons = (
+        preflight.get("blocking_reasons")
+        if isinstance(preflight, dict)
+        and isinstance(preflight.get("blocking_reasons"), list)
+        else []
+    )
+    reason = str(details.get("reason") or "").strip()
+    prompt_present = bool(str(recovery.get("prompt") or "").strip())
+
+    if unresolved_conflicts or conflict_files:
+        return (
+            "manual",
+            present_recovery_mode("manual"),
+            "Conflict files are present. Resolve merge markers manually before resuming.",
+        )
+    if reason in {"worktree_prepare_failed", "phase_worktree_add_failed"}:
+        return (
+            "abort_phase",
+            present_recovery_mode("abort_phase"),
+            "Recovery state indicates a phase-level worktree failure. Abort the phase instead of attempting in-place remediation.",
+        )
+    if any(
+        isinstance(item, str) and "unrecoverable" in item.lower()
+        for item in blocking_reasons
+    ):
+        return (
+            "abort_phase",
+            present_recovery_mode("abort_phase"),
+            "The run is not safely recoverable from the current phase state.",
+        )
+    if reason in {"base_merge_conflict", "merge_conflict"}:
+        return (
+            "agent_best_effort",
+            present_recovery_mode("agent_best_effort"),
+            (
+                "No unresolved merge markers were detected in the recovery worktree. "
+                "Use agent-assisted recovery to finish the merge."
+            )
+            if prompt_present
+            else (
+                "No unresolved merge markers were detected in the recovery worktree. "
+                "Agent-assisted recovery is the best next step if you provide a remediation prompt."
+            ),
+        )
+    return (
+        "manual",
+        present_recovery_mode("manual"),
+        "Manual recovery is the conservative default when runtime context is limited.",
+    )
+
+
+def _recommended_next_action(
+    *,
+    recommended_mode: str,
+    recommended_reason: str,
+    preflight: dict[str, object] | None,
+    run_id: str,
+) -> str:
+    blockers = (
+        preflight.get("blocking_reasons")
+        if isinstance(preflight, dict)
+        and isinstance(preflight.get("blocking_reasons"), list)
+        else []
+    )
+    if blockers:
+        blocker = str(blockers[0]).strip()
+        if blocker:
+            return blocker
+    if recommended_mode == "manual":
+        return f"Resolve the reported conflicts, then rerun `ralphite recover --workspace . --run-id {run_id} --mode manual --resume`."
+    if recommended_mode == "agent_best_effort":
+        return f'Provide a recovery prompt, then rerun `ralphite recover --workspace . --run-id {run_id} --mode agent_best_effort --prompt "resolve conflicts" --resume`.'
+    if recommended_mode == "abort_phase":
+        return f"Abort the blocked phase with `ralphite recover --workspace . --run-id {run_id} --mode abort_phase --resume`."
+    return recommended_reason
 
 
 def recover_command(
@@ -177,6 +284,17 @@ def recover_command(
     preflight = orch.recovery_preflight(target)
     recovery_label = present_recovery_mode(mode)
     recovered_run = orch.get_run(target)
+    (
+        recommended_mode,
+        recommended_mode_label,
+        recommended_reason,
+    ) = _recommend_recovery_mode(preflight=preflight, run=recovered_run)
+    recommended_next_action = _recommended_next_action(
+        recommended_mode=recommended_mode,
+        recommended_reason=recommended_reason,
+        preflight=preflight,
+        run_id=target,
+    )
     if preflight_only:
         exit_code = (
             RECOVER_EXIT_SUCCESS
@@ -195,14 +313,15 @@ def recover_command(
             run_id=target,
             exit_code=exit_code,
             issues=issues,
-            next_actions=list(preflight.get("blocking_reasons", []))
-            if isinstance(preflight, dict)
-            else [],
+            next_actions=[recommended_next_action],
             data={
                 "preflight": preflight,
                 "plan_path": recovered_run.plan_path if recovered_run else "",
                 "recovery_mode": mode,
                 "recovery_mode_label": recovery_label,
+                "recommended_recovery_mode": recommended_mode,
+                "recommended_recovery_mode_label": recommended_mode_label,
+                "recommended_recovery_reason": recommended_reason,
                 "primary_failure_reason": _primary_failure_reason(recovered_run),
                 "git": git_status,
                 "git_warning": dirty_warning,
@@ -224,14 +343,15 @@ def recover_command(
                     "message": "recovery preflight failed",
                 }
             ],
-            next_actions=list(preflight.get("blocking_reasons", []))
-            if isinstance(preflight, dict)
-            else [],
+            next_actions=[recommended_next_action],
             data={
                 "preflight": preflight,
                 "plan_path": recovered_run.plan_path if recovered_run else "",
                 "recovery_mode": mode,
                 "recovery_mode_label": recovery_label,
+                "recommended_recovery_mode": recommended_mode,
+                "recommended_recovery_mode_label": recommended_mode_label,
+                "recommended_recovery_reason": recommended_reason,
                 "primary_failure_reason": _primary_failure_reason(recovered_run),
                 "git": git_status,
                 "git_warning": dirty_warning,
@@ -247,12 +367,15 @@ def recover_command(
             status="paused",
             run_id=target,
             exit_code=RECOVER_EXIT_PENDING,
-            next_actions=["Run `ralphite recover --resume` to continue."],
+            next_actions=[recommended_next_action],
             data={
                 "preflight": preflight,
                 "plan_path": recovered_run.plan_path if recovered_run else "",
                 "recovery_mode": mode,
                 "recovery_mode_label": recovery_label,
+                "recommended_recovery_mode": recommended_mode,
+                "recommended_recovery_mode_label": recommended_mode_label,
+                "recommended_recovery_reason": recommended_reason,
                 "primary_failure_reason": _primary_failure_reason(recovered_run),
                 "git": git_status,
                 "git_warning": dirty_warning,
@@ -271,16 +394,24 @@ def recover_command(
             run_id=target,
             exit_code=RECOVER_EXIT_PENDING,
             issues=[{"code": "recover.resume_rejected", "message": "resume rejected"}],
-            next_actions=(
-                list(latest_preflight.get("blocking_reasons", []))
-                if isinstance(latest_preflight, dict)
-                else []
-            ),
+            next_actions=[
+                _recommended_next_action(
+                    recommended_mode=recommended_mode,
+                    recommended_reason=recommended_reason,
+                    preflight=latest_preflight
+                    if isinstance(latest_preflight, dict)
+                    else None,
+                    run_id=target,
+                )
+            ],
             data={
                 "preflight": latest_preflight,
                 "plan_path": recovered_run.plan_path if recovered_run else "",
                 "recovery_mode": mode,
                 "recovery_mode_label": recovery_label,
+                "recommended_recovery_mode": recommended_mode,
+                "recommended_recovery_mode_label": recommended_mode_label,
+                "recommended_recovery_reason": recommended_reason,
                 "primary_failure_reason": _primary_failure_reason(recovered_run),
                 "git": git_status,
                 "git_warning": dirty_warning,
@@ -311,13 +442,7 @@ def recover_command(
         run_id=target,
         exit_code=exit_code,
         next_actions=[
-            present_run_status(status).next_action,
-            *(
-                list(preflight.get("next_commands", []))
-                if isinstance(preflight, dict)
-                and isinstance(preflight.get("next_commands"), list)
-                else []
-            ),
+            recommended_next_action,
         ],
         data={
             "artifacts": run.artifacts if run else [],
@@ -325,6 +450,9 @@ def recover_command(
             "preflight": preflight,
             "recovery_mode": mode,
             "recovery_mode_label": recovery_label,
+            "recommended_recovery_mode": recommended_mode,
+            "recommended_recovery_mode_label": recommended_mode_label,
+            "recommended_recovery_reason": recommended_reason,
             "primary_failure_reason": _primary_failure_reason(run),
             "git": git_status,
             "git_warning": dirty_warning,

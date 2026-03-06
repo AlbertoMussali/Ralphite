@@ -148,6 +148,12 @@ def test_cli_recover_preflight_only_success(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     assert payload["data"]["recovery_mode"] == "manual"
     assert payload["data"]["recovery_mode_label"] == "Manual"
+    assert payload["data"]["recommended_recovery_mode"] == "manual"
+    assert payload["data"]["recommended_recovery_mode_label"] == "Manual"
+    assert (
+        "Resolve merge markers manually"
+        in payload["data"]["recommended_recovery_reason"]
+    )
     assert payload["data"]["preflight"]["ok"] is True
 
 
@@ -177,6 +183,12 @@ def test_cli_recover_preflight_reports_blockers_and_mode(tmp_path: Path) -> None
     payload = json.loads(result.stdout)
     assert payload["data"]["recovery_mode"] == "agent_best_effort"
     assert payload["data"]["recovery_mode_label"] == "Best Effort Agent"
+    assert payload["data"]["recommended_recovery_mode"] == "manual"
+    assert payload["data"]["recommended_recovery_mode_label"] == "Manual"
+    assert (
+        "Resolve merge markers manually"
+        in payload["data"]["recommended_recovery_reason"]
+    )
     blockers = payload["data"]["preflight"]["blocking_reasons"]
     assert any("requires a non-empty prompt" in item for item in blockers)
 
@@ -206,8 +218,122 @@ def test_cli_recover_no_resume_table_shows_selected_mode(tmp_path: Path) -> None
     )
     assert result.exit_code != RECOVER_EXIT_SUCCESS
     assert "Recovery mode:" in result.stdout
+    assert "Recommended recovery mode:" in result.stdout
     assert "Manual" in result.stdout
     assert "Not Selected" not in result.stdout
+
+
+def test_cli_recover_preflight_recommends_agent_best_effort_when_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    orch = LocalOrchestrator(tmp_path)
+
+    def fake_preflight(_run_id: str) -> dict[str, object]:
+        return {
+            "ok": False,
+            "checks": [],
+            "blocking_reasons": [],
+            "conflict_files": [],
+            "unresolved_conflict_files": [],
+            "next_commands": [],
+        }
+
+    monkeypatch.setattr(orch, "recovery_preflight", fake_preflight)
+
+    class _Run:
+        plan_path = str(tmp_path / ".ralphite" / "plans" / "starter_bugfix.yaml")
+        metadata = {
+            "recovery": {
+                "details": {"reason": "base_merge_conflict"},
+                "prompt": "resolve conflicts",
+            },
+            "run_metrics": {"failure_reason_counts": {}},
+        }
+
+    monkeypatch.setattr(orch, "get_run", lambda _run_id: _Run())
+    monkeypatch.setattr(orch, "recover_run", lambda _run_id: True)
+    monkeypatch.setattr(
+        orch, "set_recovery_mode", lambda _run_id, _mode, prompt=None: True
+    )
+
+    import ralphite.cli.commands.recover_cmd as recover_mod
+
+    monkeypatch.setattr(recover_mod, "_orchestrator", lambda _workspace: orch)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "recover",
+            "--workspace",
+            str(tmp_path),
+            "--run-id",
+            "run-123",
+            "--mode",
+            "manual",
+            "--preflight-only",
+            "--json",
+        ],
+    )
+    assert result.exit_code == RECOVER_EXIT_PREFLIGHT_FAILED
+    payload = json.loads(result.stdout)
+    assert payload["data"]["recommended_recovery_mode"] == "agent_best_effort"
+    assert payload["data"]["recommended_recovery_mode_label"] == "Best Effort Agent"
+
+
+def test_cli_recover_preflight_recommends_abort_phase_for_phase_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    orch = LocalOrchestrator(tmp_path)
+
+    def fake_preflight(_run_id: str) -> dict[str, object]:
+        return {
+            "ok": False,
+            "checks": [],
+            "blocking_reasons": [],
+            "conflict_files": [],
+            "unresolved_conflict_files": [],
+            "next_commands": [],
+        }
+
+    monkeypatch.setattr(orch, "recovery_preflight", fake_preflight)
+
+    class _Run:
+        plan_path = str(tmp_path / ".ralphite" / "plans" / "starter_bugfix.yaml")
+        metadata = {
+            "recovery": {
+                "details": {"reason": "worktree_prepare_failed"},
+            },
+            "run_metrics": {"failure_reason_counts": {}},
+        }
+
+    monkeypatch.setattr(orch, "get_run", lambda _run_id: _Run())
+    monkeypatch.setattr(orch, "recover_run", lambda _run_id: True)
+    monkeypatch.setattr(
+        orch, "set_recovery_mode", lambda _run_id, _mode, prompt=None: True
+    )
+
+    import ralphite.cli.commands.recover_cmd as recover_mod
+
+    monkeypatch.setattr(recover_mod, "_orchestrator", lambda _workspace: orch)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "recover",
+            "--workspace",
+            str(tmp_path),
+            "--run-id",
+            "run-123",
+            "--mode",
+            "manual",
+            "--preflight-only",
+            "--json",
+        ],
+    )
+    assert result.exit_code == RECOVER_EXIT_PREFLIGHT_FAILED
+    payload = json.loads(result.stdout)
+    assert payload["data"]["recommended_recovery_mode"] == "abort_phase"
+    assert payload["data"]["recommended_recovery_mode_label"] == "Abort Phase"
 
 
 def test_cli_recover_requires_git_workspace(

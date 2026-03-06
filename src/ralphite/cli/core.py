@@ -204,6 +204,17 @@ def _display_recovery_mode(data: dict[str, Any]) -> str | None:
     return display if display != "Not Selected" else raw
 
 
+def _display_recommended_recovery_mode(data: dict[str, Any]) -> str | None:
+    label = data.get("recommended_recovery_mode_label")
+    if isinstance(label, str) and label.strip():
+        return label
+    raw = data.get("recommended_recovery_mode")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    display = present_recovery_mode(raw)
+    return display if display != "Not Selected" else raw
+
+
 def _orchestrator(workspace: Path, *, bootstrap: bool = True) -> LocalOrchestrator:
     return LocalOrchestrator(workspace.expanduser().resolve(), bootstrap=bootstrap)
 
@@ -263,9 +274,10 @@ def _git_required_payload(
     exit_code: int = 1,
 ) -> None:
     advice = classify_failure("git_required")
-    status = git_status or GitWorktreeManager(
-        workspace.expanduser().resolve(), "cli"
-    ).runtime_status()
+    status = (
+        git_status
+        or GitWorktreeManager(workspace.expanduser().resolve(), "cli").runtime_status()
+    )
     detail = str(status.get("detail") or advice.message).strip() or advice.message
     remediation = str(status.get("remediation") or "").strip()
     payload = _result_payload(
@@ -504,11 +516,26 @@ def _emit_payload(
             renderables.append(Text("Failure signal:", style="bold"))
             renderables.append(Text(primary_failure_reason))
 
+        git_warning = data.get("git_warning")
+        if isinstance(git_warning, str) and git_warning.strip():
+            renderables.append(Text(""))
+            renderables.append(Text("Workspace warning:", style="bold yellow"))
+            renderables.append(Text(git_warning))
+
         recovery_mode = _display_recovery_mode(data)
         if isinstance(recovery_mode, str) and recovery_mode.strip():
             renderables.append(Text(""))
             renderables.append(Text("Recovery mode:", style="bold"))
             renderables.append(Text(recovery_mode))
+
+        recommended_mode = _display_recommended_recovery_mode(data)
+        if isinstance(recommended_mode, str) and recommended_mode.strip():
+            renderables.append(Text(""))
+            renderables.append(Text("Recommended recovery mode:", style="bold"))
+            renderables.append(Text(recommended_mode))
+            recommended_reason = data.get("recommended_recovery_reason")
+            if isinstance(recommended_reason, str) and recommended_reason.strip():
+                renderables.append(Text(recommended_reason))
 
     run_status_raw = str(payload.get("status", "")).lower()
     renderables.append(Text(""))
@@ -520,11 +547,24 @@ def _emit_payload(
     elif (
         run_status_raw == "paused"
         and isinstance(data, dict)
-        and _display_recovery_mode(data)
+        and (_display_recommended_recovery_mode(data) or _display_recovery_mode(data))
     ):
-        rec_mode_display = _display_recovery_mode(data)
+        rec_mode_display = _display_recommended_recovery_mode(
+            data
+        ) or _display_recovery_mode(data)
         renderables.append(
-            Text(f"Run is paused. Fix required using recovery mode: {rec_mode_display}")
+            Text(f"Run is paused. Continue with recovery mode: {rec_mode_display}")
+        )
+    elif (
+        run_status_raw == "paused_recovery_required"
+        and isinstance(data, dict)
+        and (_display_recommended_recovery_mode(data) or _display_recovery_mode(data))
+    ):
+        rec_mode_display = _display_recommended_recovery_mode(
+            data
+        ) or _display_recovery_mode(data)
+        renderables.append(
+            Text(f"Recovery is blocked. Recommended mode: {rec_mode_display}")
         )
     else:
         # Failed or other unexpected statuses

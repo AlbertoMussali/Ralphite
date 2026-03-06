@@ -266,6 +266,12 @@ def _build_failures(run: RunViewState, catalog: dict[str, dict[str, Any]]) -> li
     details = (
         recovery.get("details") if isinstance(recovery.get("details"), dict) else {}
     )
+    recovery_reason = str(details.get("reason") or "").strip()
+    recovery_error = str(details.get("error") or "").strip()
+    if recovery_reason:
+        lines.append(f"- Recovery blocker: `{recovery_reason}`")
+    if recovery_error:
+        lines.append(f"- Recovery detail: {recovery_error}")
     conflicts = (
         details.get("conflict_files")
         if isinstance(details.get("conflict_files"), list)

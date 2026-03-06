@@ -450,9 +450,20 @@ def test_recovery_required_run_is_reported_in_final_report(workspace: Path) -> N
     assert run is not None
     assert run.status == "paused_recovery_required"
     report = _artifact_text(run, "final_report")
+    assert "## Outcome" in report
+    assert "## Changed Files" in report
+    assert "## Acceptance Results" in report
     assert "## Failures and Warnings" in report
+    assert "Recovery blocker:" in report
     assert "SIMULATED_CONFLICT" in report
+    assert "Unresolved conflict:" in report
     assert "## Next Steps" in report
+    assert (
+        "Return to Ralphite recovery and resume." in report
+        or "No follow-up action recorded." not in report
+    )
+    assert "## Supporting Artifacts" in report
+    assert "## Run Highlights" in report
 
 
 def test_retry_policy_retries_transient_node_failures(workspace: Path) -> None:

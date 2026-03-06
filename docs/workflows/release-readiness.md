@@ -38,6 +38,19 @@ Confirm that:
 - non-JSON output surfaces run id, next action, and artifact paths
 - raw wildcard literals such as `tool:*` / `mcp:*` do not leak into operator-facing CLI text
 
+## Git Runtime Readiness
+
+Release verification should treat git prerequisites as two separate checks:
+
+- Repository ready: inside a git worktree with an initial commit
+- Execution ready: repository ready and clean enough to launch a new run
+
+Operator expectations:
+
+- `run` and `quickstart` fail closed when execution readiness is missing.
+- `recover` and `replay` are allowed on a dirty workspace, but they should surface a warning and continue to real recovery/replay validation.
+- A git prerequisite failure should be reported as an environment issue, not disguised as a product/runtime defect.
+
 ## Sign-Off Artifact
 
 Record in release notes:

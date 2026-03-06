@@ -11,7 +11,16 @@ uv run ralphite quickstart --workspace . --yes --output table
 uv run ralphite run --workspace . --yes --output table
 ```
 
-Ralphite execution and recovery require the workspace to be inside a git worktree. `doctor`, `quickstart`, `run`, and `recover` fail closed outside git.
+Ralphite distinguishes between:
+
+- Repository ready: the workspace is inside a git worktree and has an initial commit.
+- Execution ready: the workspace is repository-ready and clean.
+
+Command behavior:
+
+- `doctor` reports both readiness levels.
+- `run` and `quickstart` require execution-ready state.
+- `recover` and `replay` require repository-ready state and warn when the workspace is dirty.
 
 `init` creates the local Ralphite workspace.
 
@@ -76,6 +85,12 @@ Recover a paused or failed run:
 
 ```bash
 uv run ralphite recover --workspace . --output table
+```
+
+Replay a failed run without forcing a clean primary workspace first:
+
+```bash
+uv run ralphite replay <run-id> --workspace . --output table
 ```
 
 Validate plan structure before rerunning:
