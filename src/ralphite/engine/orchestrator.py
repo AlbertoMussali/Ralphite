@@ -425,9 +425,7 @@ class LocalOrchestrator:
         ]
         return {
             "ok": len(blocking_reasons) == 0,
-            "reason": (
-                "stale_recovery_state_present" if blocking_reasons else "ok"
-            ),
+            "reason": ("stale_recovery_state_present" if blocking_reasons else "ok"),
             "detail": detail,
             "blocking_reasons": blocking_reasons,
             "recoverable_runs": recoverable_runs,
@@ -1708,9 +1706,7 @@ class LocalOrchestrator:
             run_id=run.id, artifacts_dir=str(artifacts_dir), items=items
         )
 
-    def _node_surfaces(
-        self, handle: RuntimeHandle, node: RuntimeNodeSpec
-    ) -> set[str]:
+    def _node_surfaces(self, handle: RuntimeHandle, node: RuntimeNodeSpec) -> set[str]:
         node_surface_map = (
             handle.run.metadata.get("node_surface_map", {})
             if isinstance(handle.run.metadata.get("node_surface_map"), dict)

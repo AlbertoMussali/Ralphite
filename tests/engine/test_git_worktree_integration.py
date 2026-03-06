@@ -87,7 +87,9 @@ def test_git_worktree_conflict_fail_closed_reports_details(tmp_path: Path) -> No
     assert details.get("next_commands")
 
 
-def test_pre_base_integration_check_blocks_overlapping_local_changes(tmp_path: Path) -> None:
+def test_pre_base_integration_check_blocks_overlapping_local_changes(
+    tmp_path: Path,
+) -> None:
     _init_repo(tmp_path)
     manager = GitWorktreeManager(tmp_path, "runblock123")
     state = manager.bootstrap_state()
@@ -101,7 +103,9 @@ def test_pre_base_integration_check_blocks_overlapping_local_changes(tmp_path: P
     )
     assert ok is True
 
-    (tmp_path / "shared.txt").write_text("local change without commit\n", encoding="utf-8")
+    (tmp_path / "shared.txt").write_text(
+        "local change without commit\n", encoding="utf-8"
+    )
 
     status, details = manager.integrate_phase(state, "phase-1")
     assert status == "recovery_required"

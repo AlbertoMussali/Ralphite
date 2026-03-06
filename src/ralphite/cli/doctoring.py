@@ -135,9 +135,7 @@ def _doctor_snapshot(
         {
             "check": "git-execution",
             "status": (
-                "OK"
-                if git_execution_ok
-                else ("WARN" if git_repo_ok else "FAIL")
+                "OK" if git_execution_ok else ("WARN" if git_repo_ok else "FAIL")
             ),
             "detail": git_execution_detail,
         }

@@ -184,7 +184,9 @@ class GitWorktreeManager:
         )
         if diff.returncode != 0:
             return []
-        return sorted({line.strip() for line in diff.stdout.splitlines() if line.strip()})
+        return sorted(
+            {line.strip() for line in diff.stdout.splitlines() if line.strip()}
+        )
 
     def _parse_merge_blocked_files(self, output: str) -> list[str]:
         lines = output.splitlines()
@@ -195,7 +197,8 @@ class GitWorktreeManager:
             lowered = line.lower().strip()
             if (
                 "would be overwritten by merge" in lowered
-                or "the following untracked working tree files would be overwritten by merge" in lowered
+                or "the following untracked working tree files would be overwritten by merge"
+                in lowered
             ):
                 capture = True
                 continue
@@ -217,7 +220,9 @@ class GitWorktreeManager:
         )
         if result.returncode != 0:
             return []
-        return sorted({line.strip() for line in result.stdout.splitlines() if line.strip()})
+        return sorted(
+            {line.strip() for line in result.stdout.splitlines() if line.strip()}
+        )
 
     def _collect_merge_conflict_details(
         self,
@@ -236,9 +241,7 @@ class GitWorktreeManager:
             "blocking_files": blocking_files,
         }
 
-    def pre_base_integration_check(
-        self, phase_branch: str
-    ) -> dict[str, Any]:
+    def pre_base_integration_check(self, phase_branch: str) -> dict[str, Any]:
         local_files = self._workspace_local_changes()
         phase_files = self._phase_touched_files(phase_branch)
         overlap_files = sorted(set(local_files).intersection(phase_files))
@@ -667,7 +670,9 @@ class GitWorktreeManager:
             for entry in phase_state.get("workers", {}).values()
             if isinstance(entry, dict)
         )
-        for branch in reversed(list(dict.fromkeys([item for item in phase_branches if item]))):
+        for branch in reversed(
+            list(dict.fromkeys([item for item in phase_branches if item]))
+        ):
             exists = self._git(["rev-parse", "--verify", branch], check=False)
             if exists.returncode != 0:
                 messages.append(f"branch already removed {branch}")

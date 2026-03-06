@@ -178,9 +178,7 @@ def init_command(
 
     console.print(f"Initialized workspace: [bold]{orch.workspace_root}[/bold]")
     console.print("Workspace state:")
-    console.print(
-        f"- Local policy + defaults: {cfg_path} (profile: {profile_name})"
-    )
+    console.print(f"- Local policy + defaults: {cfg_path} (profile: {profile_name})")
     console.print(f"- Local plans directory: {orch.paths['plans']}")
     if generated_plan:
         console.print(f"- Generated bootstrap plan: {generated_plan}")

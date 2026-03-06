@@ -150,7 +150,9 @@ def test_run_json_reports_dirty_worktree_detail(
                 "remediation": 'git add -A && git commit -m "save state"',
             }
 
-    monkeypatch.setattr(run_mod, "_orchestrator", lambda _workspace: _FakeOrchestrator())
+    monkeypatch.setattr(
+        run_mod, "_orchestrator", lambda _workspace: _FakeOrchestrator()
+    )
     runner = CliRunner()
     result = runner.invoke(
         app,
@@ -200,8 +202,14 @@ def test_run_json_reports_start_preflight_block_and_flag(
                 }
             )
 
-    monkeypatch.setattr(run_mod, "_orchestrator", lambda _workspace: _FakeOrchestrator())
-    monkeypatch.setattr(run_mod, "_resolve_plan_ref", lambda _orch, _plan_ref: tmp_path / ".ralphite" / "plans" / "starter.yaml")
+    monkeypatch.setattr(
+        run_mod, "_orchestrator", lambda _workspace: _FakeOrchestrator()
+    )
+    monkeypatch.setattr(
+        run_mod,
+        "_resolve_plan_ref",
+        lambda _orch, _plan_ref: tmp_path / ".ralphite" / "plans" / "starter.yaml",
+    )
     runner = CliRunner()
     result = runner.invoke(
         app,
@@ -220,7 +228,10 @@ def test_run_json_reports_start_preflight_block_and_flag(
     payload = json.loads(result.stdout)
     assert payload["status"] == "failed"
     assert payload["data"]["first_failure_recovery"] == "agent_best_effort"
-    assert payload["data"]["run_start_preflight"]["reason"] == "stale_recovery_state_present"
+    assert (
+        payload["data"]["run_start_preflight"]["reason"]
+        == "stale_recovery_state_present"
+    )
 
 
 def test_recover_allows_dirty_workspace_with_warning(
@@ -280,7 +291,9 @@ def test_recover_allows_dirty_workspace_with_warning(
     assert result.exit_code == RECOVER_EXIT_PENDING
     payload = json.loads(result.stdout)
     assert payload["status"] == "paused"
-    assert payload["data"]["git_warning"].startswith("Workspace has uncommitted changes.")
+    assert payload["data"]["git_warning"].startswith(
+        "Workspace has uncommitted changes."
+    )
     assert all(item.get("code") != "git.required" for item in payload["issues"])
 
 
@@ -335,7 +348,9 @@ def test_replay_allows_dirty_workspace_with_warning(
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["status"] == "succeeded"
-    assert payload["data"]["git_warning"].startswith("Workspace has uncommitted changes.")
+    assert payload["data"]["git_warning"].startswith(
+        "Workspace has uncommitted changes."
+    )
 
 
 def test_replay_reports_start_preflight_block(
@@ -354,7 +369,9 @@ def test_replay_reports_start_preflight_block(
                     "ok": False,
                     "reason": "stale_recovery_state_present",
                     "detail": "workspace has unresolved recoverable runs or stale managed artifacts",
-                    "next_commands": ["uv run ralphite recover --workspace . --output table"],
+                    "next_commands": [
+                        "uv run ralphite recover --workspace . --output table"
+                    ],
                 }
             )
 
@@ -368,7 +385,10 @@ def test_replay_reports_start_preflight_block(
     )
     assert result.exit_code == 1
     payload = json.loads(result.stdout)
-    assert payload["data"]["run_start_preflight"]["reason"] == "stale_recovery_state_present"
+    assert (
+        payload["data"]["run_start_preflight"]["reason"]
+        == "stale_recovery_state_present"
+    )
 
 
 def test_validate_command_returns_fixes_for_invalid_plan(tmp_path: Path) -> None:
@@ -540,8 +560,12 @@ def test_run_table_output_prints_watch_command(
         def get_run(self, run_id: str):  # noqa: ANN001
             return _FakeRun()
 
-    monkeypatch.setattr(run_mod, "_orchestrator", lambda _workspace: _FakeOrchestrator())
-    monkeypatch.setattr(run_mod, "_resolve_plan_ref", lambda orch, plan: tmp_path / "plan.yaml")
+    monkeypatch.setattr(
+        run_mod, "_orchestrator", lambda _workspace: _FakeOrchestrator()
+    )
+    monkeypatch.setattr(
+        run_mod, "_resolve_plan_ref", lambda orch, plan: tmp_path / "plan.yaml"
+    )
     runner = CliRunner()
     result = runner.invoke(
         app, ["run", "--workspace", str(tmp_path), "--yes", "--output", "table"]
@@ -598,7 +622,16 @@ def test_doctor_reports_repository_and_execution_separately_for_dirty_repo(
 ) -> None:
     (tmp_path / "README.md").write_text("dirty change\n", encoding="utf-8")
     result = subprocess.run(
-        ["uv", "run", "ralphite", "doctor", "--workspace", str(tmp_path), "--output", "json"],
+        [
+            "uv",
+            "run",
+            "ralphite",
+            "doctor",
+            "--workspace",
+            str(tmp_path),
+            "--output",
+            "json",
+        ],
         cwd=Path(__file__).resolve().parents[2],
         check=False,
         capture_output=True,

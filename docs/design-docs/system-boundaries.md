@@ -7,7 +7,7 @@ Last verified against commit: 70b0c1f
 
 - Parsing/validating v1 plans
 - Compiling orchestration templates into runtime DAG nodes
-- Executing nodes through headless backends (, optional )
+- Executing nodes through headless backends
 - Enforcing acceptance commands/artifact checks
 - Managing run lifecycle, persistence, recovery, and operator UX
 
