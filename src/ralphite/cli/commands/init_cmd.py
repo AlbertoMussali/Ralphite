@@ -15,6 +15,20 @@ from ..core import (
     console,
 )
 
+_DEFAULT_INIT_TEMPLATE = "starter_bugfix"
+_STARTER_TEMPLATE_SUMMARY: dict[str, str] = {
+    "starter_bugfix": "Bugfix-focused loop with review and validation passes.",
+    "starter_refactor": "Structured refactor flow for safer large code changes.",
+    "starter_docs_update": "Docs-first flow for content and reference updates.",
+    "starter_release_prep": "Release-readiness flow with branch-level checkpoints.",
+}
+_LEGACY_TEMPLATE_SUMMARY: dict[str, str] = {
+    "general_sps": "Legacy sequential/parallel/sequential orchestration shape.",
+    "branched": "Legacy lane-based branched orchestration shape.",
+    "blue_red": "Legacy blue/red cycle orchestration shape.",
+    "custom": "Legacy explicit custom cell orchestration shape.",
+}
+
 
 def init_command(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
@@ -25,9 +39,13 @@ def init_command(
         str,
         typer.Option(
             "--template",
-            help="Bootstrap template: starter_bugfix | starter_refactor | starter_docs_update | starter_release_prep",
+            help=(
+                "Bootstrap template (default: starter_bugfix). "
+                "Recommended starters: starter_bugfix | starter_refactor | "
+                "starter_docs_update | starter_release_prep"
+            ),
         ),
-    ] = "starter_bugfix",
+    ] = _DEFAULT_INIT_TEMPLATE,
     plan_id: Annotated[
         str | None, typer.Option(help="Optional plan_id for generated bootstrap plan")
     ] = None,
@@ -53,11 +71,17 @@ def init_command(
     profile_name = profile or orch.config.profile_name
     if not yes and profile is None:
         profile_name = typer.prompt("Profile name", default=orch.config.profile_name)
-    effective_template = (template or "starter_bugfix").strip()
-    if not yes and template == "starter_bugfix":
+    effective_template = (template or _DEFAULT_INIT_TEMPLATE).strip()
+    if not yes and template == _DEFAULT_INIT_TEMPLATE:
+        console.print("Starter templates (recommended):")
+        for template_id, summary in _STARTER_TEMPLATE_SUMMARY.items():
+            console.print(f"- {template_id}: {summary}")
+        console.print("Legacy orchestration templates (compatibility):")
+        for template_id, summary in _LEGACY_TEMPLATE_SUMMARY.items():
+            console.print(f"- {template_id}: {summary}")
         effective_template = (
-            typer.prompt("Template", default="starter_bugfix").strip()
-            or "starter_bugfix"
+            typer.prompt("Template", default=_DEFAULT_INIT_TEMPLATE).strip()
+            or _DEFAULT_INIT_TEMPLATE
         )
     allowed_templates = {
         "starter_bugfix",
@@ -92,6 +116,25 @@ def init_command(
         )
         lanes = _parse_csv_items(lane_prompt, default=lanes)
 
+    template_summary = _STARTER_TEMPLATE_SUMMARY.get(
+        effective_template,
+        _LEGACY_TEMPLATE_SUMMARY.get(
+            effective_template, "Template summary unavailable."
+        ),
+    )
+    console.print("Init selections:")
+    console.print(f"- Template: {effective_template} ({template_summary})")
+    console.print(f"- Plan ID: {effective_plan_id}")
+    console.print(f"- Plan name: {effective_name}")
+    if goal:
+        console.print(f"- Goal: {goal}")
+    else:
+        console.print("- Goal: not set (starter task titles remain template defaults)")
+    if effective_template == "branched":
+        console.print(f"- Branched lanes: {', '.join(lanes)}")
+    if effective_template == "blue_red":
+        console.print(f"- blue_red.loop_unit: {blue_red_loop_unit}")
+
     config = LocalConfig(
         workspace_root=str(orch.workspace_root),
         profile_name=profile_name,
@@ -116,7 +159,7 @@ def init_command(
         or goal is not None
         or plan_id is not None
         or name is not None
-        or template != "starter_bugfix"
+        or template != _DEFAULT_INIT_TEMPLATE
         or branched_lanes is not None
         or blue_red_loop_unit != "per_task"
     )
@@ -134,10 +177,17 @@ def init_command(
     selected_plan = generated_plan or reused_plan or seeded
 
     console.print(f"Initialized workspace: [bold]{orch.workspace_root}[/bold]")
-    console.print(f"Config: {cfg_path}")
+    console.print("Workspace state:")
+    console.print(
+        f"- Local policy + defaults: {cfg_path} (profile: {profile_name})"
+    )
+    console.print(f"- Local plans directory: {orch.paths['plans']}")
     if generated_plan:
-        console.print(f"Generated bootstrap plan: {generated_plan}")
+        console.print(f"- Generated bootstrap plan: {generated_plan}")
     elif selected_plan:
-        console.print(f"Bootstrap plan: {selected_plan}")
+        console.print(f"- Active bootstrap plan: {selected_plan}")
     else:
-        console.print("Bootstrap plan already present.")
+        console.print("- Active bootstrap plan: already present")
+    console.print("Next steps:")
+    console.print("- uv run ralphite validate --workspace . --json")
+    console.print("- uv run ralphite quickstart --workspace . --yes --output table")

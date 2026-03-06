@@ -17,6 +17,13 @@ Ralphite execution and recovery require the workspace to be inside a git worktre
 
 - `.ralphite/config.toml`
 - `.ralphite/plans/*.yaml`
+- A generated or reused bootstrap plan selected for first execution
+
+`init` onboarding now surfaces:
+
+- Recommended starter templates in product terms (`starter_bugfix`, `starter_refactor`, `starter_docs_update`, `starter_release_prep`)
+- Any defaulted selections (`plan_id`, `name`, optional goal behavior)
+- A workspace state summary that explains config, plan location, and immediate next commands
 
 `quickstart` is the recommended cold-start command.
 

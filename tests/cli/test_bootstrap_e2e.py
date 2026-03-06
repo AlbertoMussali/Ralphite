@@ -246,6 +246,33 @@ def test_init_legacy_template_names_preserve_orchestration_shape(
     assert f"template: {template}" in content
 
 
+def test_init_reports_template_defaults_and_workspace_state(tmp_path: Path) -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "init",
+            "--workspace",
+            str(tmp_path),
+            "--yes",
+            "--template",
+            "starter_bugfix",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Init selections:" in result.stdout
+    assert "Template: starter_bugfix" in result.stdout
+    assert (
+        "Goal: not set (starter task titles remain template defaults)"
+        in result.stdout
+    )
+    assert "Workspace state:" in result.stdout
+    assert "Local policy + defaults:" in result.stdout
+    assert "Local plans directory:" in result.stdout
+    assert "Next steps:" in result.stdout
+    assert "uv run ralphite quickstart --workspace . --yes --output table" in result.stdout
+
+
 def test_validate_non_v1_returns_version_invalid(tmp_path: Path) -> None:
     plans = tmp_path / ".ralphite" / "plans"
     plans.mkdir(parents=True, exist_ok=True)

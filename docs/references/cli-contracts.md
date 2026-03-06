@@ -26,6 +26,7 @@ Execution commands (`run`, `quickstart`, `recover`, `replay`) require the select
 - `--reasoning-effort low|medium|high` (`run`, `quickstart`)
 - `--strict` (`check`)
 - `init --template` prefers job-shaped starters, and still accepts `general_sps | branched | blue_red | custom` for compatibility
+- `init` table output includes `Init selections`, `Workspace state`, and `Next steps` sections to make defaults and first actions explicit
 
 ## JSON Envelope
 
