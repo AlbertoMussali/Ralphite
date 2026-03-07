@@ -34,8 +34,8 @@ The result is a more durable loop for shipping changes with agents instead of ju
 ## AI Tooling Transparency
 
 This repository is developed with AI coding tools, especially Codex, and Ralphite itself defaults to a Codex backend for headless execution.
-T
-hat is intentional. The project is partly a product and partly an operating model for AI-assisted software work: scoped plans, explicit acceptance criteria, controlled worktree execution, and recoverable runs. In this way, this project helped build itself.
+
+That is intentional. The project is partly a product and partly an operating model for AI-assisted software work: scoped plans, explicit acceptance criteria, controlled worktree execution, and recoverable runs. In this way, this project helped build itself.
 
 ## Features
 
