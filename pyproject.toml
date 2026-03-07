@@ -10,12 +10,12 @@ requires-python = ">=3.13"
 authors = [
     {name = "Alberto Mussali", email = "albertomussalih@gmail.com"},
 ]
-license = {text = "MIT"}
+license = {text = "PolyForm Internal Use 1.0.0 OR Commercial License"}
 readme = "README.md"
 keywords = ["agent", "orchestrator", "cli", "headless"]
 classifiers = [
     "Programming Language :: Python :: 3.13",
-    "License :: OSI Approved :: MIT License",
+    "License :: Other/Proprietary License",
 ]
 dependencies = [
     "typer>=0.12,<1",
