@@ -225,38 +225,39 @@ flowchart TD
 
 ### `blue_red`
 
-Use this shape when each task benefits from paired or adversarial collaboration, where two distinct lanes work the same unit from different perspectives before convergence.
+Use this shape when each task benefits from a two-pass cycle: Blue implements first, then Red audits, scrutinizes, and hardens that same unit before the task is merged.
 
-- **Per-task dual-lane execution:** each task is dispatched into Blue and Red lanes
-- **Structured convergence:** both lanes report back into a controlled merge point
-- **Iterative progression:** the framework repeats that pattern task-by-task until completion
+- **Blue first:** implementation pass for the current task
+- **Red second:** audit, corrective fixing, and hardening pass on the same task
+- **Serial per-task flow:** the cycle runs as Blue -> handoff -> Red -> merge, then moves to the next task
 
 ```mermaid
 flowchart TD
     A([Goal / Selected Plan]) --> Q[Ordered Task Cycle]
     Q --> D1{Dispatch Current Task}
 
-    D1 --> BL1
-    D1 --> RD1
-
     subgraph BLUE[Blue Team Lane]
         direction TB
+        BL0[Current Task]
         BL1[Prepare]
-        BL2[Execute]
+        BL2[Implement]
         BL3[Report]
-        BL1 --> BL2 --> BL3
+        BL0 --> BL1 --> BL2 --> BL3
     end
+
+    D1 --> BL0
+    BL3 --> H[Handoff Summary]
 
     subgraph RED[Red Team Lane]
         direction TB
-        RD1[Prepare]
-        RD2[Execute]
+        RD1[Audit]
+        RD2[Correct and Harden]
         RD3[Report]
         RD1 --> RD2 --> RD3
     end
 
-    BL3 --> D2{Per-Task Convergence}
-    RD3 --> D2
+    H --> RD1
+    RD3 --> D2{Per-Task Convergence}
     D2 --> N{More Tasks?}
     N -->|Yes| D1
     N -->|No| Z([Final Artifacts])
