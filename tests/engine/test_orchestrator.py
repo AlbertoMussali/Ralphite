@@ -381,6 +381,36 @@ def test_v1_plan_executes_with_phase_events(workspace: Path) -> None:
     assert "RUN_DONE" in names
 
 
+def test_phase_done_is_not_emitted_when_downstream_nodes_remain_blocked(
+    workspace: Path,
+) -> None:
+    orch = LocalOrchestrator(workspace)
+
+    def failing_agent(self, handle, node, profile, snapshot, *, worktree):  # type: ignore[no-untyped-def]
+        if node.role == "worker" and node.source_task_id == "t2":
+            return False, {"reason": "backend_nonzero", "error": "simulated failure"}
+        return True, {"summary": "ok"}
+
+    orch._execute_agent = MethodType(failing_agent, orch)  # type: ignore[method-assign]
+    run_id = orch.start_run(plan_content=_plan_content())
+    events = list(orch.stream_events(run_id))
+    run = orch.get_run(run_id)
+
+    assert run is not None
+    assert run.status == "failed"
+    names = [event["event"] for event in events]
+    assert "RUN_DONE" in names
+    assert "PHASE_DONE" not in names
+    phase_done = (
+        run.metadata.get("phase_done", [])
+        if isinstance(run.metadata.get("phase_done"), list)
+        else []
+    )
+    assert phase_done == []
+    assert any(node.status == "blocked" for node in run.nodes.values())
+    assert any(evt["event"] == "RUN_INCOMPLETE_BLOCKED" for evt in events)
+
+
 def test_conflict_triggers_recovery_and_abort_mode(workspace: Path) -> None:
     orch = LocalOrchestrator(workspace)
     (workspace / ".ralphite" / "force_merge_conflict").write_text(

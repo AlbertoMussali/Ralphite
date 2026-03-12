@@ -162,15 +162,12 @@ class RunEventLogger:
                 for node_id in phase_node_ids
                 if node_id in handle.run.nodes
             ]
-            terminal = {"succeeded", "failed", "blocked"}
-            if statuses and all(status in terminal for status in statuses):
+            if statuses and all(status == "succeeded" for status in statuses):
                 self.emit(
                     handle,
                     stage="summary",
                     event="PHASE_DONE",
-                    level="info"
-                    if all(status == "succeeded" for status in statuses)
-                    else "error",
+                    level="info",
                     message=f"phase completed: {phase}",
                     group=phase,
                 )

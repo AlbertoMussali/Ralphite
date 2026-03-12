@@ -3685,12 +3685,29 @@ class LocalOrchestrator:
                     break
 
             if run.status == "running":
-                failed = any(node.status == "failed" for node in run.nodes.values())
-                blocked = any(node.status == "blocked" for node in run.nodes.values())
-                if failed or blocked:
+                derived_status = self._recompute_run_status(handle)
+                has_incomplete_nodes = any(
+                    node.status in {"queued", "blocked"} for node in run.nodes.values()
+                )
+                if derived_status == "paused":
                     run.status = "failed"
+                    self._emit(
+                        handle,
+                        stage="summary",
+                        event="RUN_INCOMPLETE_BLOCKED",
+                        level="error",
+                        message="run terminated with incomplete blocked or queued nodes",
+                    )
                 else:
-                    run.status = "succeeded"
+                    run.status = derived_status
+                    if has_incomplete_nodes:
+                        self._emit(
+                            handle,
+                            stage="summary",
+                            event="RUN_INCOMPLETE_BLOCKED",
+                            level="error",
+                            message="run terminated with incomplete blocked or queued nodes",
+                        )
 
             if run.status == "paused_recovery_required":
                 self._retain_all_managed_work(
