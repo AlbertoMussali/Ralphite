@@ -1,7 +1,7 @@
 # Recovery Workflow
 
 Owners: engine, cli
-Last verified against commit: 071697a
+Last verified against commit: a8f4411
 
 ## Git Prerequisites
 
@@ -16,6 +16,7 @@ Command policy:
 - `recover` and `replay` require repository-ready state.
 - `run`, `quickstart`, and `replay` also block when recoverable runs or stale managed Ralphite worktrees/branches are still present in the workspace.
 - A dirty workspace is allowed for `recover` and `replay`, but the CLI warns that local edits may still create merge conflicts.
+- During phase/base reintegration, Ralphite now ignores bookkeeping-only overlap on the active plan path, revision-only writeback target, and `.ralphite/` runtime files. Real content overlap still blocks recovery.
 
 ## Operator Loop
 
@@ -51,6 +52,7 @@ Recovery guidance:
 - use `reconcile --apply` when node/phase state appears stale relative to actual branches, commits, or retained work
 - use `salvage` when a worker produced useful work but the run terminated non-successfully
 - use `promote-salvage` for retained committed work and for dirty retained work that can pass local acceptance and be committed by Ralphite
+- common additive export conflicts and simple markdown append-only conflicts may be auto-resolved during integration; unsupported conflicts still pause for manual recovery
 - manual JSON editing is not a supported recovery workflow
 
 ## Recommended Modes

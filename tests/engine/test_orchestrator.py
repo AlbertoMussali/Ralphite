@@ -195,6 +195,9 @@ tasks:
   - id: t1
     title: Build
     completed: false
+    routing:
+      cell: cycle
+      team_mode: blue_red
 outputs:
   required_artifacts: []
 """
@@ -251,6 +254,60 @@ tasks:
     routing:
       lane: lane_b
       tags: [docs, cli]
+outputs:
+  required_artifacts: []
+"""
+
+
+def _custom_summary_plan() -> str:
+    return """
+version: 1
+plan_id: custom_summary
+name: custom_summary
+materials:
+  autodiscover:
+    enabled: false
+    path: .
+    include_globs: []
+  includes: []
+  uploads: []
+agents:
+  - id: worker_default
+    role: worker
+    provider: codex
+    model: gpt-5.3-codex
+    tools_allow: [tool:*]
+  - id: orchestrator_default
+    role: orchestrator
+    provider: codex
+    model: gpt-5.3-codex
+orchestration:
+  template: custom
+  inference_mode: mixed
+  behaviors:
+    - id: summarize_default
+      kind: summarize_work
+      agent: orchestrator_default
+      enabled: true
+  branched:
+    lanes: [lane_a, lane_b]
+  blue_red:
+    loop_unit: per_task
+  custom:
+    cells:
+      - id: pre
+        kind: sequential
+        task_ids: [t1]
+      - id: summarize
+        kind: orchestrator
+        behavior: summarize_default
+        depends_on: [pre]
+tasks:
+  - id: t1
+    title: Build
+    completed: false
+    routing:
+      cell: pre
 outputs:
   required_artifacts: []
 """
@@ -591,6 +648,78 @@ def test_merge_orchestrator_backend_nonzero_after_commit_is_salvaged(
     assert merge_node.result.get("mode") == "backend_failure_salvaged"
     merged_note = (workspace / "merge-note.md").read_text(encoding="utf-8")
     assert "orchestrator\n" in merged_note
+
+
+def test_summary_orchestrator_backend_payload_failure_with_real_output_is_salvaged(
+    workspace: Path,
+) -> None:
+    orch = LocalOrchestrator(workspace)
+
+    def summarize_then_fail(self, handle, node, profile, snapshot, *, worktree):  # type: ignore[no-untyped-def]
+        if node.role == "worker":
+            target = worktree / "worker-note.md"
+            target.write_text("worker\n", encoding="utf-8")
+            return True, {"summary": "ok"}
+        if node.behavior_kind == "summarize_work":
+            target = worktree / "handoff-note.md"
+            target.write_text("handoff\n", encoding="utf-8")
+            return False, {
+                "reason": "backend_payload_missing",
+                "error": "summary node stalled after writing handoff",
+            }
+        return True, {"summary": "ok"}
+
+    orch._execute_agent = MethodType(summarize_then_fail, orch)  # type: ignore[method-assign]
+    run_id = orch.start_run(
+        plan_content=_custom_summary_plan(), require_clean_git=False
+    )
+    assert orch.wait_for_run(run_id, timeout=8.0) is True
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "succeeded"
+    summary_node = next(
+        node
+        for node in run.nodes.values()
+        if isinstance(node.result, dict)
+        and node.result.get("backend_failure_reason") == "backend_payload_missing"
+    )
+    assert summary_node.result.get("mode") == "backend_failure_salvaged"
+    assert (workspace / "handoff-note.md").read_text(encoding="utf-8") == "handoff\n"
+
+
+def test_summary_orchestrator_backend_failure_is_not_salvaged_with_preexisting_workspace_dirtiness(
+    workspace: Path,
+) -> None:
+    orch = LocalOrchestrator(workspace)
+    (workspace / "preexisting.txt").write_text("dirty\n", encoding="utf-8")
+
+    def summarize_then_fail(self, handle, node, profile, snapshot, *, worktree):  # type: ignore[no-untyped-def]
+        if node.role == "worker":
+            return True, {"summary": "ok"}
+        if node.behavior_kind == "summarize_work":
+            (worktree / "handoff-note.md").write_text("handoff\n", encoding="utf-8")
+            return False, {
+                "reason": "backend_nonzero",
+                "error": "summary node failed after writing output",
+                "exit_code": 1,
+            }
+        return True, {"summary": "ok"}
+
+    orch._execute_agent = MethodType(summarize_then_fail, orch)  # type: ignore[method-assign]
+    run_id = orch.start_run(
+        plan_content=_custom_summary_plan(), require_clean_git=False
+    )
+    assert orch.wait_for_run(run_id, timeout=8.0) is True
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "failed"
+    summary_node = next(
+        node
+        for node in run.nodes.values()
+        if "orchestrator" in node.node_id and "summarize" in node.node_id
+    )
+    assert isinstance(summary_node.result, dict)
+    assert summary_node.result.get("mode") != "backend_failure_salvaged"
 
 
 def test_high_overlap_branched_work_is_serialized(workspace: Path) -> None:

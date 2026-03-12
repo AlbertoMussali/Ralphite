@@ -1,7 +1,7 @@
 # Failure Taxonomy
 
 Owners: engine, release
-Last verified against commit: 071697a
+Last verified against commit: a8f4411
 
 Source file: `src/ralphite/engine/taxonomy.py`
 
@@ -37,5 +37,9 @@ Source file: `src/ralphite/engine/taxonomy.py`
 - `recovery_conflict_files_present`
 
 `backend_out_of_worktree_claim` is informational/diagnostic and reflects a backend mention of an external path without confirmed mutation. `backend_out_of_worktree_mutation` is the fatal case and reflects confirmed local mutations outside the assigned write scope.
+
+`base_integration_blocked_by_local_changes` is reserved for real content overlap. Ralphite now tolerates overlap on bookkeeping surfaces such as the active plan path, revision-only writeback file, and `.ralphite/` runtime files, and reports those separately as ignored overlap.
+
+`base_merge_conflict` and `worker_merge_conflict` may include deterministic resolver metadata when Ralphite attempted narrow auto-resolution for additive export conflicts or simple markdown append-only conflicts before falling back to manual recovery.
 
 Each failure maps to user-facing advice and command hints through `classify_failure()`.

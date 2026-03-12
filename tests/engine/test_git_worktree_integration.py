@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
+import shutil
 
+import pytest
 from ralphite.engine.git_worktree import GitWorktreeManager
 from ralphite.engine.process_guard import managed_process_marker_path
 
@@ -115,6 +117,87 @@ def test_pre_base_integration_check_blocks_overlapping_local_changes(
     assert "shared.txt" in details.get("overlap_files", [])
 
 
+def test_pre_base_integration_check_can_ignore_bookkeeping_overlaps(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    manager = GitWorktreeManager(tmp_path, "runignore123")
+    state = manager.bootstrap_state()
+
+    plan_path = tmp_path / ".ralphite" / "plans" / "active.yaml"
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text("version: 1\n", encoding="utf-8")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-m", "add tracked plan")
+
+    manager.prepare_phase(state, "phase-1")
+    worker = manager.prepare_worker(state, "phase-1", "phase-1::parallel::t1")
+    worker_path = Path(str(worker["worktree_path"]))
+    relative_plan = str(plan_path.relative_to(tmp_path))
+    (worker_path / relative_plan).parent.mkdir(parents=True, exist_ok=True)
+    (worker_path / relative_plan).write_text("version: 2\n", encoding="utf-8")
+    ok, _meta = manager.commit_worker(
+        state, "phase-1", "phase-1::parallel::t1", "worker updates tracked plan"
+    )
+    assert ok is True
+    phase_ok, _phase_meta = manager.commit_phase_integration_changes(
+        state, "phase-1", "phase integration"
+    )
+    assert phase_ok is True
+
+    plan_path.write_text("version: 3\n", encoding="utf-8")
+
+    precheck = manager.pre_base_integration_check(
+        state["phases"]["phase-1"]["phase_branch"],
+        ignore_paths=[relative_plan],
+    )
+    assert precheck["ok"] is True
+    assert relative_plan in precheck["ignored_overlap_files"]
+    assert precheck["overlap_files"] == []
+
+
+def test_integrate_phase_auto_resolves_additive_export_conflicts(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    manager = GitWorktreeManager(tmp_path, "runresolve123")
+    state = manager.bootstrap_state()
+
+    exports = tmp_path / "src" / "pkg" / "index.ts"
+    exports.parent.mkdir(parents=True, exist_ok=True)
+    exports.write_text("export * from './base';\n", encoding="utf-8")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-m", "add base exports")
+
+    manager.prepare_phase(state, "phase-1")
+    worker = manager.prepare_worker(state, "phase-1", "phase-1::parallel::t1")
+    worker_path = Path(str(worker["worktree_path"]))
+    worker_exports = worker_path / "src" / "pkg" / "index.ts"
+    worker_exports.write_text(
+        "export * from './base';\nexport * from './worker';\n",
+        encoding="utf-8",
+    )
+    ok, _meta = manager.commit_worker(
+        state, "phase-1", "phase-1::parallel::t1", "worker updates exports"
+    )
+    assert ok is True
+
+    exports.write_text(
+        "export * from './base';\nexport * from './main';\n",
+        encoding="utf-8",
+    )
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-m", "main updates exports")
+
+    status, details = manager.integrate_phase(state, "phase-1")
+    assert status == "success", details
+    merged = exports.read_text(encoding="utf-8")
+    assert "export * from './worker';" in merged
+    assert "export * from './main';" in merged
+    assert details.get("resolver_attempted") is True
+    assert "src/pkg/index.ts" in details.get("resolved_files", [])
+
+
 def test_cleanup_phase_prunes_state_after_successful_merge(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     manager = GitWorktreeManager(tmp_path, "runclean123")
@@ -220,6 +303,81 @@ def test_prepare_worker_reclaims_stale_managed_worktree_path(tmp_path: Path) -> 
     cleanup_notes = worker.get("cleanup_notes", [])
     assert isinstance(cleanup_notes, list)
     assert any("stale" in item for item in cleanup_notes)
+
+
+def test_prepare_worker_retries_stale_worktree_removal_on_transient_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_repo(tmp_path)
+    manager = GitWorktreeManager(tmp_path, "runretry123")
+    state = manager.bootstrap_state()
+
+    phase = "phase-1"
+    node_id = "phase-1::parallel::t1"
+    phase_state = manager.prepare_phase(state, phase)
+    branch = manager._worker_branch_name(phase_state["phase_branch"], node_id)  # noqa: SLF001
+    _git(tmp_path, "branch", branch, phase_state["phase_branch"])
+
+    stale_path = manager._worker_worktree_path(phase, node_id)  # noqa: SLF001
+    stale_path.mkdir(parents=True, exist_ok=True)
+    attempts = {"count": 0}
+    original_git = manager._git
+
+    def flaky_git(args, *, cwd=None, check=False):  # noqa: ANN001
+        if args[:3] == ["worktree", "remove", "--force"] and attempts["count"] < 2:
+            attempts["count"] += 1
+            return subprocess.CompletedProcess(
+                ["git", *args],
+                1,
+                stdout="",
+                stderr="Permission denied",
+            )
+        return original_git(args, cwd=cwd, check=check)
+
+    monkeypatch.setattr(manager, "_git", flaky_git)
+
+    worker = manager.prepare_worker(state, phase, node_id)
+    assert worker["prepare_error"] == ""
+    assert attempts["count"] == 2
+    assert any("stale managed worktree" in item for item in worker["cleanup_notes"])
+
+
+def test_prepare_worker_reports_long_path_cleanup_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_repo(tmp_path)
+    manager = GitWorktreeManager(tmp_path, "runlongpath1")
+    state = manager.bootstrap_state()
+
+    phase = "phase-1"
+    node_id = "phase-1::parallel::t1"
+    phase_state = manager.prepare_phase(state, phase)
+    branch = manager._worker_branch_name(phase_state["phase_branch"], node_id)  # noqa: SLF001
+    _git(tmp_path, "branch", branch, phase_state["phase_branch"])
+
+    stale_path = manager._worker_worktree_path(phase, node_id)  # noqa: SLF001
+    stale_path.mkdir(parents=True, exist_ok=True)
+    original_git = manager._git
+
+    def failing_git(args, *, cwd=None, check=False):  # noqa: ANN001
+        if args[:3] == ["worktree", "remove", "--force"]:
+            return subprocess.CompletedProcess(
+                ["git", *args],
+                1,
+                stdout="",
+                stderr="The filename or extension is too long",
+            )
+        return original_git(args, cwd=cwd, check=check)
+
+    def failing_rmtree(_path):  # noqa: ANN001
+        raise OSError("The filename or extension is too long")
+
+    monkeypatch.setattr(manager, "_git", failing_git)
+    monkeypatch.setattr(shutil, "rmtree", failing_rmtree)
+
+    worker = manager.prepare_worker(state, phase, node_id)
+    assert worker["prepare_error"]
+    assert any("[long_path_risk]" in item for item in worker.get("cleanup_notes", []))
 
 
 def test_conflict_next_commands_quote_paths_with_spaces(tmp_path: Path) -> None:

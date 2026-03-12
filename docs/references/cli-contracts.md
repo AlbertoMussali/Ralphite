@@ -1,7 +1,7 @@
 # CLI Contracts
 
 Owners: cli
-Last verified against commit: 071697a
+Last verified against commit: a8f4411
 
 Source file: `src/ralphite/cli/app.py`
 
@@ -29,6 +29,8 @@ Operational notes:
 - `salvage` rows now include salvage class values such as `dirty_uncommitted`, `committed_unmerged`, and `orphan_managed_artifact`.
 - `promote-salvage` is valid for retained committed work and for dirty retained work that can pass local acceptance and be committed by Ralphite.
 - Backend protocol failures distinguish missing final payloads from malformed payloads (`backend_payload_missing`, `backend_payload_malformed`).
+- Recovery output for blocked base integration may include `ignored_overlap_files` when only bookkeeping surfaces were tolerated.
+- Recovery/conflict metadata may include `resolver_attempted`, `resolved_files`, `unsupported_conflict_files`, and `auto_resolved_conflicts` for deterministic merge repair attempts.
 
 ## Key Override Flags
 

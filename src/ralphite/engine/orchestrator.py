@@ -1194,7 +1194,11 @@ class LocalOrchestrator:
             committed = bool(commit)
             worker_state["committed"] = committed
 
-        status, integration = git_manager.integrate_phase(git_state, target_node.phase)
+        status, integration = git_manager.integrate_phase(
+            git_state,
+            target_node.phase,
+            ignore_overlap_paths=self._integration_overlap_ignore_paths(handle),
+        )
         if status != "success":
             return False, integration
 
@@ -1807,6 +1811,7 @@ class LocalOrchestrator:
             node.phase,
             recovery_mode="agent_best_effort",
             recovery_prompt=prompt,
+            ignore_overlap_paths=self._integration_overlap_ignore_paths(handle),
         )
         if status == "success":
             recovery["auto_attempt_status"] = "succeeded"
@@ -2561,6 +2566,82 @@ class LocalOrchestrator:
             "diagnostics": diagnostics,
         }
 
+    def _collect_workspace_evidence(
+        self,
+        *,
+        handle: RuntimeHandle,
+        node: RuntimeNodeSpec,
+        git_manager: GitWorktreeManager,
+    ) -> dict[str, Any]:
+        local_files = self._filter_workspace_bookkeeping_files(
+            handle,
+            git_manager._workspace_local_changes(),  # noqa: SLF001
+        )
+        write_policy = self._node_write_policy(handle, node)
+        scope = self._classify_write_scope(
+            changed_files=local_files,
+            write_policy=write_policy,
+            plan_path=handle.run.plan_path,
+        )
+        diagnostics = {
+            "worktree_path": str(self.workspace_root),
+            "worktree_exists": True,
+            "changed_files": list(scope.get("changed_files", [])),
+            "in_scope_files": list(scope.get("in_scope_files", [])),
+            "out_of_scope_files": list(scope.get("out_of_scope_files", [])),
+            "forbidden_files": list(scope.get("forbidden_files", [])),
+            "plan_edit_files": list(scope.get("plan_edit_files", [])),
+            "allowed_write_roots": list(scope.get("allowed_write_roots", [])),
+            "forbidden_write_roots": list(scope.get("forbidden_write_roots", [])),
+            "observed_out_of_scope_mutation": bool(
+                scope.get("observed_out_of_scope_mutation")
+            ),
+        }
+        return {
+            "write_policy": write_policy,
+            "write_scope": scope,
+            "diagnostics": diagnostics,
+        }
+
+    def _integration_overlap_ignore_paths(self, handle: RuntimeHandle) -> list[str]:
+        ignored: list[str] = []
+        if str(handle.run.plan_path or "").strip():
+            ignored.append(str(handle.run.plan_path))
+        plan_path = Path(handle.run.plan_path)
+        _mode, writeback_target = self._writeback_target(plan_path, handle.plan)
+        if writeback_target is not None:
+            ignored.append(str(writeback_target))
+        return ignored
+
+    def _workspace_bookkeeping_paths(self, handle: RuntimeHandle) -> set[str]:
+        ignored = {
+            str(item).replace("\\", "/")
+            for item in self._integration_overlap_ignore_paths(handle)
+            if str(item).strip()
+        }
+        ignored.add(".ralphite")
+        return ignored
+
+    def _filter_workspace_bookkeeping_files(
+        self, handle: RuntimeHandle, files: list[str]
+    ) -> list[str]:
+        ignored = self._workspace_bookkeeping_paths(handle)
+        filtered: list[str] = []
+        for raw in files:
+            normalized = str(raw).strip().replace("\\", "/")
+            while normalized.startswith("./"):
+                normalized = normalized[2:]
+            if not normalized:
+                continue
+            if any(
+                normalized == candidate or normalized.startswith(f"{candidate}/")
+                for candidate in ignored
+                if candidate
+            ):
+                continue
+            filtered.append(normalized)
+        return sorted(dict.fromkeys(filtered))
+
     def _should_attempt_backend_failure_salvage(
         self, result: dict[str, Any], evidence: dict[str, Any]
     ) -> bool:
@@ -2699,6 +2780,7 @@ class LocalOrchestrator:
             node.phase,
             recovery_mode=selected_mode,
             recovery_prompt=str(selected_prompt) if selected_prompt else None,
+            ignore_overlap_paths=self._integration_overlap_ignore_paths(handle),
         )
         if status != "success":
             return False, merge_meta
@@ -2727,6 +2809,88 @@ class LocalOrchestrator:
             },
             "phase_commit": commit_meta,
             "integration": merge_meta,
+        }
+
+    def _should_attempt_workspace_backend_failure_salvage(
+        self,
+        result: dict[str, Any],
+        *,
+        evidence: dict[str, Any],
+        preexisting_dirty_files: list[str],
+    ) -> bool:
+        reason = str(result.get("reason") or "")
+        if reason not in {
+            "backend_nonzero",
+            "backend_payload_missing",
+            "backend_payload_malformed",
+            "backend_output_malformed",
+        }:
+            return False
+        if preexisting_dirty_files:
+            return False
+        write_scope = (
+            evidence.get("write_scope")
+            if isinstance(evidence.get("write_scope"), dict)
+            else {}
+        )
+        if bool(write_scope.get("observed_out_of_scope_mutation")):
+            return False
+        changed_files = (
+            write_scope.get("changed_files")
+            if isinstance(write_scope.get("changed_files"), list)
+            else []
+        )
+        return bool(changed_files)
+
+    def _attempt_workspace_backend_failure_salvage(
+        self,
+        *,
+        handle: RuntimeHandle,
+        node: RuntimeNodeSpec,
+        git_manager: GitWorktreeManager,
+        result: dict[str, Any],
+        evidence: dict[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        changed_files = (
+            evidence.get("write_scope", {}).get("changed_files", [])
+            if isinstance(evidence.get("write_scope"), dict)
+            else []
+        )
+        commit_ok, commit_meta = git_manager.commit_workspace_changes(
+            f"orchestrator({node.phase}): salvage backend output",
+            paths=list(changed_files),
+        )
+        if not commit_ok:
+            return False, commit_meta
+        diagnostics = (
+            result.get("diagnostics")
+            if isinstance(result.get("diagnostics"), dict)
+            else {}
+        )
+        return True, {
+            "mode": "backend_failure_salvaged",
+            "backend_failure_reason": str(result.get("reason") or ""),
+            "backend_failure": {
+                "reason": str(result.get("reason") or ""),
+                "error": str(result.get("error") or ""),
+                "exit_code": result.get("exit_code"),
+                "stdout_excerpt": str(result.get("stdout_excerpt") or ""),
+                "stderr_excerpt": str(result.get("stderr_excerpt") or ""),
+            },
+            "summary": str(
+                result.get("summary")
+                or "salvaged orchestrator output from local workspace evidence"
+            ),
+            "diagnostics": {
+                **diagnostics,
+                **(
+                    evidence.get("diagnostics")
+                    if isinstance(evidence.get("diagnostics"), dict)
+                    else {}
+                ),
+                "salvaged_from_backend_failure": True,
+            },
+            "workspace_commit": commit_meta,
         }
 
     def _high_overlap_surfaces(
@@ -3148,6 +3312,7 @@ class LocalOrchestrator:
         if node.role == "orchestrator":
             agent_worktree = self.workspace_root
             prep_meta: dict[str, Any] = {}
+            preexisting_workspace_dirty: list[str] = []
             if node.behavior_kind == BehaviorKind.MERGE_AND_CONFLICT_RESOLUTION.value:
                 prep_status, prep_meta = git_manager.prepare_phase_integration(
                     handle.run.metadata.setdefault("git_state", {}),
@@ -3177,6 +3342,11 @@ class LocalOrchestrator:
                 )
                 if integration_worktree.exists():
                     agent_worktree = integration_worktree
+            else:
+                preexisting_workspace_dirty = self._filter_workspace_bookkeeping_files(
+                    handle,
+                    git_manager._workspace_local_changes(),  # noqa: SLF001
+                )
 
             agent_ok, agent_result = self._execute_agent(
                 handle,
@@ -3206,6 +3376,31 @@ class LocalOrchestrator:
                     )
                     if salvaged:
                         return "success", salvage_result
+                if (
+                    node.behavior_kind
+                    != BehaviorKind.MERGE_AND_CONFLICT_RESOLUTION.value
+                ):
+                    evidence = self._collect_workspace_evidence(
+                        handle=handle,
+                        node=node,
+                        git_manager=git_manager,
+                    )
+                    if self._should_attempt_workspace_backend_failure_salvage(
+                        agent_result,
+                        evidence=evidence,
+                        preexisting_dirty_files=preexisting_workspace_dirty,
+                    ):
+                        salvaged, salvage_result = (
+                            self._attempt_workspace_backend_failure_salvage(
+                                handle=handle,
+                                node=node,
+                                git_manager=git_manager,
+                                result=agent_result,
+                                evidence=evidence,
+                            )
+                        )
+                        if salvaged:
+                            return "success", salvage_result
                 return "failure", agent_result
 
             if node.behavior_kind == BehaviorKind.MERGE_AND_CONFLICT_RESOLUTION.value:
@@ -3261,6 +3456,7 @@ class LocalOrchestrator:
                     node.phase,
                     recovery_mode=selected_mode,
                     recovery_prompt=str(selected_prompt) if selected_prompt else None,
+                    ignore_overlap_paths=self._integration_overlap_ignore_paths(handle),
                 )
 
                 if selected_mode == "agent_best_effort":

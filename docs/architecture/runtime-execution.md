@@ -1,7 +1,7 @@
 # Runtime Execution
 
 Owners: engine, cli
-Last verified against commit: 071697a
+Last verified against commit: a8f4411
 
 Source files:
 
@@ -41,8 +41,9 @@ The central runtime rule is:
 4. A worker backend runs inside the assigned worktree with an explicit prompt, explicit worktree path, and machine-enforced write policy.
 5. Ralphite inspects local worktree state, classifies observed writes, commits worker output when valid, and runs task acceptance against the worker worktree.
 6. Orchestrator merge nodes prepare a phase integration worktree, merge worker commits into the phase branch, then integrate the phase result back to the base branch.
-7. On terminal success, Ralphite writes terminal artifacts and cleans managed git artifacts when cleanup is safe.
-8. On terminal non-success, Ralphite preserves managed worktrees and branches by default so the run can be reconciled or salvaged.
+7. Narrow deterministic conflict resolvers may auto-resolve additive export barrels and simple markdown append-only conflicts before recovery is required.
+8. On terminal success, Ralphite writes terminal artifacts and cleans managed git artifacts when cleanup is safe.
+9. On terminal non-success, Ralphite preserves managed worktrees and branches by default so the run can be reconciled or salvaged.
 
 ## Worker Execution Contract
 
@@ -61,6 +62,8 @@ Backend result handling:
 - `backend_payload_malformed` means the backend emitted a payload Ralphite could not reliably parse.
 
 When backend payload handling fails, Ralphite still inspects the assigned worktree and retains salvageable work instead of discarding it.
+
+For non-merge orchestrator nodes such as summary/handoff behaviors, Ralphite can also salvage real local workspace output after backend payload failure, but only when the pre-existing workspace dirtiness is limited to Ralphite bookkeeping surfaces.
 
 ## Write Scope Enforcement
 
@@ -138,6 +141,9 @@ Dirty retained work can still be promoted if local acceptance passes and Ralphit
 Windows is a supported local runtime target.
 
 Current runtime hardening includes:
+- direct argv acceptance execution with worktree-relative glob expansion before subprocess launch
+- managed worktree cleanup retry/backoff around transient lock failures
+- explicit long-path-risk diagnostics when managed worktree removal fails on Windows-like path limits
 
 - automatic wrapping of PowerShell-backed backend launchers
 - short hashed temp/cache/environment roots for worker subprocesses

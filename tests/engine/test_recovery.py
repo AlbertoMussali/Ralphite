@@ -303,7 +303,7 @@ def test_recover_run_reconciles_checkpoint_git_state(workspace: Path) -> None:
     recovered = orch2.get_run(run_id)
     assert recovered is not None
     recovered_node = recovered.nodes[runtime_node_id]
-    assert recovered_node.status == "failed"
+    assert recovered_node.status == "queued"
     assert recovered_node.attempt_count == 2
     retained = (
         recovered.metadata.get("retained_work", [])
