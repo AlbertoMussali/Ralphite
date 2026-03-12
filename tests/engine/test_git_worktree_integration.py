@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 
 from ralphite.engine.git_worktree import GitWorktreeManager
+from ralphite.engine.process_guard import managed_process_marker_path
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -191,6 +192,34 @@ def test_prepare_worker_uses_compact_branch_and_worktree_names(tmp_path: Path) -
     )
     assert worker_path.parent.parent.name == "12345678"
     assert len(worker_path.name) < len(node_id)
+
+
+def test_prepare_worker_reclaims_stale_managed_worktree_path(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    manager = GitWorktreeManager(tmp_path, "runstaleworker1")
+    state = manager.bootstrap_state()
+
+    phase = "phase-1"
+    node_id = "phase-1::parallel::t1"
+    phase_state = manager.prepare_phase(state, phase)
+    branch = manager._worker_branch_name(phase_state["phase_branch"], node_id)  # noqa: SLF001
+    _git(tmp_path, "branch", branch, phase_state["phase_branch"])
+
+    stale_path = manager._worker_worktree_path(phase, node_id)  # noqa: SLF001
+    stale_path.mkdir(parents=True, exist_ok=True)
+    (stale_path / "leftover.txt").write_text("stale\n", encoding="utf-8")
+    managed_process_marker_path(stale_path).write_text(
+        '{"pid": 999999, "backend": "codex"}', encoding="utf-8"
+    )
+
+    worker = manager.prepare_worker(state, phase, node_id)
+    worker_path = Path(str(worker["worktree_path"]))
+    assert worker["prepare_error"] == ""
+    assert worker_path.exists()
+    assert not managed_process_marker_path(worker_path).exists()
+    cleanup_notes = worker.get("cleanup_notes", [])
+    assert isinstance(cleanup_notes, list)
+    assert any("stale" in item for item in cleanup_notes)
 
 
 def test_conflict_next_commands_quote_paths_with_spaces(tmp_path: Path) -> None:

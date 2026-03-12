@@ -16,6 +16,7 @@ from ralphite.engine.headless_agent import (
     probe_codex_command,
     probe_cursor_command,
 )
+from ralphite.engine.process_guard import managed_process_marker_path
 from ralphite.engine.structure_compiler import RuntimeNodeSpec
 
 
@@ -56,6 +57,33 @@ def _sample_orchestrator_node() -> RuntimeNodeSpec:
         behavior_kind="merge_and_conflict_resolution",
         behavior_prompt_template="Behavior {{behavior_kind}} for {{plan_id}}",
     )
+
+
+def _patch_popen(monkeypatch: pytest.MonkeyPatch, fake_run) -> None:  # noqa: ANN001
+    class FakePopen:
+        def __init__(self, command, **kwargs):  # noqa: ANN001
+            self.command = list(command)
+            self.kwargs = dict(kwargs)
+            self.pid = 31337
+            self.returncode = None
+
+        def communicate(self, timeout=None):  # noqa: ANN001
+            completed = fake_run(
+                self.command,
+                self.kwargs.get("cwd"),
+                self.kwargs.get("env"),
+                False,
+                True,
+                True,
+                timeout,
+            )
+            self.returncode = completed.returncode
+            return completed.stdout or "", completed.stderr or ""
+
+        def poll(self):  # noqa: ANN001
+            return self.returncode
+
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
 
 
 def test_build_codex_exec_command_contract(tmp_path: Path) -> None:
@@ -333,7 +361,7 @@ def test_codex_backend_builds_expected_command(monkeypatch, tmp_path: Path) -> N
             stderr="",
         )
 
-    monkeypatch.setattr(subprocess, "run", _fake_run)
+    _patch_popen(monkeypatch, _fake_run)
     ok, result = execute_headless_agent(
         config=BackendExecutionConfig(
             backend="codex",
@@ -370,7 +398,7 @@ def test_cursor_backend_builds_expected_command(monkeypatch, tmp_path: Path) -> 
             command, 0, stdout='{"text":"done"}\n', stderr=""
         )
 
-    monkeypatch.setattr(subprocess, "run", _fake_run)
+    _patch_popen(monkeypatch, _fake_run)
     ok, result = execute_headless_agent(
         config=BackendExecutionConfig(
             backend="cursor",
@@ -402,7 +430,7 @@ def test_cursor_plain_text_output_is_accepted(monkeypatch, tmp_path: Path) -> No
             command, 0, stdout="finished successfully", stderr=""
         )
 
-    monkeypatch.setattr(subprocess, "run", _fake_run)
+    _patch_popen(monkeypatch, _fake_run)
     ok, result = execute_headless_agent(
         config=BackendExecutionConfig(
             backend="cursor",
@@ -423,7 +451,7 @@ def test_backend_binary_missing_is_typed(monkeypatch, tmp_path: Path) -> None:
     def _fake_run(command, cwd, env, check, capture_output, text, timeout):  # noqa: ANN001
         raise FileNotFoundError("missing")
 
-    monkeypatch.setattr(subprocess, "run", _fake_run)
+    _patch_popen(monkeypatch, _fake_run)
     ok, result = execute_headless_agent(
         config=BackendExecutionConfig(
             backend="codex",
@@ -441,12 +469,28 @@ def test_backend_binary_missing_is_typed(monkeypatch, tmp_path: Path) -> None:
 def test_backend_timeout_is_typed(monkeypatch, tmp_path: Path) -> None:
     _disable_sim(monkeypatch)
 
-    def _fake_run(command, cwd, env, check, capture_output, text, timeout):  # noqa: ANN001
-        raise subprocess.TimeoutExpired(
-            command, timeout, output="partial", stderr="timed out"
-        )
+    class FakePopen:
+        def __init__(self, command, **kwargs):  # noqa: ANN001
+            self.command = list(command)
+            self.kwargs = dict(kwargs)
+            self.pid = 5252
+            self.returncode = None
 
-    monkeypatch.setattr(subprocess, "run", _fake_run)
+        def communicate(self, timeout=None):  # noqa: ANN001
+            if timeout is not None:
+                raise subprocess.TimeoutExpired(
+                    self.command, timeout, output="partial", stderr="timed out"
+                )
+            self.returncode = -9
+            return ("partial", "timed out")
+
+        def poll(self):  # noqa: ANN001
+            return self.returncode
+
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(
+        "ralphite.engine.headless_agent.terminate_process_tree", lambda pid: True
+    )
     ok, result = execute_headless_agent(
         config=BackendExecutionConfig(
             backend="codex",
@@ -463,6 +507,52 @@ def test_backend_timeout_is_typed(monkeypatch, tmp_path: Path) -> None:
     assert result["timeout_seconds"] == 10
 
 
+def test_backend_timeout_terminates_managed_process_and_clears_marker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _disable_sim(monkeypatch)
+    terminated: list[int] = []
+
+    class FakePopen:
+        def __init__(self, command, **kwargs):  # noqa: ANN001
+            self.command = list(command)
+            self.kwargs = dict(kwargs)
+            self.pid = 4242
+            self.returncode = None
+
+        def communicate(self, timeout=None):  # noqa: ANN001
+            if timeout is not None:
+                raise subprocess.TimeoutExpired(self.command, timeout)
+            self.returncode = -9
+            return ("partial stdout", "partial stderr")
+
+        def poll(self):  # noqa: ANN001
+            return self.returncode
+
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(
+        "ralphite.engine.headless_agent.terminate_process_tree",
+        lambda pid: terminated.append(pid) or True,
+    )
+
+    ok, result = execute_headless_agent(
+        config=BackendExecutionConfig(
+            backend="codex",
+            model="gpt-5.3-codex",
+            reasoning_effort="medium",
+            cursor_command="agent",
+            timeout_seconds=10,
+        ),
+        prompt="test prompt",
+        worktree=tmp_path,
+    )
+    assert ok is False
+    assert result["reason"] == "backend_timeout"
+    assert result["backend_process_terminated"] is True
+    assert terminated == [4242]
+    assert not managed_process_marker_path(tmp_path).exists()
+
+
 def test_backend_auth_failure_is_typed(monkeypatch, tmp_path: Path) -> None:
     _disable_sim(monkeypatch)
 
@@ -471,7 +561,7 @@ def test_backend_auth_failure_is_typed(monkeypatch, tmp_path: Path) -> None:
             command, 1, stdout="", stderr="Unauthorized: login required"
         )
 
-    monkeypatch.setattr(subprocess, "run", _fake_run)
+    _patch_popen(monkeypatch, _fake_run)
     ok, result = execute_headless_agent(
         config=BackendExecutionConfig(
             backend="codex",
@@ -494,7 +584,7 @@ def test_backend_model_unsupported_is_typed(monkeypatch, tmp_path: Path) -> None
             command, 1, stdout="", stderr="selected model is not supported"
         )
 
-    monkeypatch.setattr(subprocess, "run", _fake_run)
+    _patch_popen(monkeypatch, _fake_run)
     ok, result = execute_headless_agent(
         config=BackendExecutionConfig(
             backend="codex",
@@ -517,7 +607,7 @@ def test_backend_nonzero_generic_is_typed(monkeypatch, tmp_path: Path) -> None:
             command, 1, stdout="", stderr="generic backend failure"
         )
 
-    monkeypatch.setattr(subprocess, "run", _fake_run)
+    _patch_popen(monkeypatch, _fake_run)
     ok, result = execute_headless_agent(
         config=BackendExecutionConfig(
             backend="codex",
@@ -540,7 +630,7 @@ def test_backend_output_malformed_for_empty_cursor_output(
     def _fake_run(command, cwd, env, check, capture_output, text, timeout):  # noqa: ANN001
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(subprocess, "run", _fake_run)
+    _patch_popen(monkeypatch, _fake_run)
     ok, result = execute_headless_agent(
         config=BackendExecutionConfig(
             backend="cursor",
@@ -576,7 +666,7 @@ def test_backend_out_of_worktree_claim_is_recorded_as_diagnostic(
             stderr="",
         )
 
-    monkeypatch.setattr(subprocess, "run", _fake_run)
+    _patch_popen(monkeypatch, _fake_run)
     ok, result = execute_headless_agent(
         config=BackendExecutionConfig(
             backend="codex",
@@ -624,7 +714,7 @@ def test_cursor_result_payload_does_not_trip_false_out_of_worktree_claim(
             stderr="",
         )
 
-    monkeypatch.setattr(subprocess, "run", _fake_run)
+    _patch_popen(monkeypatch, _fake_run)
     ok, result = execute_headless_agent(
         config=BackendExecutionConfig(
             backend="cursor",

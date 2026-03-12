@@ -14,6 +14,11 @@ import tempfile
 import time
 from typing import Any
 
+from ralphite.engine.process_guard import (
+    clear_managed_process_marker,
+    terminate_process_tree,
+    write_managed_process_marker,
+)
 from ralphite.engine.structure_compiler import RuntimeNodeSpec
 from ralphite.schemas.prompt_templates import (
     ORCHESTRATOR_PLACEHOLDER_TOKENS,
@@ -606,15 +611,32 @@ def execute_headless_agent(
 
     started = time.perf_counter()
     runner_env = build_worker_subprocess_env(worktree=cwd)
+    process: subprocess.Popen[str] | None = None
+    stdout = ""
+    stderr = ""
+    popen_kwargs: dict[str, Any] = {
+        "cwd": cwd,
+        "env": runner_env,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = int(
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        )
+    else:
+        popen_kwargs["start_new_session"] = True
     try:
-        run = subprocess.run(
-            cmd,
-            cwd=cwd,
-            env=runner_env,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=max(1, int(config.timeout_seconds)),
+        process = subprocess.Popen(cmd, **popen_kwargs)
+        write_managed_process_marker(
+            cwd,
+            pid=int(process.pid),
+            command=cmd[:-1],
+            backend=backend,
+        )
+        stdout, stderr = process.communicate(
+            timeout=max(1, int(config.timeout_seconds))
         )
     except FileNotFoundError as exc:
         return False, {
@@ -627,18 +649,29 @@ def execute_headless_agent(
             "assigned_worktree_root": str(cwd),
         }
     except subprocess.TimeoutExpired as exc:
+        if process is not None:
+            terminate_process_tree(int(process.pid))
+            stdout, stderr = process.communicate()
+        else:
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+        clear_managed_process_marker(cwd)
         return False, {
             "status": "failed",
             "reason": "backend_timeout",
             "backend": backend,
             "timeout_seconds": int(config.timeout_seconds),
-            "stdout": exc.stdout or "",
-            "stderr": exc.stderr or "",
+            "stdout": stdout,
+            "stderr": stderr,
             "command_fingerprint": _command_fingerprint(cmd[:-1]),
             "worktree": str(cwd),
             "assigned_worktree_root": str(cwd),
+            "backend_process_terminated": process is not None,
         }
     except Exception as exc:  # noqa: BLE001
+        if process is not None:
+            terminate_process_tree(int(process.pid))
+            clear_managed_process_marker(cwd)
         return False, {
             "status": "failed",
             "reason": "backend_execution_error",
@@ -648,25 +681,29 @@ def execute_headless_agent(
             "worktree": str(cwd),
             "assigned_worktree_root": str(cwd),
         }
+    finally:
+        if process is not None and process.poll() is not None:
+            clear_managed_process_marker(cwd)
 
     duration_seconds = round(max(0.0, time.perf_counter() - started), 3)
-    stdout = run.stdout or ""
-    stderr = run.stderr or ""
+    stdout = stdout or ""
+    stderr = stderr or ""
 
     if backend == "codex":
         text, parse_error = _parse_codex_jsonl(stdout)
     else:
         text, parse_error = _parse_cursor_output(stdout)
 
-    if run.returncode != 0:
-        detail = (parse_error or stderr or stdout).strip() or f"exit={run.returncode}"
+    returncode = int(process.returncode if process is not None else 1)
+    if returncode != 0:
+        detail = (parse_error or stderr or stdout).strip() or f"exit={returncode}"
         return False, {
             "status": "failed",
             "reason": _classify_backend_error(detail),
             "backend": backend,
             "model": model,
             "reasoning_effort": reasoning_effort,
-            "exit_code": int(run.returncode),
+            "exit_code": returncode,
             "stdout": stdout,
             "stderr": stderr,
             "error": detail,
@@ -691,7 +728,7 @@ def execute_headless_agent(
             "backend": backend,
             "model": model,
             "reasoning_effort": reasoning_effort,
-            "exit_code": int(run.returncode),
+            "exit_code": returncode,
             "stdout": stdout,
             "stderr": stderr,
             "error": parse_error,
@@ -711,7 +748,7 @@ def execute_headless_agent(
             "backend": backend,
             "model": model,
             "reasoning_effort": reasoning_effort,
-            "exit_code": int(run.returncode),
+            "exit_code": returncode,
             "stdout": stdout,
             "stderr": stderr,
             "error": "no final agent message",
@@ -731,7 +768,7 @@ def execute_headless_agent(
         "backend": backend,
         "model": model,
         "reasoning_effort": reasoning_effort,
-        "exit_code": int(run.returncode),
+        "exit_code": returncode,
         "command_fingerprint": _command_fingerprint(cmd[:-1]),
         "duration_seconds": duration_seconds,
         "worktree": str(cwd),

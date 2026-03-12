@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import shutil
 from pathlib import Path
 import re
 import subprocess
 from typing import Any
+
+from ralphite.engine.process_guard import cleanup_managed_process_marker
 
 
 def _slug(value: str) -> str:
@@ -194,6 +197,47 @@ class GitWorktreeManager:
                 messages.append(f"removed empty directory {current}")
                 current = current.parent
         return messages
+
+    def _cleanup_stale_managed_worktree(
+        self, path: Path, *, branch: str = ""
+    ) -> tuple[bool, list[str]]:
+        messages: list[str] = []
+        if not path.exists():
+            return True, messages
+        if not path.is_relative_to(self._worktrees_root()):
+            return False, [f"refusing to remove non-managed worktree path {path}"]
+
+        marker_cleanup = cleanup_managed_process_marker(path)
+        if marker_cleanup.get("process_terminated"):
+            messages.append(
+                f"terminated stale backend process {marker_cleanup.get('pid')} for {path}"
+            )
+        elif marker_cleanup.get("marker_removed"):
+            messages.append(f"cleared stale backend marker for {path}")
+
+        removed = self._git(["worktree", "remove", "--force", str(path)], check=False)
+        if removed.returncode == 0:
+            messages.append(f"removed stale managed worktree {path}")
+            messages.extend(self._prune_empty_worktree_ancestors(path.parent))
+            return True, messages
+
+        if path.exists():
+            try:
+                shutil.rmtree(path)
+                messages.append(f"deleted stale worktree directory {path}")
+                messages.extend(self._prune_empty_worktree_ancestors(path.parent))
+            except OSError as exc:
+                detail = removed.stderr.strip() or removed.stdout.strip() or str(exc)
+                messages.append(f"stale worktree cleanup failed {path}: {detail}")
+                return False, messages
+
+        if branch and self._branch_exists(branch):
+            pruned = self._git(["worktree", "prune"], check=False)
+            if pruned.returncode == 0 and (
+                pruned.stdout.strip() or pruned.stderr.strip()
+            ):
+                messages.append(pruned.stderr.strip() or pruned.stdout.strip())
+        return True, messages
 
     def _head_commit_metadata(self, cwd: Path) -> dict[str, Any]:
         commit = self._git(["rev-parse", "HEAD"], cwd=cwd, check=False)
@@ -635,20 +679,28 @@ class GitWorktreeManager:
     ) -> dict[str, Any]:
         phase_state = self.prepare_phase(state, phase)
         workers = phase_state["workers"]
-        if node_id in workers:
-            return workers[node_id]
-
-        # Use a flat suffix instead of a nested ref path to avoid
-        # conflicts with the existing phase branch ref.
         branch = self._worker_branch_name(phase_state["phase_branch"], node_id)
         worktree = self._worker_worktree_path(phase, node_id)
-        info = {
-            "branch": branch,
-            "worktree_path": str(worktree),
-            "committed": False,
-            "prepare_error": "",
-        }
-        workers[node_id] = info
+        if node_id in workers and isinstance(workers[node_id], dict):
+            info = workers[node_id]
+            info.setdefault("branch", branch)
+            info.setdefault("worktree_path", str(worktree))
+            info.setdefault("committed", False)
+            info.setdefault("prepare_error", "")
+            existing_path = Path(str(info.get("worktree_path") or worktree))
+            if (
+                existing_path.exists()
+                and not str(info.get("prepare_error") or "").strip()
+            ):
+                return info
+        else:
+            info = {
+                "branch": branch,
+                "worktree_path": str(worktree),
+                "committed": False,
+                "prepare_error": "",
+            }
+            workers[node_id] = info
 
         worktree.parent.mkdir(parents=True, exist_ok=True)
         if self._git(["rev-parse", "--verify", branch], check=False).returncode != 0:
@@ -657,6 +709,20 @@ class GitWorktreeManager:
             )
             if created.returncode != 0:
                 info["prepare_error"] = created.stderr.strip() or created.stdout.strip()
+                return info
+
+        if worktree.exists():
+            cleaned, cleanup_messages = self._cleanup_stale_managed_worktree(
+                worktree, branch=branch
+            )
+            if cleanup_messages:
+                info["cleanup_notes"] = cleanup_messages
+            if not cleaned and worktree.exists():
+                info["prepare_error"] = (
+                    cleanup_messages[-1]
+                    if cleanup_messages
+                    else f"managed worktree path already exists: {worktree}"
+                )
                 return info
 
         added = self._git(
