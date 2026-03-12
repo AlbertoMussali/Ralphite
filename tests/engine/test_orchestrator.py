@@ -666,18 +666,94 @@ def test_backend_failure_preserves_uncommitted_worker_changes(workspace: Path) -
     assert orch.wait_for_run(run_id, timeout=8.0)
     run = orch.get_run(run_id)
     assert run is not None
-    assert run.status == "failed"
+    assert run.status == "succeeded"
+    node = next(iter(run.nodes.values()))
+    assert isinstance(node.result, dict)
+    assert node.result.get("mode") == "backend_failure_salvaged"
+    worktree_meta = node.result.get("worktree", {})
+    assert isinstance(worktree_meta, dict)
+    assert "partial.txt" in {
+        str(item.get("path") or "")
+        for item in worktree_meta.get("changed_files", [])
+        if isinstance(item, dict)
+    }
+
+
+def test_backend_payload_malformed_with_valid_worker_output_is_salvaged(
+    workspace: Path,
+) -> None:
+    orch = LocalOrchestrator(workspace)
+
+    def malformed_agent(self, handle, node, profile, snapshot, *, worktree):  # type: ignore[no-untyped-def]
+        if node.role == "worker":
+            (worktree / "docs").mkdir(exist_ok=True)
+            (worktree / "docs" / "artifact.md").write_text(
+                "artifact\n", encoding="utf-8"
+            )
+            return False, {
+                "reason": "backend_payload_malformed",
+                "error": "cursor returned malformed payload",
+                "stdout_excerpt": "{bad json",
+            }
+        return True, {"summary": "ok"}
+
+    orch._execute_agent = MethodType(malformed_agent, orch)  # type: ignore[method-assign]
+    plan = _single_task_plan(
+        acceptance_artifacts=[
+            {"id": "artifact", "path_glob": "docs/*.md", "format": "file"}
+        ]
+    )
+    run_id = orch.start_run(plan_content=plan)
+    assert orch.wait_for_run(run_id, timeout=8.0)
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "succeeded"
+    node = next(iter(run.nodes.values()))
+    assert node.status == "succeeded"
+    assert isinstance(node.result, dict)
+    assert node.result.get("mode") == "backend_failure_salvaged"
+    assert node.result.get("backend_failure_reason") == "backend_payload_malformed"
     retained = (
         run.metadata.get("retained_work", [])
         if isinstance(run.metadata.get("retained_work"), list)
         else []
     )
-    assert retained
-    first = retained[0]
-    assert first.get("worktree_exists") is True
-    assert "partial.txt" in str(first.get("status_porcelain") or "")
-    worktree = Path(str(first.get("worktree_path") or ""))
-    assert (worktree / "partial.txt").exists()
+    assert retained == []
+
+
+def test_backend_nonzero_with_valid_worker_output_is_salvaged(workspace: Path) -> None:
+    orch = LocalOrchestrator(workspace)
+
+    def failing_agent(self, handle, node, profile, snapshot, *, worktree):  # type: ignore[no-untyped-def]
+        if node.role == "worker":
+            (worktree / "docs").mkdir(exist_ok=True)
+            (worktree / "docs" / "artifact.md").write_text(
+                "artifact\n", encoding="utf-8"
+            )
+            return False, {
+                "reason": "backend_nonzero",
+                "error": "cursor exited 1 after writing files",
+                "exit_code": 1,
+                "stderr_excerpt": "cursor failed",
+            }
+        return True, {"summary": "ok"}
+
+    orch._execute_agent = MethodType(failing_agent, orch)  # type: ignore[method-assign]
+    plan = _single_task_plan(
+        acceptance_artifacts=[
+            {"id": "artifact", "path_glob": "docs/*.md", "format": "file"}
+        ]
+    )
+    run_id = orch.start_run(plan_content=plan)
+    assert orch.wait_for_run(run_id, timeout=8.0)
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "succeeded"
+    node = next(iter(run.nodes.values()))
+    assert node.status == "succeeded"
+    assert isinstance(node.result, dict)
+    assert node.result.get("mode") == "backend_failure_salvaged"
+    assert node.result.get("backend_failure_reason") == "backend_nonzero"
 
 
 def test_worker_write_scope_is_enforced_from_git_evidence(workspace: Path) -> None:

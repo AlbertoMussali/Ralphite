@@ -2561,6 +2561,93 @@ class LocalOrchestrator:
             "diagnostics": diagnostics,
         }
 
+    def _should_attempt_backend_failure_salvage(
+        self, result: dict[str, Any], evidence: dict[str, Any]
+    ) -> bool:
+        reason = str(result.get("reason") or "")
+        if reason not in {
+            "backend_nonzero",
+            "backend_payload_missing",
+            "backend_payload_malformed",
+            "backend_output_malformed",
+        }:
+            return False
+        write_scope = (
+            evidence.get("write_scope")
+            if isinstance(evidence.get("write_scope"), dict)
+            else {}
+        )
+        if bool(write_scope.get("observed_out_of_scope_mutation")):
+            return False
+        changed_files = (
+            write_scope.get("changed_files")
+            if isinstance(write_scope.get("changed_files"), list)
+            else []
+        )
+        return bool(changed_files)
+
+    def _attempt_backend_failure_salvage(
+        self,
+        *,
+        handle: RuntimeHandle,
+        node: RuntimeNodeSpec,
+        git_manager: GitWorktreeManager,
+        worker_info: dict[str, Any],
+        result: dict[str, Any],
+        evidence: dict[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        commit_ok, commit_meta = git_manager.commit_worker(
+            handle.run.metadata.setdefault("git_state", {}),
+            node.phase,
+            node.id,
+            f"salvage({node.source_task_id or node.id}): promote backend output",
+        )
+        if not commit_ok:
+            return False, commit_meta
+        acceptance_ok, acceptance_result = self._evaluate_acceptance(
+            node,
+            commit_meta,
+            timeout_seconds=int(handle.plan.constraints.acceptance_timeout_seconds),
+        )
+        if not acceptance_ok:
+            return False, acceptance_result
+        diagnostics = (
+            result.get("diagnostics")
+            if isinstance(result.get("diagnostics"), dict)
+            else {}
+        )
+        return True, {
+            "mode": "backend_failure_salvaged",
+            "backend_failure_reason": str(result.get("reason") or ""),
+            "backend_failure": {
+                "reason": str(result.get("reason") or ""),
+                "error": str(result.get("error") or ""),
+                "exit_code": result.get("exit_code"),
+                "stdout_excerpt": str(result.get("stdout_excerpt") or ""),
+                "stderr_excerpt": str(result.get("stderr_excerpt") or ""),
+            },
+            "summary": str(
+                result.get("summary")
+                or "salvaged worker output from local worktree evidence"
+            ),
+            "diagnostics": {
+                **diagnostics,
+                **(
+                    evidence.get("diagnostics")
+                    if isinstance(evidence.get("diagnostics"), dict)
+                    else {}
+                ),
+                "salvaged_from_backend_failure": True,
+            },
+            "worker_evidence": (
+                evidence.get("diagnostics")
+                if isinstance(evidence.get("diagnostics"), dict)
+                else {}
+            ),
+            "worktree": commit_meta,
+            "acceptance": acceptance_result,
+        }
+
     def _high_overlap_surfaces(
         self, handle: RuntimeHandle, nodes: list[RuntimeNodeSpec]
     ) -> list[str]:
@@ -3118,6 +3205,17 @@ class LocalOrchestrator:
                     git_manager=git_manager,
                     worktree_path=str(worker_info.get("worktree_path") or ""),
                 )
+                if self._should_attempt_backend_failure_salvage(result, evidence):
+                    salvaged, salvage_result = self._attempt_backend_failure_salvage(
+                        handle=handle,
+                        node=node,
+                        git_manager=git_manager,
+                        worker_info=worker_info,
+                        result=result,
+                        evidence=evidence,
+                    )
+                    if salvaged:
+                        return "success", salvage_result
                 result = {
                     **result,
                     "worker_evidence": evidence.get("diagnostics", {}),
