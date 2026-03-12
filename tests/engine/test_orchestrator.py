@@ -928,6 +928,57 @@ def test_acceptance_commands_use_worker_subprocess_env(
     assert seen["command"] == ["echo", "ok"]
 
 
+def test_acceptance_command_expands_worktree_relative_globs(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    orch = LocalOrchestrator(workspace)
+    target_dir = workspace / "src" / "gmc" / "pkg"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    (target_dir / "alpha.py").write_text("alpha\n", encoding="utf-8")
+    (target_dir / "beta.py").write_text("beta\n", encoding="utf-8")
+    seen: dict[str, object] = {}
+
+    def fake_run(command, cwd, env, check, capture_output, text, timeout):  # noqa: ANN001
+        seen["command"] = list(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    node = RuntimeNodeSpec(
+        id="phase-1::task::acceptance-glob",
+        kind="agent",
+        group="phase-1",
+        depends_on=[],
+        task="acceptance task",
+        agent_profile_id="worker_default",
+        role="worker",
+        phase="phase-1",
+        lane="sequential",
+        cell_id="seq",
+        source_task_id="t1",
+        acceptance={
+            "commands": ['rg "alpha|beta" src/gmc/**/*.py'],
+            "required_artifacts": [],
+            "rubric": [],
+        },
+    )
+
+    ok, result = orch._evaluate_acceptance(
+        node,
+        {"worktree": str(workspace)},
+        timeout_seconds=5,
+    )
+
+    assert ok is True
+    assert result["commands"][0]["exit_code"] == 0
+    assert seen["command"] == [
+        "rg",
+        "alpha|beta",
+        "src/gmc/pkg/alpha.py",
+        "src/gmc/pkg/beta.py",
+    ]
+
+
 def test_start_run_requires_git_workspace(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

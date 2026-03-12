@@ -2940,6 +2940,38 @@ class LocalOrchestrator:
             return []
         return shlex.split(text, posix=os.name != "nt")
 
+    def _expand_acceptance_command_globs(
+        self, argv: list[str], *, worktree: Path
+    ) -> list[str]:
+        if not argv:
+            return []
+        expanded: list[str] = [argv[0]]
+        for token in argv[1:]:
+            text = str(token or "").strip()
+            if (
+                not text
+                or text.startswith("-")
+                or not glob.has_magic(text)
+                or not self._is_worktree_relative_glob(text)
+            ):
+                expanded.append(token)
+                continue
+            matches = glob.glob(str(worktree / text), recursive=True)
+            safe_matches: list[str] = []
+            for match in matches:
+                resolved = Path(match).resolve()
+                try:
+                    relative = resolved.relative_to(worktree)
+                except ValueError:
+                    continue
+                if resolved.exists():
+                    safe_matches.append(str(relative).replace("\\", "/"))
+            if safe_matches:
+                expanded.extend(sorted(dict.fromkeys(safe_matches)))
+            else:
+                expanded.append(token)
+        return expanded
+
     def _evaluate_acceptance(
         self,
         node: RuntimeNodeSpec,
@@ -2975,6 +3007,7 @@ class LocalOrchestrator:
             argv = self._acceptance_command_argv(command)
             if not argv:
                 continue
+            argv = self._expand_acceptance_command_globs(argv, worktree=worktree)
             started = time.monotonic()
             try:
                 run = subprocess.run(
