@@ -8,6 +8,14 @@ Source files:
 - `src/ralphite/engine/run_store.py`
 - `src/ralphite/engine/recovery.py`
 - `src/ralphite/engine/orchestrator.py`
+- `src/ralphite/engine/git_worktree.py`
+- `src/ralphite/engine/git_runtime_state.py`
+- `src/ralphite/engine/git_runtime_prepare.py`
+- `src/ralphite/engine/git_runtime_cleanup.py`
+- `src/ralphite/engine/runtime_bootstrap.py`
+- `src/ralphite/engine/runtime_recovery_manager.py`
+- `src/ralphite/engine/runtime_artifacts.py`
+- `src/ralphite/engine/runtime_events.py`
 
 ## Workspace Data Layout
 
@@ -35,6 +43,8 @@ Typical generated artifacts:
 - `reconcile --apply` also repairs cached run/checkpoint state by marking git-merged nodes succeeded, requeueing recoverable committed/retained workers, and clearing stale derived markers.
 - Salvage promotion updates node result state in persisted run state and rewrites artifacts so operators can see the promoted outcome without manual JSON edits.
 - Runs now record `reconciled_at`, `derived_from_git`, and `reconciliation_issues` in metadata when state is re-derived from repository truth.
+
+The public state contract is unchanged. The implementation now splits bootstrap, recovery, artifacts, and event persistence behind the `LocalOrchestrator` facade instead of concentrating that logic in one module.
 
 ## Worker Evidence and Salvage
 

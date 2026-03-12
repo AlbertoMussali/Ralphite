@@ -7,7 +7,19 @@ Source files:
 
 - `src/ralphite/engine/orchestrator.py`
 - `src/ralphite/engine/git_worktree.py`
+- `src/ralphite/engine/git_runtime_repo.py`
+- `src/ralphite/engine/git_runtime_paths.py`
+- `src/ralphite/engine/git_runtime_conflicts.py`
+- `src/ralphite/engine/git_runtime_state.py`
+- `src/ralphite/engine/git_runtime_prepare.py`
+- `src/ralphite/engine/git_runtime_cleanup.py`
 - `src/ralphite/engine/headless_agent.py`
+- `src/ralphite/engine/runtime_bootstrap.py`
+- `src/ralphite/engine/runtime_node_runner.py`
+- `src/ralphite/engine/runtime_recovery_manager.py`
+- `src/ralphite/engine/runtime_execution_engine.py`
+- `src/ralphite/engine/runtime_artifacts.py`
+- `src/ralphite/engine/runtime_events.py`
 - `src/ralphite/cli/commands/run_cmd.py`
 - `src/ralphite/cli/commands/recover_cmd.py`
 
@@ -29,6 +41,8 @@ The central runtime rule is:
 
 - Git/worktree truth is authoritative for mutation and merge state.
 - Backend payloads and summaries are advisory diagnostics unless local repository state confirms them.
+
+`LocalOrchestrator` remains the stable engine entrypoint, but it now delegates runtime work to focused internal modules for bootstrap, node execution, recovery, artifacts, and event emission.
 
 ## Run Lifecycle
 
