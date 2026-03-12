@@ -1,5 +1,7 @@
 # ADR-0003: Starter Plan Governance
 
+Last verified against commit: 071697a
+
 - Status: Accepted
 - Date: 2026-03-05
 - Owners: schemas, engine, release

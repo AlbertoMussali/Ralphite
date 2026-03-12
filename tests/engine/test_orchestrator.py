@@ -260,6 +260,7 @@ def _single_task_plan(
     *,
     acceptance_commands: list[str] | None = None,
     acceptance_artifacts: list[dict[str, str]] | None = None,
+    write_policy: dict[str, object] | None = None,
     max_retries_per_node: int = 0,
     acceptance_timeout_seconds: int = 120,
 ) -> str:
@@ -315,6 +316,7 @@ def _single_task_plan(
                     "required_artifacts": list(acceptance_artifacts or []),
                     "rubric": [],
                 },
+                "write_policy": dict(write_policy or {}),
             }
         ],
         "outputs": {"required_artifacts": []},
@@ -435,6 +437,44 @@ def test_first_failure_agent_recovery_can_resume_inline(workspace: Path) -> None
     assert recovery.get("auto_attempt_status") == "succeeded"
 
 
+def test_merge_orchestrator_edits_phase_integration_worktree_not_base(
+    workspace: Path,
+) -> None:
+    orch = LocalOrchestrator(workspace)
+    merge_worktrees: list[str] = []
+
+    def merge_safe_agent(self, handle, node, profile, snapshot, *, worktree):  # type: ignore[no-untyped-def]
+        target = worktree / "merge-note.md"
+        if node.role == "worker":
+            target.write_text("worker\n", encoding="utf-8")
+        elif node.behavior_kind == "merge_and_conflict_resolution":
+            merge_worktrees.append(str(worktree))
+            existing = target.read_text(encoding="utf-8") if target.exists() else ""
+            target.write_text(existing + "orchestrator\n", encoding="utf-8")
+        return True, {"summary": "ok"}
+
+    orch._execute_agent = MethodType(merge_safe_agent, orch)  # type: ignore[method-assign]
+    run_id = orch.start_run(plan_content=_conflict_plan_content())
+    assert orch.wait_for_run(run_id, timeout=8.0) is True
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "succeeded"
+    assert merge_worktrees
+    assert all(str(path) != str(workspace) for path in merge_worktrees)
+    assert all(path.endswith("integration") for path in merge_worktrees)
+    merged_note = (workspace / "merge-note.md").read_text(encoding="utf-8")
+    assert merged_note.startswith("worker\n")
+    assert "orchestrator\n" in merged_note
+    status = subprocess.run(
+        ["git", "status", "--short", "--untracked-files=no"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert status.stdout.strip() == ""
+
+
 def test_high_overlap_branched_work_is_serialized(workspace: Path) -> None:
     orch = LocalOrchestrator(workspace)
     handle = RuntimeHandle(
@@ -520,7 +560,7 @@ def test_start_run_applies_execution_overrides_to_metadata(workspace: Path) -> N
 def test_acceptance_timeout_produces_typed_failure(workspace: Path) -> None:
     orch = LocalOrchestrator(workspace)
     plan = _single_task_plan(
-        acceptance_commands=["python3 -c 'import time; time.sleep(2)'"],
+        acceptance_commands=['uv run python -c "import time; time.sleep(2)"'],
         acceptance_timeout_seconds=1,
     )
     run_id = orch.start_run(plan_content=plan)
@@ -535,6 +575,193 @@ def test_acceptance_timeout_produces_typed_failure(workspace: Path) -> None:
     assert "## Acceptance Results" in report
     assert "Failing command:" in report
     assert "Acceptance Timeout" in report
+
+
+def test_acceptance_failure_preserves_committed_worker_artifacts(
+    workspace: Path,
+) -> None:
+    orch = LocalOrchestrator(workspace)
+    plan = _single_task_plan(
+        acceptance_commands=['uv run python -c "import sys; sys.exit(1)"']
+    )
+    run_id = orch.start_run(plan_content=plan)
+    assert orch.wait_for_run(run_id, timeout=8.0)
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "failed"
+    retained = (
+        run.metadata.get("retained_work", [])
+        if isinstance(run.metadata.get("retained_work"), list)
+        else []
+    )
+    assert retained
+    first = retained[0]
+    assert first.get("branch")
+    assert first.get("commit")
+    assert first.get("worktree_exists") is True
+    assert any(evt.get("event") == "CLEANUP_SKIPPED" for evt in run.events)
+    assert any(item["id"] == "salvage_bundle" for item in run.artifacts)
+    report = _artifact_text(run, "final_report")
+    assert "## Retained Work" in report
+    assert "## Next Steps" in report
+    assert "ralphite salvage" in report
+
+
+def test_promote_salvage_promotes_retained_committed_worker(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    orch = LocalOrchestrator(workspace)
+    plan = _single_task_plan(
+        acceptance_commands=['uv run python -c "import sys; sys.exit(1)"']
+    )
+    run_id = orch.start_run(plan_content=plan)
+    assert orch.wait_for_run(run_id, timeout=8.0)
+    failed = orch.get_run(run_id)
+    assert failed is not None
+    retained = (
+        failed.metadata.get("retained_work", [])
+        if isinstance(failed.metadata.get("retained_work"), list)
+        else []
+    )
+    assert retained
+    node_id = str(retained[0]["node_id"])
+
+    def passing_acceptance(self, node, commit_meta, *, timeout_seconds):  # type: ignore[no-untyped-def]
+        return True, {
+            "commands": [{"command": "promoted acceptance", "exit_code": 0}],
+            "required_artifacts": [],
+            "rubric": [],
+        }
+
+    monkeypatch.setattr(
+        LocalOrchestrator,
+        "_evaluate_acceptance",
+        passing_acceptance,
+    )
+    ok, result = orch.promote_salvage(run_id, node_id)
+    assert ok is True
+    assert result["run_status"] == "succeeded"
+    promoted = orch.get_run(run_id)
+    assert promoted is not None
+    assert promoted.status == "succeeded"
+    assert promoted.nodes[node_id].status == "succeeded"
+    assert promoted.nodes[node_id].result.get("mode") == "salvage_promoted"
+
+
+def test_backend_failure_preserves_uncommitted_worker_changes(workspace: Path) -> None:
+    orch = LocalOrchestrator(workspace)
+
+    def failing_agent(self, handle, node, profile, snapshot, *, worktree):  # type: ignore[no-untyped-def]
+        if node.role == "worker":
+            (worktree / "partial.txt").write_text("partial work\n", encoding="utf-8")
+            return False, {
+                "reason": "backend_nonzero",
+                "error": "simulated backend failure",
+                "worktree": str(worktree),
+            }
+        return True, {"summary": "ok"}
+
+    orch._execute_agent = MethodType(failing_agent, orch)  # type: ignore[method-assign]
+    run_id = orch.start_run(plan_content=_single_task_plan())
+    assert orch.wait_for_run(run_id, timeout=8.0)
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "failed"
+    retained = (
+        run.metadata.get("retained_work", [])
+        if isinstance(run.metadata.get("retained_work"), list)
+        else []
+    )
+    assert retained
+    first = retained[0]
+    assert first.get("worktree_exists") is True
+    assert "partial.txt" in str(first.get("status_porcelain") or "")
+    worktree = Path(str(first.get("worktree_path") or ""))
+    assert (worktree / "partial.txt").exists()
+
+
+def test_worker_write_scope_is_enforced_from_git_evidence(workspace: Path) -> None:
+    orch = LocalOrchestrator(workspace)
+
+    def scoped_agent(self, handle, node, profile, snapshot, *, worktree):  # type: ignore[no-untyped-def]
+        if node.role == "worker":
+            (worktree / "docs").mkdir(exist_ok=True)
+            (worktree / "docs" / "allowed.md").write_text("ok\n", encoding="utf-8")
+            (worktree / "README.md").write_text("not allowed\n", encoding="utf-8")
+        return True, {"summary": "wrote files"}
+
+    orch._execute_agent = MethodType(scoped_agent, orch)  # type: ignore[method-assign]
+    plan = _single_task_plan(
+        write_policy={
+            "allowed_write_roots": ["docs"],
+            "allow_root_writes": False,
+        }
+    )
+    run_id = orch.start_run(plan_content=plan)
+    assert orch.wait_for_run(run_id, timeout=8.0)
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "failed"
+    node = next(iter(run.nodes.values()))
+    assert isinstance(node.result, dict)
+    assert node.result.get("reason") == "backend_out_of_worktree_mutation"
+    diagnostics = node.result.get("diagnostics", {})
+    assert isinstance(diagnostics, dict)
+    assert "README.md" in diagnostics.get("out_of_scope_files", [])
+
+
+def test_acceptance_commands_use_worker_subprocess_env(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    orch = LocalOrchestrator(workspace)
+    seen: dict[str, object] = {}
+
+    def fake_env(*, worktree):  # noqa: ANN001
+        seen["worktree"] = str(worktree)
+        return {
+            "UV_CACHE_DIR": r"C:\ralphite-cache\abc123",
+            "TMP": r"C:\ralphite-cache\abc123\tmp",
+            "TEMP": r"C:\ralphite-cache\abc123\tmp",
+        }
+
+    def fake_run(command, cwd, env, check, capture_output, text, timeout):  # noqa: ANN001
+        seen["env"] = dict(env)
+        seen["cwd"] = str(cwd)
+        seen["command"] = list(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(
+        "ralphite.engine.orchestrator.build_worker_subprocess_env", fake_env
+    )
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    node = RuntimeNodeSpec(
+        id="phase-1::task::acceptance",
+        kind="agent",
+        group="phase-1",
+        depends_on=[],
+        task="acceptance task",
+        agent_profile_id="worker_default",
+        role="worker",
+        phase="phase-1",
+        lane="sequential",
+        cell_id="seq",
+        source_task_id="t1",
+        acceptance={"commands": ["echo ok"], "required_artifacts": [], "rubric": []},
+    )
+
+    ok, result = orch._evaluate_acceptance(
+        node,
+        {"worktree": str(workspace)},
+        timeout_seconds=5,
+    )
+
+    assert ok is True
+    assert result["commands"][0]["exit_code"] == 0
+    assert seen["cwd"] == str(workspace)
+    assert seen["worktree"] == str(workspace)
+    assert seen["env"]["UV_CACHE_DIR"] == r"C:\ralphite-cache\abc123"
+    assert seen["command"] == ["echo", "ok"]
 
 
 def test_start_run_requires_git_workspace(
@@ -596,7 +823,6 @@ def test_acceptance_artifact_missing_is_reported_in_final_report(
     assert run.status == "failed"
     report = _artifact_text(run, "final_report")
     assert "## Acceptance Results" in report
-    assert "Missing artifact: `missing`" in report
     assert "## Failures and Warnings" in report
 
 

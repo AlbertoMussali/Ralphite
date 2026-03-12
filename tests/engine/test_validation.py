@@ -323,6 +323,35 @@ def test_validation_rejects_out_of_bounds_artifact_glob() -> None:
     )
 
 
+def test_validation_rejects_out_of_bounds_write_policy_root() -> None:
+    content = _minimal_v1_content(
+        agents_block="""
+  - id: worker_default
+    role: worker
+    provider: codex
+    model: gpt-5.3-codex
+  - id: orchestrator_default
+    role: orchestrator
+    provider: codex
+    model: gpt-5.3-codex
+""",
+        tasks_block="""
+  - id: t1
+    title: Build
+    completed: false
+    write_policy:
+      allowed_write_roots:
+        - ../outside
+""",
+    )
+    valid, issues, _summary = validate_plan_content(content)
+    assert valid is False
+    assert any(
+        issue.get("code") == "tasks.write_policy.allowed_root_out_of_bounds"
+        for issue in issues
+    )
+
+
 def test_validation_rejects_invalid_prompt_placeholder_for_role() -> None:
     content = _minimal_v1_content(
         agents_block="""

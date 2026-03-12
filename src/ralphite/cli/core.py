@@ -30,6 +30,15 @@ CLI_OUTPUT_SCHEMA_VERSION = "cli-output.v1"
 console = Console()
 
 
+def _safe_console_print(*args: Any, **kwargs: Any) -> None:
+    try:
+        console.print(*args, **kwargs)
+    except UnicodeEncodeError:
+        plain = " ".join(str(item) for item in args)
+        sys.stdout.write(plain.encode("ascii", errors="replace").decode("ascii") + "\n")
+        sys.stdout.flush()
+
+
 def _dedupe_strings(items: list[str]) -> list[str]:
     unique: list[str] = []
     seen: set[str] = set()
@@ -143,7 +152,7 @@ def _print_preflight_summary(
             )
         ),
     ]
-    console.print(
+    _safe_console_print(
         Panel(
             "\n".join(lines),
             title=f"[bold]{title}[/bold]",
@@ -409,34 +418,34 @@ def _bootstrap_plan_file(
 def _print_run_stream(
     orch: LocalOrchestrator, run_id: str, *, verbose: bool = False
 ) -> None:
-    console.print(f"\n[bold]Streaming run {run_id}[/bold]")
+    _safe_console_print(f"\n[bold]Streaming run {run_id}[/bold]")
     for event in orch.stream_events(run_id):
         level = str(event.get("level", "info"))
         info = present_event(str(event.get("event", "")))
         color = "green" if level == "info" else "yellow" if level == "warn" else "red"
         message = str(event.get("message", ""))
-        console.print(f"[{color}]{info.title:20}[/{color}] {message}")
+        _safe_console_print(f"[{color}]{info.title:20}[/{color}] {message}")
         if verbose or level in {"warn", "error"}:
-            console.print(f"  [dim]next: {info.next_action}[/dim]")
+            _safe_console_print(f"  [dim]next: {info.next_action}[/dim]")
         if event.get("event") == "RUN_DONE":
             break
 
     orch.wait_for_run(run_id, timeout=2.0)
     run = orch.get_run(run_id)
     if run and run.artifacts:
-        console.print()
+        _safe_console_print()
         renderables: list[Any] = []
         _render_final_report_preview(
             renderables,
             [item for item in run.artifacts if isinstance(item, dict)],
         )
         if renderables:
-            console.print(Group(*renderables))
-            console.print()
+            _safe_console_print(Group(*renderables))
+            _safe_console_print()
         tree = Tree("[bold]Artifacts[/bold]")
         for artifact in run.artifacts:
             tree.add(f"{artifact['id']}: {artifact['path']}")
-        console.print(tree)
+        _safe_console_print(tree)
 
 
 def _emit_payload(
@@ -654,4 +663,4 @@ def _emit_payload(
         border_style="blue",
         padding=(0, 1),
     )
-    console.print(panel)
+    _safe_console_print(panel)

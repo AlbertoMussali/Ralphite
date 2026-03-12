@@ -61,6 +61,15 @@ def _is_worktree_relative_glob(path_glob: str) -> bool:
     return True
 
 
+def _is_worktree_relative_path(path_value: str) -> bool:
+    value = (path_value or "").strip()
+    if not value:
+        return False
+    if "*" in value or "?" in value or "[" in value:
+        return False
+    return _is_worktree_relative_glob(value)
+
+
 def validate_plan(plan: PlanSpec) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
 
@@ -199,6 +208,24 @@ def validate_plan(plan: PlanSpec) -> list[ValidationIssue]:
                         "tasks.acceptance.path_glob_out_of_bounds",
                         f"task '{task.id}' artifact glob must be worktree-relative: '{artifact.path_glob}'",
                         f"{path_prefix}.acceptance.required_artifacts[{artifact_idx}].path_glob",
+                    )
+                )
+        for root_idx, root in enumerate(task.write_policy.allowed_write_roots):
+            if not _is_worktree_relative_path(root):
+                issues.append(
+                    ValidationIssue(
+                        "tasks.write_policy.allowed_root_out_of_bounds",
+                        f"task '{task.id}' allowed_write_roots must be worktree-relative paths: '{root}'",
+                        f"{path_prefix}.write_policy.allowed_write_roots[{root_idx}]",
+                    )
+                )
+        for root_idx, root in enumerate(task.write_policy.forbidden_write_roots):
+            if not _is_worktree_relative_path(root):
+                issues.append(
+                    ValidationIssue(
+                        "tasks.write_policy.forbidden_root_out_of_bounds",
+                        f"task '{task.id}' forbidden_write_roots must be worktree-relative paths: '{root}'",
+                        f"{path_prefix}.write_policy.forbidden_write_roots[{root_idx}]",
                     )
                 )
 

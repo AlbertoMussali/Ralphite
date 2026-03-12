@@ -1,7 +1,7 @@
 # Plan v1 Schema Reference
 
 Owners: schemas
-Last verified against commit: 70b0c1f
+Last verified against commit: 071697a
 
 Source files:
 
@@ -35,3 +35,17 @@ Source files:
 ## Runtime Compatibility
 
 - execution supports only `version: 1`
+
+## Task Write Policy
+
+- `tasks[].write_policy.allowed_write_roots`: workspace-relative roots the task may mutate
+- `tasks[].write_policy.forbidden_write_roots`: workspace-relative roots the task may not mutate
+- `tasks[].write_policy.allow_plan_edits`: defaults to `false`
+- `tasks[].write_policy.allow_root_writes`: defaults to `false`
+
+Runtime notes:
+
+- If `allowed_write_roots` is omitted, Ralphite derives a conservative allowlist from declared acceptance artifact roots when possible.
+- Plan edits are rejected unless `allow_plan_edits: true`.
+- `forbidden_write_roots` takes precedence over `allowed_write_roots`.
+- Observed local writes outside scope are rejected as `backend_out_of_worktree_mutation`.

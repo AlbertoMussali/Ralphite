@@ -1,7 +1,7 @@
 # Architecture Decisions (ADR Index)
 
 Owners: engine, release
-Last verified against commit: 70b0c1f
+Last verified against commit: 071697a
 
 - [ADR Template](ADR-TEMPLATE.md)
 - [ADR-0001: Headless Backend Default](ADR-0001-headless-backend-default.md)
@@ -11,3 +11,4 @@ Last verified against commit: 70b0c1f
 - [ADR-0005: Single-Package v1 Consolidation](ADR-0005-single-package-v1-consolidation.md)
 - [ADR-0006: Centralized Agent Defaults for Plan v1](ADR-0006-centralized-agent-defaults.md)
 - [ADR-0007: Git-Required Runtime and Human Summary Artifact](ADR-0007-git-required-runtime.md)
+- [ADR-0008: Git Authority and Derived Recovery](ADR-0008-git-authority-and-derived-recovery.md)

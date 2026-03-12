@@ -1,5 +1,7 @@
 # ADR-0006: Centralized Agent Defaults for Plan v1
 
+Last verified against commit: 071697a
+
 - Status: Accepted
 - Date: 2026-03-05
 - Owners: engine, schemas, release

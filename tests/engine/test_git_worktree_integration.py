@@ -59,6 +59,7 @@ def test_git_worktree_worker_merge_and_cleanup_idempotent(tmp_path: Path) -> Non
     cleanup_second = manager.cleanup_all(state)
     assert cleanup_first
     assert cleanup_second == []
+    assert not (tmp_path / ".ralphite" / "worktrees" / "runabc123").exists()
 
 
 def test_git_worktree_conflict_fail_closed_reports_details(tmp_path: Path) -> None:
@@ -152,6 +153,92 @@ def test_detect_stale_artifacts_reports_orphans(tmp_path: Path) -> None:
     )
     assert "stale_worktrees" in report
     assert any(item.get("run_id") == "orphanrun" for item in report["stale_worktrees"])
+
+
+def test_cleanup_phase_prunes_empty_phase_and_run_directories(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    manager = GitWorktreeManager(tmp_path, "runprune123")
+    state = manager.bootstrap_state()
+
+    manager.prepare_phase(state, "phase-1")
+    worker = manager.prepare_worker(state, "phase-1", "phase-1::parallel::t1")
+    worker_path = Path(str(worker["worktree_path"]))
+    assert worker_path.exists()
+
+    notes = manager.cleanup_phase(state, "phase-1")
+    assert notes
+    assert not worker_path.exists()
+    assert not worker_path.parent.exists()
+    assert not (tmp_path / ".ralphite" / "worktrees" / "runprune123").exists()
+
+
+def test_prepare_worker_uses_compact_branch_and_worktree_names(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    manager = GitWorktreeManager(tmp_path, "12345678-1234-1234-1234-1234567890abcdef")
+    state = manager.bootstrap_state()
+
+    phase = "phase-name-with-many-segments-and-a-very-long-identifier"
+    node_id = (
+        "phase-1::parallel::task_backend_environment_and_operator_contract::"
+        "subtask-with-a-very-long-descriptor"
+    )
+    worker = manager.prepare_worker(state, phase, node_id)
+
+    worker_path = Path(str(worker["worktree_path"]))
+    assert worker_path.exists()
+    assert len(worker["branch"]) < len(
+        f"ralphite/12345678/{phase}--{node_id.lower().replace(':', '-')}"
+    )
+    assert worker_path.parent.parent.name == "12345678"
+    assert len(worker_path.name) < len(node_id)
+
+
+def test_conflict_next_commands_quote_paths_with_spaces(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    manager = GitWorktreeManager(tmp_path, "runquotes123")
+    commands = manager._conflict_next_commands(
+        Path(r"C:\Users\alberto.mussali\Documents\My Repo\phase worktree")
+    )
+    assert (
+        commands[0]
+        == 'cd "C:\\Users\\alberto.mussali\\Documents\\My Repo\\phase worktree"'
+    )
+
+
+def test_cleanup_phase_preserves_retained_worker_until_explicit_discard(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    manager = GitWorktreeManager(tmp_path, "runpreserve123")
+    state = manager.bootstrap_state()
+    worker = manager.prepare_worker(state, "phase-1", "phase-1::parallel::t1")
+    worker_path = Path(str(worker["worktree_path"]))
+    (worker_path / "worker.txt").write_text("worker output\n", encoding="utf-8")
+    ok, commit_meta = manager.commit_worker(
+        state, "phase-1", "phase-1::parallel::t1", "worker commit"
+    )
+    assert ok is True
+
+    retained = manager.retain_target(
+        state,
+        scope="worker",
+        reason="acceptance_command_failed",
+        phase="phase-1",
+        node_id="phase-1::parallel::t1",
+        worktree_path=str(worker_path),
+        branch=str(commit_meta.get("branch") or ""),
+        committed=True,
+    )
+    assert retained.get("worktree_exists") is True
+
+    notes = manager.cleanup_phase(state, "phase-1")
+    assert any("preserved worktree" in item for item in notes)
+    assert worker_path.exists()
+    assert manager._branch_exists(str(commit_meta.get("branch") or ""))
+
+    discard_notes = manager.cleanup_phase(state, "phase-1", discard_preserved=True)
+    assert any("removed worktree" in item for item in discard_notes)
+    assert not worker_path.exists()
 
 
 def test_commit_workspace_changes_can_scope_to_specific_paths(tmp_path: Path) -> None:

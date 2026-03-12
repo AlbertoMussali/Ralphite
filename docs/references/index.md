@@ -1,7 +1,7 @@
 # References
 
 Owners: engine, schemas, cli
-Last verified against commit: 70b0c1f
+Last verified against commit: 071697a
 
 This section is contract-level reference material, not a primary onboarding path.
 - Operators: start with [README.md](../../README.md), then [docs/workflows/first-run.md](../workflows/first-run.md).

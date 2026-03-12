@@ -1,15 +1,36 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 from pathlib import Path
 import re
-import shutil
 import subprocess
 from typing import Any
 
 
 def _slug(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._-]+", "-", value).strip("-").lower() or "item"
+
+
+def _compact_slug(
+    value: str,
+    *,
+    prefix_len: int,
+    hash_len: int = 8,
+    fallback: str = "item",
+) -> str:
+    slug = _slug(value)
+    if len(slug) <= prefix_len:
+        return slug or fallback
+    prefix = slug[:prefix_len].rstrip("-.") or fallback
+    digest = hashlib.sha1(slug.encode("utf-8")).hexdigest()[:hash_len]
+    return f"{prefix}-{digest}"
+
+
+def _quote_shell_path(path: Path | str) -> str:
+    text = str(path)
+    escaped = text.replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def git_required_details(workspace_root: Path) -> dict[str, Any]:
@@ -128,6 +149,51 @@ class GitWorktreeManager:
 
     def _worktrees_root(self) -> Path:
         return self.workspace_root / ".ralphite" / "worktrees"
+
+    def _run_key(self) -> str:
+        return _compact_slug(self.run_id[:8] or self.run_id, prefix_len=12)
+
+    def _run_key_for(self, run_id: str | None = None) -> str:
+        candidate = str(run_id or self.run_id)
+        return _compact_slug(candidate[:8] or candidate, prefix_len=12)
+
+    def _phase_key(self, phase: str) -> str:
+        return _compact_slug(phase, prefix_len=20)
+
+    def _node_key(self, node_id: str) -> str:
+        return _compact_slug(node_id, prefix_len=28)
+
+    def _phase_branch_name(self, phase: str) -> str:
+        return f"ralphite/{self._run_key()}/{self._phase_key(phase)}"
+
+    def _worker_branch_name(self, phase_branch: str, node_id: str) -> str:
+        return f"{phase_branch}--{self._node_key(node_id)}"
+
+    def _phase_worktrees_root(self, phase: str) -> Path:
+        return self._worktrees_root() / self._run_key() / self._phase_key(phase)
+
+    def _worker_worktree_path(self, phase: str, node_id: str) -> Path:
+        return self._phase_worktrees_root(phase) / self._node_key(node_id)
+
+    def _integration_worktree_path(self, phase: str) -> Path:
+        return self._phase_worktrees_root(phase) / "integration"
+
+    def _prune_empty_worktree_ancestors(self, path: Path) -> list[str]:
+        messages: list[str] = []
+        root = self._worktrees_root()
+        current = path
+        while current != root and current.is_relative_to(root):
+            if not current.exists():
+                current = current.parent
+                continue
+            try:
+                next(current.iterdir())
+                break
+            except StopIteration:
+                current.rmdir()
+                messages.append(f"removed empty directory {current}")
+                current = current.parent
+        return messages
 
     def _head_commit_metadata(self, cwd: Path) -> dict[str, Any]:
         commit = self._git(["rev-parse", "HEAD"], cwd=cwd, check=False)
@@ -254,7 +320,7 @@ class GitWorktreeManager:
 
     def _conflict_next_commands(self, worktree: Path) -> list[str]:
         return [
-            f"cd {worktree}",
+            f"cd {_quote_shell_path(worktree)}",
             "git status",
             "git add <resolved-files>",
             "git commit -m 'resolve merge conflicts'",
@@ -286,7 +352,253 @@ class GitWorktreeManager:
         state.setdefault("phases", {})
         state.setdefault("cleanup_paths", [])
         state.setdefault("cleanup_branches", [])
+        state.setdefault("preserved_paths", [])
+        state.setdefault("preserved_branches", [])
+        state.setdefault("retained_work", [])
         return state
+
+    def _preserved_paths(self, state: dict[str, Any]) -> set[str]:
+        return {
+            str(item)
+            for item in self.bootstrap_state(state).get("preserved_paths", [])
+            if str(item).strip()
+        }
+
+    def _preserved_branches(self, state: dict[str, Any]) -> set[str]:
+        return {
+            str(item)
+            for item in self.bootstrap_state(state).get("preserved_branches", [])
+            if str(item).strip()
+        }
+
+    def _branch_exists(self, branch: str) -> bool:
+        if not branch:
+            return False
+        return self._git(["rev-parse", "--verify", branch], check=False).returncode == 0
+
+    def inspect_managed_target(
+        self,
+        *,
+        worktree_path: str | None = None,
+        branch: str | None = None,
+    ) -> dict[str, Any]:
+        info: dict[str, Any] = {
+            "worktree_path": str(worktree_path or ""),
+            "branch": str(branch or ""),
+            "worktree_exists": False,
+            "branch_exists": False,
+            "status_porcelain": "",
+            "diff": "",
+            "cached_diff": "",
+            "commit": "",
+            "changed_files": [],
+        }
+        branch_name = str(branch or "").strip()
+        worktree = (
+            Path(str(worktree_path)).expanduser().resolve()
+            if str(worktree_path or "").strip()
+            else None
+        )
+        if worktree is not None and worktree.exists():
+            info["worktree_exists"] = True
+            status = self._git(
+                ["status", "--porcelain", "--untracked-files=all"],
+                cwd=worktree,
+                check=False,
+            )
+            if status.returncode == 0:
+                info["status_porcelain"] = status.stdout
+            diff = self._git(["diff", "--binary"], cwd=worktree, check=False)
+            if diff.returncode == 0:
+                info["diff"] = diff.stdout
+            cached = self._git(
+                ["diff", "--cached", "--binary"], cwd=worktree, check=False
+            )
+            if cached.returncode == 0:
+                info["cached_diff"] = cached.stdout
+            info.update(self._head_commit_metadata(worktree))
+        if branch_name:
+            info["branch_exists"] = self._branch_exists(branch_name)
+            if not info.get("commit") and info["branch_exists"]:
+                commit = self._git(["rev-parse", branch_name], check=False)
+                if commit.returncode == 0:
+                    info["commit"] = commit.stdout.strip()
+        return info
+
+    def retain_target(
+        self,
+        state: dict[str, Any],
+        *,
+        scope: str,
+        reason: str,
+        phase: str = "",
+        node_id: str = "",
+        worktree_path: str | None = None,
+        branch: str | None = None,
+        failure_title: str = "",
+        failed_command: str = "",
+        error: str = "",
+        committed: bool | None = None,
+        stdout: str = "",
+        stderr: str = "",
+        backend_payload: dict[str, Any] | None = None,
+        diagnostics: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        state = self.bootstrap_state(state)
+        path_text = str(worktree_path or "").strip()
+        branch_text = str(branch or "").strip()
+        if path_text and path_text not in state["preserved_paths"]:
+            state["preserved_paths"].append(path_text)
+        if branch_text and branch_text not in state["preserved_branches"]:
+            state["preserved_branches"].append(branch_text)
+        snapshot = self.inspect_managed_target(
+            worktree_path=path_text or None,
+            branch=branch_text or None,
+        )
+        salvage_class = "orphan_managed_artifact"
+        if snapshot.get("commit"):
+            salvage_class = "committed_unmerged"
+        elif str(snapshot.get("status_porcelain") or "").strip():
+            salvage_class = "dirty_uncommitted"
+        entry = {
+            "scope": scope,
+            "reason": reason,
+            "phase": phase,
+            "node_id": node_id,
+            "failure_title": failure_title,
+            "failed_command": failed_command,
+            "error": error,
+            "committed": committed,
+            "stdout": stdout,
+            "stderr": stderr,
+            "backend_payload": backend_payload or {},
+            "diagnostics": diagnostics or {},
+            "salvage_class": salvage_class,
+            **snapshot,
+        }
+        retained = state.setdefault("retained_work", [])
+        key = (
+            scope,
+            phase,
+            node_id,
+            path_text,
+            branch_text,
+            reason,
+        )
+        for index, existing in enumerate(retained):
+            if not isinstance(existing, dict):
+                continue
+            existing_key = (
+                str(existing.get("scope") or ""),
+                str(existing.get("phase") or ""),
+                str(existing.get("node_id") or ""),
+                str(existing.get("worktree_path") or ""),
+                str(existing.get("branch") or ""),
+                str(existing.get("reason") or ""),
+            )
+            if existing_key == key:
+                retained[index] = entry
+                return entry
+        retained.append(entry)
+        return entry
+
+    def retain_all_managed_work(
+        self, state: dict[str, Any], *, reason: str, failure_title: str = ""
+    ) -> list[dict[str, Any]]:
+        state = self.bootstrap_state(state)
+        retained: list[dict[str, Any]] = []
+        for phase, phase_state in state.get("phases", {}).items():
+            if not isinstance(phase_state, dict):
+                continue
+            phase_branch = str(phase_state.get("phase_branch") or "")
+            integration_worktree = str(phase_state.get("integration_worktree") or "")
+            if phase_branch or integration_worktree:
+                retained.append(
+                    self.retain_target(
+                        state,
+                        scope="phase",
+                        reason=reason,
+                        phase=str(phase),
+                        worktree_path=integration_worktree or None,
+                        branch=phase_branch or None,
+                        failure_title=failure_title,
+                    )
+                )
+            workers = phase_state.get("workers", {})
+            if not isinstance(workers, dict):
+                continue
+            for node_id, worker in workers.items():
+                if not isinstance(worker, dict):
+                    continue
+                retained.append(
+                    self.retain_target(
+                        state,
+                        scope="worker",
+                        reason=reason,
+                        phase=str(phase),
+                        node_id=str(node_id),
+                        worktree_path=str(worker.get("worktree_path") or "") or None,
+                        branch=str(worker.get("branch") or "") or None,
+                        failure_title=failure_title,
+                        committed=bool(worker.get("committed")),
+                    )
+                )
+        return retained
+
+    def reconcile_state(self, state: dict[str, Any]) -> dict[str, Any]:
+        state = self.bootstrap_state(state)
+        summary = {
+            "preserved_paths": [],
+            "preserved_branches": [],
+            "retained_work": [],
+        }
+        for entry in state.get("retained_work", []):
+            if not isinstance(entry, dict):
+                continue
+            refreshed = self.inspect_managed_target(
+                worktree_path=str(entry.get("worktree_path") or "") or None,
+                branch=str(entry.get("branch") or "") or None,
+            )
+            entry.update(refreshed)
+            summary["retained_work"].append(
+                {
+                    "scope": str(entry.get("scope") or ""),
+                    "phase": str(entry.get("phase") or ""),
+                    "node_id": str(entry.get("node_id") or ""),
+                    "worktree_exists": bool(entry.get("worktree_exists")),
+                    "branch_exists": bool(entry.get("branch_exists")),
+                    "commit": str(entry.get("commit") or ""),
+                }
+            )
+        summary["preserved_paths"] = sorted(self._preserved_paths(state))
+        summary["preserved_branches"] = sorted(self._preserved_branches(state))
+        return summary
+
+    def phase_cleanup_allowed(self, state: dict[str, Any], phase: str) -> bool:
+        phase_state = self.prepare_phase(state, phase)
+        if not bool(phase_state.get("integrated_to_base")):
+            return False
+        preserved_paths = self._preserved_paths(state)
+        preserved_branches = self._preserved_branches(state)
+        paths = [
+            str(phase_state.get("integration_worktree") or ""),
+            *[
+                str(entry.get("worktree_path") or "")
+                for entry in phase_state.get("workers", {}).values()
+                if isinstance(entry, dict)
+            ],
+        ]
+        branches = [
+            str(phase_state.get("phase_branch") or ""),
+            *[
+                str(entry.get("branch") or "")
+                for entry in phase_state.get("workers", {}).values()
+                if isinstance(entry, dict)
+            ],
+        ]
+        return not any(path and path in preserved_paths for path in paths) and not any(
+            branch and branch in preserved_branches for branch in branches
+        )
 
     def prepare_phase(self, state: dict[str, Any], phase: str) -> dict[str, Any]:
         state = self.bootstrap_state(state)
@@ -294,7 +606,7 @@ class GitWorktreeManager:
         if phase in phases:
             return phases[phase]
 
-        phase_branch = f"ralphite/{_slug(self.run_id[:8])}/{_slug(phase)}"
+        phase_branch = self._phase_branch_name(phase)
         phase_state = {
             "phase_branch": phase_branch,
             "workers": {},
@@ -328,10 +640,8 @@ class GitWorktreeManager:
 
         # Use a flat suffix instead of a nested ref path to avoid
         # conflicts with the existing phase branch ref.
-        branch = f"{phase_state['phase_branch']}--{_slug(node_id)}"
-        worktree = (
-            self._worktrees_root() / _slug(self.run_id) / _slug(phase) / _slug(node_id)
-        )
+        branch = self._worker_branch_name(phase_state["phase_branch"], node_id)
+        worktree = self._worker_worktree_path(phase, node_id)
         info = {
             "branch": branch,
             "worktree_path": str(worktree),
@@ -396,22 +706,42 @@ class GitWorktreeManager:
             **self._head_commit_metadata(worktree),
         }
 
-    def _simulate_conflict(self, phase: str) -> bool:
-        marker_path = self.workspace_root / ".ralphite" / "force_merge_conflict"
-        marker = (
-            marker_path.read_text(encoding="utf-8").strip()
-            if marker_path.exists()
-            else ""
-        )
-        return marker == phase
+    def _ensure_integration_worktree(
+        self, state: dict[str, Any], phase: str
+    ) -> tuple[bool, dict[str, Any]]:
+        phase_state = self.prepare_phase(state, phase)
+        integration_path = self._integration_worktree_path(phase)
+        integration_path.parent.mkdir(parents=True, exist_ok=True)
+        phase_state["integration_worktree"] = str(integration_path)
+        if integration_path.exists():
+            return True, {
+                "phase_branch": phase_state["phase_branch"],
+                "worktree": str(integration_path),
+            }
 
-    def integrate_phase(
-        self,
-        state: dict[str, Any],
-        phase: str,
-        *,
-        recovery_mode: str = "manual",
-        recovery_prompt: str | None = None,
+        add_wt = self._git(
+            [
+                "worktree",
+                "add",
+                "--force",
+                str(integration_path),
+                phase_state["phase_branch"],
+            ],
+            check=False,
+        )
+        if add_wt.returncode != 0:
+            return False, {
+                "reason": "phase_worktree_add_failed",
+                "error": add_wt.stderr.strip() or add_wt.stdout.strip(),
+            }
+        state["cleanup_paths"].append(str(integration_path))
+        return True, {
+            "phase_branch": phase_state["phase_branch"],
+            "worktree": str(integration_path),
+        }
+
+    def prepare_phase_integration(
+        self, state: dict[str, Any], phase: str
     ) -> tuple[str, dict[str, Any]]:
         phase_state = self.prepare_phase(state, phase)
         workers = phase_state.get("workers", {})
@@ -432,39 +762,19 @@ class GitWorktreeManager:
                 },
             )
 
-        if recovery_mode == "agent_best_effort" and recovery_prompt:
-            phase_state["last_recovery_prompt"] = recovery_prompt
+        ok, integration_meta = self._ensure_integration_worktree(state, phase)
+        if not ok:
+            return "failed", integration_meta
 
-        integration_path = (
-            self._worktrees_root() / _slug(self.run_id) / _slug(phase) / "integration"
-        )
-        integration_path.parent.mkdir(parents=True, exist_ok=True)
-        phase_state["integration_worktree"] = str(integration_path)
-        if integration_path.exists():
-            removed = self._git(
-                ["worktree", "remove", "--force", str(integration_path)], check=False
-            )
-            if removed.returncode != 0 and integration_path.exists():
-                shutil.rmtree(integration_path, ignore_errors=True)
-
-        add_wt = self._git(
-            [
-                "worktree",
-                "add",
-                "--force",
-                str(integration_path),
-                phase_state["phase_branch"],
-            ],
-            check=False,
-        )
-        if add_wt.returncode != 0:
-            return "failed", {
-                "reason": "phase_worktree_add_failed",
-                "error": add_wt.stderr.strip() or add_wt.stdout.strip(),
-            }
-        state["cleanup_paths"].append(str(integration_path))
+        integration_path = Path(str(integration_meta["worktree"]))
+        merged_workers = phase_state.setdefault("merged_workers", [])
+        if not isinstance(merged_workers, list):
+            merged_workers = []
+            phase_state["merged_workers"] = merged_workers
 
         for branch in worker_branches:
+            if branch in merged_workers:
+                continue
             merged = self._git(
                 ["merge", "--no-ff", "--no-edit", branch],
                 cwd=integration_path,
@@ -487,7 +797,86 @@ class GitWorktreeManager:
                         "next_commands": self._conflict_next_commands(integration_path),
                     },
                 )
-            phase_state["merged_workers"].append(branch)
+            merged_workers.append(branch)
+
+        return "success", {
+            "phase_branch": phase_state["phase_branch"],
+            "workers": worker_branches,
+            "worktree": str(integration_path),
+        }
+
+    def commit_phase_integration_changes(
+        self, state: dict[str, Any], phase: str, message: str
+    ) -> tuple[bool, dict[str, Any]]:
+        status, details = self.prepare_phase_integration(state, phase)
+        if status != "success":
+            return False, details
+
+        integration_path = Path(str(details.get("worktree") or ""))
+        add = self._git(["add", "-A"], cwd=integration_path, check=False)
+        if add.returncode != 0:
+            return False, {
+                "reason": "git_add_failed",
+                "error": add.stderr.strip() or add.stdout.strip(),
+            }
+
+        has_staged = self._git(["diff", "--cached", "--quiet"], cwd=integration_path)
+        if has_staged.returncode == 0:
+            return True, {
+                "mode": "noop",
+                "message": "no phase integration changes to commit",
+                "worktree": str(integration_path),
+                "phase_branch": str(details.get("phase_branch") or ""),
+            }
+
+        commit = self._git(
+            ["commit", "--allow-empty", "-m", message],
+            cwd=integration_path,
+            check=False,
+        )
+        if commit.returncode != 0:
+            return False, {
+                "reason": "git_commit_failed",
+                "error": commit.stderr.strip() or commit.stdout.strip(),
+            }
+
+        return True, {
+            "mode": "committed",
+            "message": message,
+            "worktree": str(integration_path),
+            "phase_branch": str(details.get("phase_branch") or ""),
+            **self._head_commit_metadata(integration_path),
+        }
+
+    def _simulate_conflict(self, phase: str) -> bool:
+        marker_path = self.workspace_root / ".ralphite" / "force_merge_conflict"
+        marker = (
+            marker_path.read_text(encoding="utf-8").strip()
+            if marker_path.exists()
+            else ""
+        )
+        return marker == phase
+
+    def integrate_phase(
+        self,
+        state: dict[str, Any],
+        phase: str,
+        *,
+        recovery_mode: str = "manual",
+        recovery_prompt: str | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        phase_state = self.prepare_phase(state, phase)
+        status, prep_meta = self.prepare_phase_integration(state, phase)
+        if status != "success":
+            return status, prep_meta
+        worker_branches = (
+            prep_meta.get("workers")
+            if isinstance(prep_meta.get("workers"), list)
+            else []
+        )
+
+        if recovery_mode == "agent_best_effort" and recovery_prompt:
+            phase_state["last_recovery_prompt"] = recovery_prompt
 
         precheck = self.pre_base_integration_check(phase_state["phase_branch"])
         if not bool(precheck.get("ok")):
@@ -637,12 +1026,142 @@ class GitWorktreeManager:
             "stale_branches": stale_branches,
         }
 
-    def cleanup_phase(self, state: dict[str, Any], phase: str) -> list[str]:
+    def managed_artifact_inventory(self, run_id: str | None = None) -> dict[str, Any]:
+        self._ensure_git_available()
+        run_ref = str(run_id or self.run_id)
+        run_key = self._run_key_for(run_ref)
+        branch_prefix = f"ralphite/{run_key}"
+
+        branches: list[dict[str, Any]] = []
+        result = self._git(["branch", "--list", f"{branch_prefix}*"], check=False)
+        if result.returncode == 0:
+            for raw in result.stdout.splitlines():
+                branch = raw.strip().lstrip("* ").strip()
+                if not branch:
+                    continue
+                commit = self._git(["rev-parse", branch], check=False)
+                branches.append(
+                    {
+                        "branch": branch,
+                        "commit": commit.stdout.strip()
+                        if commit.returncode == 0
+                        else "",
+                        "exists": True,
+                    }
+                )
+
+        worktrees: list[dict[str, Any]] = []
+        listing = self._git(["worktree", "list", "--porcelain"], check=False)
+        if listing.returncode == 0:
+            current: dict[str, str] = {}
+            for raw in listing.stdout.splitlines() + [""]:
+                line = raw.strip()
+                if not line:
+                    path = current.get("worktree", "")
+                    branch_ref = current.get("branch", "")
+                    branch = (
+                        branch_ref.removeprefix("refs/heads/")
+                        if branch_ref.startswith("refs/heads/")
+                        else branch_ref
+                    )
+                    normalized_path = path.replace("\\", "/").lower()
+                    path_matches = (
+                        f"/.ralphite/worktrees/{run_key.lower()}/" in normalized_path
+                    )
+                    if path and (path_matches or branch.startswith(branch_prefix)):
+                        worktrees.append(
+                            {
+                                "path": path,
+                                "branch": branch,
+                                "commit": current.get("HEAD", ""),
+                                "exists": Path(path).exists(),
+                                "prunable": current.get("prunable", ""),
+                            }
+                        )
+                    current = {}
+                    continue
+                key, _, value = line.partition(" ")
+                current[key] = value
+
+        return {
+            "run_id": run_ref,
+            "run_key": run_key,
+            "branches": branches,
+            "worktrees": worktrees,
+        }
+
+    def cleanup_orphaned_run_artifacts(self, run_id: str | None = None) -> list[str]:
+        self._ensure_git_available()
+        inventory = self.managed_artifact_inventory(run_id)
+        messages: list[str] = []
+
+        for item in inventory.get("worktrees", []):
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "").strip()
+            if not path:
+                continue
+            path_obj = Path(path)
+            if not path_obj.exists():
+                messages.append(f"missing worktree metadata will be pruned {path}")
+                continue
+            removed = self._git(["worktree", "remove", "--force", path], check=False)
+            if removed.returncode == 0:
+                messages.append(f"removed worktree {path}")
+                messages.extend(self._prune_empty_worktree_ancestors(path_obj.parent))
+            else:
+                messages.append(
+                    f"worktree remove skipped {path}: {removed.stderr.strip() or removed.stdout.strip()}"
+                )
+
+        pruned = self._git(["worktree", "prune"], check=False)
+        if pruned.returncode == 0 and (pruned.stdout.strip() or pruned.stderr.strip()):
+            messages.append(pruned.stderr.strip() or pruned.stdout.strip())
+
+        branch_names = [
+            str(item.get("branch") or "")
+            for item in inventory.get("branches", [])
+            if isinstance(item, dict)
+        ]
+        worktree_branch_names = [
+            str(item.get("branch") or "")
+            for item in inventory.get("worktrees", [])
+            if isinstance(item, dict)
+        ]
+        for branch in reversed(
+            list(
+                dict.fromkeys(
+                    [item for item in branch_names + worktree_branch_names if item]
+                )
+            )
+        ):
+            exists = self._git(["rev-parse", "--verify", branch], check=False)
+            if exists.returncode != 0:
+                messages.append(f"branch already removed {branch}")
+                continue
+            deleted = self._git(["branch", "-D", branch], check=False)
+            if deleted.returncode == 0:
+                messages.append(f"deleted branch {branch}")
+            else:
+                messages.append(
+                    f"branch delete skipped {branch}: {deleted.stderr.strip() or deleted.stdout.strip()}"
+                )
+
+        self._git(["worktree", "prune"], check=False)
+        return messages
+
+    def cleanup_phase(
+        self, state: dict[str, Any], phase: str, *, discard_preserved: bool = False
+    ) -> list[str]:
         self._ensure_git_available()
         messages: list[str] = []
         phase_state = self.prepare_phase(state, phase)
         removed_paths: list[str] = []
         removed_branches: list[str] = []
+        preserved_paths = set() if discard_preserved else self._preserved_paths(state)
+        preserved_branches = (
+            set() if discard_preserved else self._preserved_branches(state)
+        )
 
         worker_paths = [
             entry.get("worktree_path", "")
@@ -652,13 +1171,19 @@ class GitWorktreeManager:
             worker_paths.append(phase_state["integration_worktree"])
 
         for path in sorted(dict.fromkeys([item for item in worker_paths if item])):
-            if not Path(path).exists():
+            path_obj = Path(path)
+            if path in preserved_paths:
+                messages.append(f"preserved worktree {path}")
+                continue
+            if not path_obj.exists():
                 messages.append(f"worktree already removed {path}")
+                messages.extend(self._prune_empty_worktree_ancestors(path_obj.parent))
                 continue
             removed = self._git(["worktree", "remove", "--force", path], check=False)
             if removed.returncode == 0:
                 messages.append(f"removed worktree {path}")
                 removed_paths.append(path)
+                messages.extend(self._prune_empty_worktree_ancestors(path_obj.parent))
             else:
                 messages.append(
                     f"worktree remove skipped {path}: {removed.stderr.strip() or removed.stdout.strip()}"
@@ -673,6 +1198,9 @@ class GitWorktreeManager:
         for branch in reversed(
             list(dict.fromkeys([item for item in phase_branches if item]))
         ):
+            if branch in preserved_branches:
+                messages.append(f"preserved branch {branch}")
+                continue
             exists = self._git(["rev-parse", "--verify", branch], check=False)
             if exists.returncode != 0:
                 messages.append(f"branch already removed {branch}")
@@ -707,12 +1235,18 @@ class GitWorktreeManager:
             phase_state["phase_branch"] = ""
         return messages
 
-    def cleanup_all(self, state: dict[str, Any]) -> list[str]:
+    def cleanup_all(
+        self, state: dict[str, Any], *, discard_preserved: bool = False
+    ) -> list[str]:
         self._ensure_git_available()
         messages: list[str] = []
         phases = list(self.bootstrap_state(state).get("phases", {}).keys())
         for phase in phases:
-            messages.extend(self.cleanup_phase(state, phase))
+            messages.extend(
+                self.cleanup_phase(
+                    state, phase, discard_preserved=bool(discard_preserved)
+                )
+            )
         return messages
 
     def commit_workspace_changes(

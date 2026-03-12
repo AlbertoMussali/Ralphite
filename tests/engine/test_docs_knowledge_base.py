@@ -95,6 +95,14 @@ def test_required_docs_exist() -> None:
         assert (REPO_ROOT / rel).exists(), f"missing required docs path: {rel}"
 
 
+def test_required_markdown_docs_are_not_empty() -> None:
+    for rel in REQUIRED_DOC_PATHS:
+        path = REPO_ROOT / rel
+        if path.is_dir() or path.suffix.lower() != ".md":
+            continue
+        assert path.read_text(encoding="utf-8").strip(), f"empty required doc: {rel}"
+
+
 def test_major_docs_have_freshness_marker() -> None:
     for rel in MAJOR_DOCS:
         content = (REPO_ROOT / rel).read_text(encoding="utf-8")
@@ -103,11 +111,41 @@ def test_major_docs_have_freshness_marker() -> None:
         )
 
 
+def test_all_markdown_docs_have_freshness_marker() -> None:
+    missing: list[str] = []
+    for path in _doc_files():
+        content = path.read_text(encoding="utf-8")
+        if "Last verified against commit:" not in content:
+            missing.append(str(path.relative_to(REPO_ROOT)))
+    assert not missing, "docs missing freshness marker:\n" + "\n".join(missing)
+
+
 def test_docs_contain_current_contract_strings() -> None:
     corpus = "\n".join(path.read_text(encoding="utf-8") for path in _doc_files())
-    for required in ("gpt-5.3-codex", "--reasoning-effort", "--strict"):
+    for required in (
+        "gpt-5.3-codex",
+        "--reasoning-effort",
+        "--strict",
+        "reconcile --apply",
+        "promote-salvage",
+        "write_policy",
+        "backend_payload_missing",
+        "backend_payload_malformed",
+    ):
         assert required in corpus, f"expected docs to contain: {required}"
     assert "gpt-4.1" not in corpus, "obsolete model reference leaked into docs"
+
+
+def test_readme_mentions_current_recovery_surface() -> None:
+    text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    for required in ("reconcile", "promote-salvage", "salvage"):
+        assert required in text, f"README missing current command: {required}"
+
+
+def test_generated_schema_summary_mentions_write_policy() -> None:
+    text = (REPO_ROOT / "docs/generated/schema-summary.md").read_text(encoding="utf-8")
+    for required in ("allow_plan_edits", "allow_root_writes"):
+        assert required in text, f"generated schema summary missing: {required}"
 
 
 def test_markdown_local_links_resolve() -> None:
@@ -127,7 +165,13 @@ def test_markdown_local_links_resolve() -> None:
     assert not failures, "broken local markdown links:\n" + "\n".join(failures)
 
 
-def test_generated_command_contracts_match_builders() -> None:
+def test_generated_command_contracts_match_builders(
+    monkeypatch,
+) -> None:  # noqa: ANN001
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setattr(
+        "ralphite.engine.headless_agent.shutil.which", lambda _name: None
+    )
     text = (REPO_ROOT / "docs/generated/command-contracts.md").read_text(
         encoding="utf-8"
     )
@@ -148,5 +192,6 @@ def test_generated_command_contracts_match_builders() -> None:
             force=True,
         )
     )
-    assert expected_codex in text
-    assert expected_cursor in text
+    normalized_text = text.replace("\\", "/")
+    assert expected_codex.replace("\\", "/") in normalized_text
+    assert expected_cursor.replace("\\", "/") in normalized_text

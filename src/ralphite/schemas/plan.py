@@ -65,6 +65,13 @@ class TaskAcceptanceSpec(BaseModel):
     rubric: list[str] = Field(default_factory=list)
 
 
+class TaskWritePolicySpec(BaseModel):
+    allowed_write_roots: list[str] = Field(default_factory=list)
+    forbidden_write_roots: list[str] = Field(default_factory=list)
+    allow_plan_edits: bool = False
+    allow_root_writes: bool = False
+
+
 class TaskSpec(BaseModel):
     id: str
     title: str
@@ -74,6 +81,7 @@ class TaskSpec(BaseModel):
     agent: str | None = None
     routing: TaskRoutingSpec = Field(default_factory=TaskRoutingSpec)
     acceptance: TaskAcceptanceSpec = Field(default_factory=TaskAcceptanceSpec)
+    write_policy: TaskWritePolicySpec = Field(default_factory=TaskWritePolicySpec)
 
 
 class BehaviorKind(str, Enum):

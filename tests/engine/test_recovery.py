@@ -7,7 +7,7 @@ import tempfile
 
 import pytest
 from ralphite.engine import LocalOrchestrator
-from ralphite.engine.git_worktree import GitRequiredError
+from ralphite.engine.git_worktree import GitRequiredError, GitWorktreeManager
 from ralphite.engine.models import (
     NodeRuntimeState,
     RunCheckpoint,
@@ -177,6 +177,47 @@ def test_recover_run_and_resume_from_checkpoint(workspace: Path) -> None:
     assert any(evt.get("event") == "RUN_DONE" for evt in recovered.events)
 
 
+def test_recovery_retries_run_state_write_when_replace_is_temporarily_locked(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id = "recover-write-contention"
+    run = _build_stub_run(workspace, run_id)
+
+    orch = LocalOrchestrator(workspace)
+    orch.run_store.acquire_lock(run_id)
+    lock_path = orch.run_store.run_dir(run_id) / "lock"
+    lock_path.write_text(
+        '{"pid": 999999, "acquired_at": "2026-01-01T00:00:00Z"}', encoding="utf-8"
+    )
+    orch.run_store.write_state(
+        RunPersistenceState(
+            run_id=run_id,
+            status="running",
+            plan_path=run.plan_path,
+            run=run,
+            loop_counts={"main_loop": 0},
+            last_seq=1,
+        )
+    )
+
+    original_replace = Path.replace
+    attempts = {"count": 0}
+
+    def flaky_replace(self: Path, target: Path) -> Path:
+        if self.name.startswith("run_state.json.") and attempts["count"] == 0:
+            attempts["count"] += 1
+            raise PermissionError("simulated transient run_state.json lock")
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+
+    orch2 = LocalOrchestrator(workspace)
+    recovered = orch2.run_store.load_state(run_id)
+    assert attempts["count"] == 1
+    assert recovered is not None
+    assert recovered.status == "paused"
+
+
 def test_recovery_preflight_blocks_unresolved_conflict_markers(workspace: Path) -> None:
     orch = LocalOrchestrator(workspace)
     plan_path = orch.goal_to_plan("recovery preflight")
@@ -208,6 +249,71 @@ def test_recovery_preflight_blocks_unresolved_conflict_markers(workspace: Path) 
     run = orch.get_run(run_id)
     assert run is not None
     assert run.metadata.get("recovery", {}).get("status") == "preflight_failed"
+
+
+def test_recover_run_reconciles_checkpoint_git_state(workspace: Path) -> None:
+    run_id = "recover-retained"
+    run = _build_stub_run(workspace, run_id)
+    orch = LocalOrchestrator(workspace)
+    manager = GitWorktreeManager(workspace, run_id)
+    git_state = manager.bootstrap_state()
+    runtime_node_id = next(iter(run.nodes.keys()))
+    worker = manager.prepare_worker(git_state, "phase-1", runtime_node_id)
+    manager.retain_target(
+        git_state,
+        scope="worker",
+        reason="backend_nonzero",
+        phase="phase-1",
+        node_id=runtime_node_id,
+        worktree_path=str(worker.get("worktree_path") or ""),
+        branch=str(worker.get("branch") or ""),
+        committed=False,
+    )
+    run.metadata["git_state"] = git_state
+
+    state = RunPersistenceState(
+        run_id=run_id,
+        status="running",
+        plan_path=run.plan_path,
+        run=run,
+        loop_counts={"main_loop": 0},
+        last_seq=1,
+    )
+    orch.run_store.write_state(state)
+    orch.run_store.write_checkpoint(
+        RunCheckpoint(
+            run_id=run_id,
+            status="running",
+            plan_path=run.plan_path,
+            last_seq=1,
+            loop_counts={"main_loop": 0},
+            retry_count=1,
+            node_attempts={runtime_node_id: 2},
+            node_statuses={runtime_node_id: "failed"},
+            git_state=git_state,
+        )
+    )
+    lock_path = orch.run_store.run_dir(run_id) / "lock"
+    lock_path.write_text(
+        '{"pid": 999999, "acquired_at": "2026-01-01T00:00:00Z"}', encoding="utf-8"
+    )
+
+    orch2 = LocalOrchestrator(workspace)
+    assert orch2.recover_run(run_id) is True
+    recovered = orch2.get_run(run_id)
+    assert recovered is not None
+    recovered_node = recovered.nodes[runtime_node_id]
+    assert recovered_node.status == "failed"
+    assert recovered_node.attempt_count == 2
+    retained = (
+        recovered.metadata.get("retained_work", [])
+        if isinstance(recovered.metadata.get("retained_work"), list)
+        else []
+    )
+    assert retained
+    reconciliation = recovered.metadata.get("git_reconciliation", {})
+    assert isinstance(reconciliation, dict)
+    assert reconciliation.get("preserved_paths")
 
 
 def test_recover_run_requires_git_workspace(

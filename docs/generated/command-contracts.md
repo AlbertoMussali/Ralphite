@@ -1,7 +1,7 @@
 # Command Contracts (Generated Snapshot)
 
 Owners: engine, cli
-Last verified against commit: 70b0c1f
+Last verified against commit: 071697a
 Generated from:
 
 - `src/ralphite/engine/headless_agent.py`
@@ -24,3 +24,5 @@ Cursor sample command (builder snapshot):
 ```bash
 agent -p --force --output-format json --model gpt-5.3-codex TASK_PROMPT
 ```
+
+Operational runtime behavior for `reconcile`, `salvage`, and `promote-salvage` lives in [docs/references/cli-contracts.md](../references/cli-contracts.md). This page is only the command-builder snapshot for backend launch templates.

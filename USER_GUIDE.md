@@ -1,5 +1,7 @@
 # User Guide
 
+Last verified against commit: 071697a
+
 Ralphite is a local-first multi-agent orchestrator. Use this guide to understand the core concepts and how to execute your first plan.
 
 > [!IMPORTANT]
@@ -27,6 +29,29 @@ A plan typically includes:
 Ralphite supports multiple execution backends:
 - **Codex**: The default headless agent (uses `gpt-5.3-codex`).
 - **Cursor**: Leverages the Cursor agent command.
+
+### 4. Recovery Truth
+Ralphite treats git/worktree state as the source of truth for what changed.
+
+- Backend payloads and summaries are useful diagnostics.
+- `reconcile` rebuilds run truth from persisted state plus live git/worktree state.
+- `reconcile --apply` persists repaired cached state.
+
+### 5. Retained Work
+Failed or interrupted runs preserve managed work by default so useful output is not lost.
+
+- `salvage` inventories preserved work and salvage metadata.
+- `promote-salvage` can promote retained worker work back through acceptance and integration.
+
+### 6. Write Policy
+Tasks may declare `write_policy` to restrict what roots a worker can mutate.
+
+- `allowed_write_roots`
+- `forbidden_write_roots`
+- `allow_plan_edits`
+- `allow_root_writes`
+
+Observed local writes outside scope are rejected even if the backend summary claims success.
 
 ## Quick Commands (After Canonical Start)
 
@@ -58,5 +83,6 @@ Common issues:
 - **Git missing**: Ralphite needs git to manage worktrees for safe agent execution.
 - **Backend missing**: Ensure `codex` or `cursor` is in your `PATH`.
 - **Plan validation**: Use `uv run ralphite validate` to check your YAML files.
+- **State drift after a failed run**: Use `reconcile --apply`, then inspect retained work with `salvage`.
 
 For full CLI usage, see the [CLI Reference](docs/references/cli-contracts.md).

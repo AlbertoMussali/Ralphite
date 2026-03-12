@@ -1,7 +1,7 @@
 # Release Readiness Workflow
 
 Owners: release, engine
-Last verified against commit: 70b0c1f
+Last verified against commit: 071697a
 
 ## Deterministic Gates
 
@@ -37,6 +37,7 @@ Confirm that:
 - `quickstart` prints plan/backend/model/capability preflight details
 - non-JSON output surfaces run id, next action, and artifact paths
 - raw wildcard literals such as `tool:*` / `mcp:*` do not leak into operator-facing CLI text
+- reconcile/salvage/promote-salvage commands are available and documented in operator output paths
 
 ## Git Runtime Readiness
 
@@ -50,6 +51,21 @@ Operator expectations:
 - `run` and `quickstart` fail closed when execution readiness is missing.
 - `recover` and `replay` are allowed on a dirty workspace, but they should surface a warning and continue to real recovery/replay validation.
 - A git prerequisite failure should be reported as an environment issue, not disguised as a product/runtime defect.
+
+## Recovery and Salvage Sign-Off
+
+Release verification should confirm:
+
+- `reconcile --apply` can be referenced as the supported repair path for state drift
+- `salvage` describes retained work without requiring manual JSON edits
+- `promote-salvage` is documented for both committed and dirty retained worker work
+
+## Cross-Platform Runtime Notes
+
+Release verification should confirm:
+
+- acceptance commands are documented as direct argv execution, not shell-dependent behavior
+- Windows/hostile consoles can fall back to ASCII-safe stream output when Rich rendering cannot encode cleanly
 
 ## Sign-Off Artifact
 

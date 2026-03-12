@@ -1,7 +1,7 @@
 # Docs Maintenance Workflow
 
 Owners: release, engine, cli, schemas
-Last verified against commit: 70b0c1f
+Last verified against commit: 071697a
 
 ## Update Triggers
 
@@ -12,6 +12,13 @@ Update docs in the same PR when changing:
 - schema defaults/enums
 - gate suite composition
 - recovery or exit-code semantics
+- runtime authority, reconcile, salvage, or write-scope semantics
+
+Also update in the same PR:
+
+- generated snapshots under `docs/generated/` when command builders or schema summaries change
+- freshness markers on every changed doc
+- operator-facing workflow docs when recovery/runtime behavior changes
 
 ## Required Checks
 

@@ -1,5 +1,7 @@
 # ADR-XXXX: <Title>
 
+Last verified against commit: 071697a
+
 - Status: Proposed | Accepted | Superseded
 - Date: YYYY-MM-DD
 - Owners: <owner groups>

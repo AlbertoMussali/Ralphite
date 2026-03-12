@@ -51,6 +51,11 @@ class RunStateManager:
                 node_id: node.status for node_id, node in handle.run.nodes.items()
             },
             active_node_id=handle.run.active_node_id,
+            git_state=(
+                handle.run.metadata.get("git_state", {})
+                if isinstance(handle.run.metadata.get("git_state"), dict)
+                else {}
+            ),
         )
         self.run_store.write_checkpoint(checkpoint)
         self.persist_runtime_state(handle, status)

@@ -1,7 +1,7 @@
 # Failure Taxonomy
 
 Owners: engine, release
-Last verified against commit: 70b0c1f
+Last verified against commit: 071697a
 
 Source file: `src/ralphite/engine/taxonomy.py`
 
@@ -13,7 +13,10 @@ Source file: `src/ralphite/engine/taxonomy.py`
 - `backend_nonzero`
 - `backend_timeout`
 - `backend_output_malformed`
+- `backend_payload_missing`
+- `backend_payload_malformed`
 - `backend_out_of_worktree_claim`
+- `backend_out_of_worktree_mutation`
 - `backend_execution_error`
 - `backend_worktree_missing`
 
@@ -32,5 +35,7 @@ Source file: `src/ralphite/engine/taxonomy.py`
 - `base_merge_conflict`
 - `stale_recovery_state_present`
 - `recovery_conflict_files_present`
+
+`backend_out_of_worktree_claim` is informational/diagnostic and reflects a backend mention of an external path without confirmed mutation. `backend_out_of_worktree_mutation` is the fatal case and reflects confirmed local mutations outside the assigned write scope.
 
 Each failure maps to user-facing advice and command hints through `classify_failure()`.

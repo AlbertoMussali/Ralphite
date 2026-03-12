@@ -1,5 +1,7 @@
 # ADR-0007: Git-Required Runtime and Human Summary Artifact
 
+Last verified against commit: 071697a
+
 - Status: Accepted
 - Date: 2026-03-05
 - Owners: engine, cli, release

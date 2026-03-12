@@ -1,7 +1,7 @@
 # Recovery Workflow
 
 Owners: engine, cli
-Last verified against commit: 70b0c1f
+Last verified against commit: 071697a
 
 ## Git Prerequisites
 
@@ -29,13 +29,29 @@ Then:
 2. If a new `run`, `quickstart`, or `replay` was blocked by stale recovery state, resolve that run first instead of starting another one.
 3. Run recovery preflight.
 4. Use the recommended recovery mode, or override it explicitly if you have a better operator reason.
-5. Resume the run.
+5. Reconcile cached state from git/worktree truth when state drift is suspected.
+6. Resume the run.
 
 ```bash
 uv run ralphite history --workspace . --output table
 uv run ralphite recover --workspace . --run-id <RUN_ID> --preflight-only --output table
+uv run ralphite reconcile --workspace . --run-id <RUN_ID> --apply --output table
 uv run ralphite recover --workspace . --run-id <RUN_ID> --mode <MODE> --resume --output table
 ```
+
+If a worker produced retained work but the run still failed, inspect the retained inventory and promote it explicitly:
+
+```bash
+uv run ralphite salvage --workspace . --run-id <RUN_ID> --output json
+uv run ralphite promote-salvage --workspace . --run-id <RUN_ID> --node-id <NODE_ID> --output json
+```
+
+Recovery guidance:
+
+- use `reconcile --apply` when node/phase state appears stale relative to actual branches, commits, or retained work
+- use `salvage` when a worker produced useful work but the run terminated non-successfully
+- use `promote-salvage` for retained committed work and for dirty retained work that can pass local acceptance and be committed by Ralphite
+- manual JSON editing is not a supported recovery workflow
 
 ## Recommended Modes
 

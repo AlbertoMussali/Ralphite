@@ -62,6 +62,7 @@ class RunCheckpoint(BaseModel):
     node_attempts: dict[str, int] = Field(default_factory=dict)
     node_statuses: dict[str, str] = Field(default_factory=dict)
     active_node_id: str | None = None
+    git_state: dict[str, Any] = Field(default_factory=dict)
     updated_at: str = Field(default_factory=utc_now_iso)
 
 

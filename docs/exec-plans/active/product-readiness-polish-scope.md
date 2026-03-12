@@ -1,5 +1,7 @@
 # Product Readiness Polish Scope
 
+Last verified against commit: 071697a
+
 Owners: release, cli, engine, docs
 Plan: `product_readiness_polish`
 Task anchor: `task_define_polish_scope`

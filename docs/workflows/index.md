@@ -1,11 +1,13 @@
 # Workflows
 
 Owners: cli, engine, release
-Last verified against commit: a7aaeed
+Last verified against commit: 071697a
 
 Canonical navigation:
 - Operators should start at [README.md](../../README.md) and run [First Run](first-run.md) before using this index.
 - Contributors should start at [CONTRIBUTING.md](../../CONTRIBUTING.md) and [docs/index.md](../index.md), then use workflows as needed.
+
+Recovery workflow coverage includes reconcile, retained-work inspection, and salvage promotion paths.
 
 - [First Run](first-run.md)
 - [Recovery](recovery.md)

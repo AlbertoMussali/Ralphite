@@ -3,14 +3,18 @@ from __future__ import annotations
 import typer
 
 from .commands import (
+    cleanup_command,
     check_command,
     doctor_command,
     history_command,
     init_command,
+    promote_salvage_command,
     quickstart_command,
+    reconcile_command,
     recover_command,
     replay_command,
     run_command,
+    salvage_command,
     validate_command,
     watch_command,
 )
@@ -31,3 +35,7 @@ app.command(name="recover")(recover_command)
 app.command(name="history")(history_command)
 app.command(name="replay")(replay_command)
 app.command(name="check")(check_command)
+app.command(name="cleanup")(cleanup_command)
+app.command(name="salvage")(salvage_command)
+app.command(name="reconcile")(reconcile_command)
+app.command(name="promote-salvage")(promote_salvage_command)

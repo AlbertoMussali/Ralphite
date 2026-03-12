@@ -1,5 +1,7 @@
 # ADR-0002: Strict Check Policy
 
+Last verified against commit: 071697a
+
 - Status: Accepted
 - Date: 2026-03-05
 - Owners: release, engine

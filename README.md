@@ -1,5 +1,7 @@
 # Ralphite
 
+Last verified against commit: 071697a
+
 Ralphite is a local-first, CLI-first multi-agent orchestrator for task, spec, and PRD-driven development, executed through `version: 1` YAML plans.
 
 It is designed for real repositories: you start from a goal or starter plan, Ralphite runs that work through an explicit orchestration template, dispatches execution into isolated git worktrees, and gives you the operational layer around agent execution, including history, watch, recovery, replay, and optional agent-based first-failure recovery.
@@ -11,8 +13,8 @@ It is built for repo-scoped execution, explicit task structure, and repeatable o
 - **Local-first:** runs against your workspace and keeps state under `.ralphite/`
 - **Structured:** execution is driven by schema-backed `version: 1` YAML plans
 - **Opinionated:** ships with predefined starter templates for common job shapes
-- **Safer:** uses git worktrees to isolate agent execution and integration work
-- **Operable:** includes `doctor`, `history`, `watch`, `recover`, `replay`, and `check`
+- **Safer:** uses git worktrees to isolate agent execution and integration work, and fails closed by preserving managed work after non-success runs
+- **Operable:** includes `doctor`, `history`, `watch`, `recover`, `replay`, `salvage`, `reconcile`, `promote-salvage`, `cleanup`, and `check`
 - **Practical:** can automatically attempt a first recoverable failure with `agent_best_effort`
 
 ## What Makes It Different
@@ -48,6 +50,10 @@ The project is partly a product and partly an operating model for AI-assisted so
 - `history`: inspect previous local runs
 - `recover`: resume paused or failed runs with explicit recovery modes
 - `replay`: rerun a prior execution in rerun-failed mode
+- `salvage`: inspect preserved worktrees, branches, and salvage metadata for failed/interrupted runs
+- `reconcile`: rebuild run truth from persisted state plus live git/worktree state
+- `promote-salvage`: promote retained worker work back through acceptance and integration
+- `cleanup`: explicitly remove safe managed artifacts, with opt-in discard for preserved work
 - `validate`: check plan structure and compatibility
 - `check`: run baseline local quality gates
 
@@ -62,6 +68,8 @@ The project is partly a product and partly an operating model for AI-assisted so
 - `agent` for the optional Cursor backend
 - a workspace inside a git worktree
 - an initial git commit before execution commands such as `run` and `quickstart`
+
+On Windows, Ralphite can launch PowerShell-backed backend shims automatically. That includes `codex` when it resolves to a `.ps1` launcher on `PATH`, and `cursor_command` values that point to a script such as `C:\Users\name\AppData\Local\cursor-agent\agent.ps1`. Doctoring accepts `python3`, `python`, or `py`, and worker subprocesses use short hashed temp/cache/environment roots to reduce long-path failures in nested worktrees.
 
 ## Quick Install
 
@@ -102,6 +110,10 @@ Useful operational commands after that:
 uv run ralphite history --workspace . --output table
 uv run ralphite watch --workspace . --output stream
 uv run ralphite recover --workspace . --output table
+uv run ralphite salvage --workspace . --output table
+uv run ralphite reconcile --workspace . --run-id <RUN_ID> --apply --output table
+uv run ralphite promote-salvage --workspace . --run-id <RUN_ID> --node-id <NODE_ID> --output table
+uv run ralphite cleanup --workspace . --output table
 uv run ralphite validate --workspace . --json
 ```
 
@@ -135,11 +147,22 @@ At a high level, Ralphite does four things:
 3. It dispatches tasks into controlled worktrees and tracks run state locally.
 4. It leaves behind artifacts and recovery state so the run is inspectable instead of opaque.
 
+For non-success terminal runs, Ralphite now preserves managed worktrees and branches by default instead of deleting them automatically. Use `salvage` to inspect retained work and `cleanup --discard-preserved --yes` only when you explicitly want to remove that preserved state.
+
+When runtime state drifts from repository truth, use:
+
+- `reconcile --apply` to rebuild and persist node/phase state from git/worktree evidence
+- `salvage` to inspect retained work or orphaned managed artifacts
+- `promote-salvage` to promote retained worker output after acceptance succeeds
+
+Tasks can also declare `write_policy` to constrain which roots a worker may mutate. Ralphite enforces those bounds from observed local worktree state, not from prompt wording alone.
+
 Common artifacts live under `.ralphite/artifacts/<run-id>/`:
 
 - `final_report.md`
 - `run_metrics.json`
 - `machine_bundle.json`
+- `salvage_bundle.json`
 
 ## Orchestration Templates
 

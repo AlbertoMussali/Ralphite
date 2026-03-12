@@ -1,7 +1,7 @@
 # Architecture
 
 Owners: engine, schemas, cli
-Last verified against commit: 70b0c1f
+Last verified against commit: 071697a
 
 - [Runtime Execution](runtime-execution.md)
 - [Orchestration Templates](orchestration-templates.md)

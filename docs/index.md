@@ -1,7 +1,7 @@
 # Ralphite Documentation Hub
 
 Owners: engine, cli, schemas, release
-Last verified against commit: a7aaeed
+Last verified against commit: 071697a
 
 Verification commands:
 

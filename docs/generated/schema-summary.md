@@ -1,7 +1,7 @@
 # Schema Summary (Generated Snapshot)
 
 Owners: schemas
-Last verified against commit: 70b0c1f
+Last verified against commit: 071697a
 Generated from:
 
 - `src/ralphite/schemas/json/plan-spec.schema.json`
@@ -17,6 +17,13 @@ Generated from:
 ## Runtime Version Snapshot
 
 - runtime execution contract: `version: 1`
+
+## Task Write Policy Snapshot
+
+- `allowed_write_roots`: workspace-relative allowlist roots
+- `forbidden_write_roots`: workspace-relative denylist roots
+- `allow_plan_edits`: default `false`
+- `allow_root_writes`: default `false`
 
 ## Agent Defaults Snapshot
 

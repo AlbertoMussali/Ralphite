@@ -23,6 +23,7 @@ class ParsedTask:
     acceptance_commands: list[str]
     acceptance_required_artifacts: list[dict[str, str]]
     acceptance_rubric: list[str]
+    write_policy: dict[str, Any]
 
 
 def parse_plan_tasks(plan: PlanSpec) -> tuple[list[ParsedTask], list[str]]:
@@ -63,6 +64,16 @@ def parse_plan_tasks(plan: PlanSpec) -> tuple[list[ParsedTask], list[str]]:
                 acceptance_commands=list(task.acceptance.commands or []),
                 acceptance_required_artifacts=required_artifacts,
                 acceptance_rubric=list(task.acceptance.rubric or []),
+                write_policy={
+                    "allowed_write_roots": list(
+                        task.write_policy.allowed_write_roots or []
+                    ),
+                    "forbidden_write_roots": list(
+                        task.write_policy.forbidden_write_roots or []
+                    ),
+                    "allow_plan_edits": bool(task.write_policy.allow_plan_edits),
+                    "allow_root_writes": bool(task.write_policy.allow_root_writes),
+                },
             )
         )
 

@@ -124,6 +124,28 @@
               "rubric": { "type": "array", "items": { "type": "string" } }
             },
             "additionalProperties": false
+          },
+          "write_policy": {
+            "type": "object",
+            "properties": {
+              "allowed_write_roots": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^(?![A-Za-z]:)(?![\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$))(?!.*[*?\\[]).+"
+                }
+              },
+              "forbidden_write_roots": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^(?![A-Za-z]:)(?![\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$))(?!.*[*?\\[]).+"
+                }
+              },
+              "allow_plan_edits": { "type": "boolean", "default": false },
+              "allow_root_writes": { "type": "boolean", "default": false }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false

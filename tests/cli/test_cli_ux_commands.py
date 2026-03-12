@@ -14,14 +14,17 @@ from typer.testing import CliRunner
 
 import ralphite.cli.checks.suites as suite_mod
 import ralphite.cli.commands.check_cmd as check_mod
+import ralphite.cli.doctoring as doctor_mod
 import ralphite.cli.commands.quickstart_cmd as quickstart_mod
 import ralphite.cli.commands.recover_cmd as recover_mod
 import ralphite.cli.commands.replay_cmd as replay_mod
 import ralphite.cli.commands.run_cmd as run_mod
 import ralphite.cli.commands.watch_cmd as watch_mod
+import ralphite.cli.core as core_mod
 from ralphite.cli.cli import app
 from ralphite.cli.core import _orchestrator
 from ralphite.cli.exit_codes import RECOVER_EXIT_PENDING
+from ralphite.engine import LocalOrchestrator
 from ralphite.engine.orchestrator import RunStartBlockedError
 
 
@@ -69,6 +72,14 @@ def _git_workspace(tmp_path: Path) -> None:
     _init_repo(tmp_path)
 
 
+@pytest.fixture(autouse=True)
+def _stable_backend_command_probes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(doctor_mod, "probe_codex_command", lambda: (True, "codex"))
+    monkeypatch.setattr(
+        doctor_mod, "probe_cursor_command", lambda command: (True, command)
+    )
+
+
 def _broken_v1_missing_worker(plan_id: str) -> str:
     return f"""
 version: 1
@@ -109,6 +120,79 @@ orchestration:
 outputs:
   required_artifacts: []
 """
+
+
+def _failing_retained_plan(plan_id: str = "retained-failure") -> str:
+    return f"""
+version: 1
+plan_id: {plan_id}
+name: {plan_id}
+materials:
+  autodiscover:
+    enabled: false
+    path: .
+    include_globs: []
+  includes: []
+  uploads: []
+constraints:
+  max_parallel: 1
+agents:
+  - id: worker_default
+    role: worker
+    provider: codex
+    model: gpt-5.3-codex
+    tools_allow: [tool:*]
+  - id: orchestrator_default
+    role: orchestrator
+    provider: codex
+    model: gpt-5.3-codex
+orchestration:
+  template: general_sps
+  inference_mode: mixed
+  behaviors:
+    - id: merge_default
+      kind: merge_and_conflict_resolution
+      agent: orchestrator_default
+      enabled: true
+  branched:
+    lanes: [lane_a, lane_b]
+  blue_red:
+    loop_unit: per_task
+  custom:
+    cells: []
+tasks:
+  - id: t1
+    title: failing acceptance
+    completed: false
+    acceptance:
+      commands:
+        - uv run python -c "import sys; sys.exit(1)"
+outputs:
+  required_artifacts: []
+"""
+
+
+def _create_retained_failure_run(workspace: Path) -> str:
+    orch = _orchestrator(workspace)
+    run_id = orch.start_run(plan_content=_failing_retained_plan())
+    assert orch.wait_for_run(run_id, timeout=8.0)
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "failed"
+    assert isinstance(run.metadata.get("retained_work"), list)
+    assert run.metadata.get("retained_work")
+    return run_id
+
+
+def _delete_run_state_but_keep_git_artifacts(workspace: Path, run_id: str) -> None:
+    run_dir = workspace / ".ralphite" / "runs" / run_id
+    if run_dir.exists():
+        for child in run_dir.iterdir():
+            child.unlink()
+        run_dir.rmdir()
+    history_path = workspace / ".ralphite" / "runs" / "history.json"
+    if history_path.exists():
+        history_path.unlink()
 
 
 def test_quickstart_json_output(tmp_path: Path) -> None:
@@ -532,6 +616,9 @@ def test_run_table_output_shows_run_id_and_artifacts(tmp_path: Path) -> None:
 def test_run_table_output_prints_watch_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    workspace = tmp_path / "repo with spaces"
+    workspace.mkdir()
+
     class _FakeConfig:
         default_backend = "codex"
         default_model = "gpt-5.3-codex"
@@ -564,15 +651,15 @@ def test_run_table_output_prints_watch_command(
         run_mod, "_orchestrator", lambda _workspace: _FakeOrchestrator()
     )
     monkeypatch.setattr(
-        run_mod, "_resolve_plan_ref", lambda orch, plan: tmp_path / "plan.yaml"
+        run_mod, "_resolve_plan_ref", lambda orch, plan: workspace / "plan.yaml"
     )
     runner = CliRunner()
     result = runner.invoke(
-        app, ["run", "--workspace", str(tmp_path), "--yes", "--output", "table"]
+        app, ["run", "--workspace", str(workspace), "--yes", "--output", "table"]
     )
     assert result.exit_code == 0
     assert "Watch this run:" in result.stdout
-    assert "uv run ralphite watch --workspace" in result.stdout
+    assert "--workspace " in result.stdout
     assert "--run-id run-123" in result.stdout
 
 
@@ -615,6 +702,54 @@ def test_watch_uses_latest_run_when_no_id_passed(
     assert result.exit_code == 0
     assert "Watching run:" in result.stdout
     assert watched == [("latest-run", False)]
+
+
+def test_print_run_stream_falls_back_when_console_encoding_breaks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[str] = []
+
+    class _FakeRun:
+        artifacts = []
+
+    class _FakeOrchestrator:
+        def stream_events(self, run_id: str):  # noqa: ANN001
+            yield {
+                "event": "RUN_STARTED",
+                "level": "info",
+                "message": "started",
+            }
+            yield {
+                "event": "RUN_DONE",
+                "level": "info",
+                "message": "done",
+            }
+
+        def wait_for_run(self, run_id: str, timeout: float) -> bool:
+            return True
+
+        def get_run(self, run_id: str):  # noqa: ANN001
+            return _FakeRun()
+
+    def broken_print(*args, **kwargs):  # noqa: ANN001
+        raise UnicodeEncodeError("cp1252", "\u2502", 0, 1, "boom")
+
+    monkeypatch.setattr(core_mod.console, "print", broken_print)
+    monkeypatch.setattr(
+        core_mod.sys,
+        "stdout",
+        type(
+            "S",
+            (),
+            {
+                "write": lambda self, text: seen.append(text),
+                "flush": lambda self: None,
+            },
+        )(),
+    )
+
+    core_mod._print_run_stream(_FakeOrchestrator(), "run-123")
+    assert seen
 
 
 def test_doctor_reports_repository_and_execution_separately_for_dirty_repo(
@@ -1021,6 +1156,74 @@ def test_backend_smoke_cursor_command_matches_runtime_builder(
     assert "--force" in seen["command"]
 
 
+def test_doctor_accepts_cursor_powershell_script_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    orch = _orchestrator(tmp_path)
+    orch.config.default_backend = "cursor"
+    orch.config.cursor_command = (
+        r"C:\Users\alberto.mussali\AppData\Local\cursor-agent\agent.ps1"
+    )
+    monkeypatch.setattr(
+        doctor_mod,
+        "probe_cursor_command",
+        lambda command: (True, f"powershell.exe -> {command}"),
+    )
+    snapshot = doctor_mod._doctor_snapshot(orch)
+    assert any(
+        isinstance(item, dict)
+        and item.get("check") == f"cmd:{orch.config.cursor_command}"
+        and item.get("status") == "OK"
+        for item in snapshot.get("checks", [])
+    )
+
+
+def test_doctor_accepts_codex_powershell_script_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    orch = _orchestrator(tmp_path)
+    orch.config.default_backend = "codex"
+    monkeypatch.setattr(
+        doctor_mod,
+        "probe_codex_command",
+        lambda: (
+            True,
+            "powershell.exe -> C:\\Users\\alberto.mussali\\AppData\\Local\\Programs\\codex\\codex.ps1",
+        ),
+    )
+    snapshot = doctor_mod._doctor_snapshot(orch)
+    assert any(
+        isinstance(item, dict)
+        and item.get("check") == "cmd:codex"
+        and item.get("status") == "OK"
+        for item in snapshot.get("checks", [])
+    )
+
+
+def test_doctor_accepts_python_fallback_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    orch = _orchestrator(tmp_path)
+
+    def fake_which(name):  # noqa: ANN001
+        return {
+            "python": r"C:\Python313\python.exe",
+            "uv": r"C:\Tools\uv.exe",
+            "git": r"C:\Tools\git.exe",
+            "rg": r"C:\Tools\rg.exe",
+        }.get(name)
+
+    monkeypatch.setattr(doctor_mod.shutil, "which", fake_which)
+    snapshot = doctor_mod._doctor_snapshot(orch)
+    assert any(
+        isinstance(item, dict)
+        and item.get("check") == "cmd:python"
+        and item.get("status") == "OK"
+        and "python ->" in str(item.get("detail"))
+        for item in snapshot.get("checks", [])
+    )
+
+
 def test_backend_smoke_is_skipped_when_env_requests_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1099,3 +1302,309 @@ def test_quickstart_json_propagates_backend_overrides(tmp_path: Path) -> None:
     assert payload["data"]["backend"] == "cursor"
     assert payload["data"]["model"] == "gpt-5.3-codex"
     assert payload["data"]["reasoning_effort"] == "high"
+
+
+def test_salvage_command_reports_retained_work(tmp_path: Path) -> None:
+    run_id = _create_retained_failure_run(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "salvage",
+            "--workspace",
+            str(tmp_path),
+            "--run-id",
+            run_id,
+            "--output",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "salvage"
+    assert payload["run_id"] == run_id
+    rows = payload.get("data", {}).get("rows", [])
+    assert isinstance(rows, list)
+    assert rows
+    assert rows[0].get("salvage_class") in {
+        "committed_unmerged",
+        "dirty_uncommitted",
+        "orphan_managed_artifact",
+    }
+
+
+def test_reconcile_command_reports_run_truth(tmp_path: Path) -> None:
+    run_id = _create_retained_failure_run(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "reconcile",
+            "--workspace",
+            str(tmp_path),
+            "--run-id",
+            run_id,
+            "--output",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "reconcile"
+    assert payload["run_id"] == run_id
+    data = payload.get("data", {})
+    assert isinstance(data.get("nodes"), list)
+    assert data.get("inventory")
+
+
+def test_reconcile_command_can_apply_repaired_state(tmp_path: Path) -> None:
+    run_id = _create_retained_failure_run(tmp_path)
+    orch = _orchestrator(tmp_path)
+    assert orch.recover_run(run_id) is True
+    run = orch.get_run(run_id)
+    assert run is not None
+    retained = run.metadata.get("retained_work", [])
+    assert isinstance(retained, list) and retained
+    node_id = str(retained[0]["node_id"])
+    run.nodes[node_id].status = "failed"
+    state_manager = orch.state_manager
+    handle = orch.active[run_id]  # noqa: SLF001
+    state_manager.persist_runtime_state(handle, "paused")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "reconcile",
+            "--workspace",
+            str(tmp_path),
+            "--run-id",
+            run_id,
+            "--apply",
+            "--output",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["data"]["applied"] is True
+    repaired = _orchestrator(tmp_path).get_run(run_id)
+    assert repaired is not None
+    assert repaired.nodes[node_id].status in {"queued", "succeeded"}
+
+
+def test_promote_salvage_command_promotes_retained_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id = _create_retained_failure_run(tmp_path)
+    orch = _orchestrator(tmp_path)
+    run = orch.get_run(run_id)
+    assert run is not None
+    retained = run.metadata.get("retained_work", [])
+    assert isinstance(retained, list)
+    node_id = str(retained[0]["node_id"])
+
+    def passing_acceptance(self, node, commit_meta, *, timeout_seconds):  # type: ignore[no-untyped-def]
+        return True, {
+            "commands": [{"command": "promoted acceptance", "exit_code": 0}],
+            "required_artifacts": [],
+            "rubric": [],
+        }
+
+    monkeypatch.setattr(
+        LocalOrchestrator,
+        "_evaluate_acceptance",
+        passing_acceptance,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "promote-salvage",
+            "--workspace",
+            str(tmp_path),
+            "--run-id",
+            run_id,
+            "--node-id",
+            node_id,
+            "--output",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "promote-salvage"
+    assert payload["run_id"] == run_id
+    assert payload["data"]["run_status"] == "succeeded"
+
+
+def test_promote_salvage_command_commits_dirty_retained_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id = _create_retained_failure_run(tmp_path)
+    orch = _orchestrator(tmp_path)
+    run = orch.get_run(run_id)
+    assert run is not None
+    retained = run.metadata.get("retained_work", [])
+    assert isinstance(retained, list) and retained
+    node_id = str(retained[0]["node_id"])
+    worktree_path = Path(str(retained[0]["worktree_path"]))
+    (worktree_path / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+    retained[0]["commit"] = ""
+    retained[0]["committed"] = False
+    retained[0]["salvage_class"] = "dirty_uncommitted"
+    orch.history.upsert(run)
+    if run_id in orch.active:
+        orch.state_manager.persist_runtime_state(orch.active[run_id], run.status)
+
+    def passing_acceptance(self, node, commit_meta, *, timeout_seconds):  # type: ignore[no-untyped-def]
+        return True, {
+            "commands": [{"command": "promoted acceptance", "exit_code": 0}],
+            "required_artifacts": [],
+            "rubric": [],
+        }
+
+    monkeypatch.setattr(
+        LocalOrchestrator,
+        "_evaluate_acceptance",
+        passing_acceptance,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "promote-salvage",
+            "--workspace",
+            str(tmp_path),
+            "--run-id",
+            run_id,
+            "--node-id",
+            node_id,
+            "--output",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["data"]["commit"]
+
+
+def test_cleanup_command_preserves_retained_work_by_default(tmp_path: Path) -> None:
+    run_id = _create_retained_failure_run(tmp_path)
+    orch = _orchestrator(tmp_path)
+    run = orch.get_run(run_id)
+    assert run is not None
+    retained = run.metadata.get("retained_work", [])
+    assert isinstance(retained, list)
+    worktree_path = Path(str(retained[0]["worktree_path"]))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "cleanup",
+            "--workspace",
+            str(tmp_path),
+            "--run-id",
+            run_id,
+            "--output",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "cleanup"
+    assert payload.get("data", {}).get("retained_count", 0) >= 1
+    assert worktree_path.exists()
+
+
+def test_cleanup_command_can_discard_preserved_work(tmp_path: Path) -> None:
+    run_id = _create_retained_failure_run(tmp_path)
+    orch = _orchestrator(tmp_path)
+    run = orch.get_run(run_id)
+    assert run is not None
+    retained = run.metadata.get("retained_work", [])
+    assert isinstance(retained, list)
+    worktree_path = Path(str(retained[0]["worktree_path"]))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "cleanup",
+            "--workspace",
+            str(tmp_path),
+            "--run-id",
+            run_id,
+            "--discard-preserved",
+            "--yes",
+            "--output",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    assert not worktree_path.exists()
+
+
+def test_salvage_command_works_when_run_state_is_missing(tmp_path: Path) -> None:
+    run_id = _create_retained_failure_run(tmp_path)
+    _delete_run_state_but_keep_git_artifacts(tmp_path, run_id)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "salvage",
+            "--workspace",
+            str(tmp_path),
+            "--run-id",
+            run_id,
+            "--output",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "salvage"
+    assert payload["run_id"] == run_id
+    assert payload.get("issues", [])
+    assert payload["issues"][0]["code"] == "run.state_missing"
+    rows = payload.get("data", {}).get("rows", [])
+    assert isinstance(rows, list)
+    assert rows
+
+
+def test_cleanup_command_can_remove_orphaned_artifacts_when_run_state_is_missing(
+    tmp_path: Path,
+) -> None:
+    run_id = _create_retained_failure_run(tmp_path)
+    orch = _orchestrator(tmp_path)
+    run = orch.get_run(run_id)
+    assert run is not None
+    retained = run.metadata.get("retained_work", [])
+    assert isinstance(retained, list)
+    worktree_path = Path(str(retained[0]["worktree_path"]))
+    _delete_run_state_but_keep_git_artifacts(tmp_path, run_id)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "cleanup",
+            "--workspace",
+            str(tmp_path),
+            "--run-id",
+            run_id,
+            "--discard-preserved",
+            "--yes",
+            "--output",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["command"] == "cleanup"
+    assert payload.get("issues", [])
+    assert payload["issues"][0]["code"] == "run.state_missing"
+    assert not worktree_path.exists()

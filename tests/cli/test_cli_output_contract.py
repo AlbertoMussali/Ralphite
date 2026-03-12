@@ -248,6 +248,8 @@ def test_json_envelopes_match_schema_for_additional_commands(tmp_path: Path) -> 
     invocations = [
         ["doctor", "--workspace", str(tmp_path), "--output", "json"],
         ["history", "--workspace", str(tmp_path), "--output", "json"],
+        ["salvage", "--workspace", str(tmp_path), "--output", "json"],
+        ["cleanup", "--workspace", str(tmp_path), "--output", "json"],
         ["validate", "--workspace", str(tmp_path), "--json"],
         ["run", "--workspace", str(tmp_path), "--yes", "--output", "json"],
         ["recover", "--workspace", str(tmp_path), "--json"],

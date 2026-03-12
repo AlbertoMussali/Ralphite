@@ -1,7 +1,7 @@
 # Test Matrix
 
 Owners: engine, cli, release
-Last verified against commit: a7aaeed
+Last verified against commit: 071697a
 
 ## Fast Confidence
 
@@ -9,6 +9,8 @@ Last verified against commit: a7aaeed
 - `tests/engine/test_plan_defaults_resolution.py`: centralized defaults resolution + override precedence
 - `tests/cli/test_cli_ux_commands.py`: CLI gate and backend-smoke command contracts
 - `tests/engine/test_examples_plans.py`: all tracked canonical plans (`examples/plans/*.yaml`, including starter + app examples) validate/compile
+- `tests/engine/test_orchestrator.py`: authority inversion, write-scope enforcement, salvage promotion, and recovery behavior
+- `tests/engine/test_docs_knowledge_base.py`: required docs, freshness markers, generated snapshots, and key contract strings
 
 ## Strict Check Suites
 

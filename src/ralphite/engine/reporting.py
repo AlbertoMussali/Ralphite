@@ -212,6 +212,7 @@ def _build_acceptance(
             else []
         )
         if artifacts:
+            inferred_missing: list[str] = []
             for item in artifacts:
                 if not isinstance(item, dict):
                     continue
@@ -225,9 +226,13 @@ def _build_acceptance(
                         lines.append(f"  - `{match}`")
                 else:
                     lines.append(f"- Artifact FAIL: `{artifact_id}`")
+                    inferred_missing.append(artifact_id)
         missing_artifact = str(acceptance.get("missing_artifact") or "").strip()
         if missing_artifact:
             lines.append(f"- Missing artifact: `{missing_artifact}`")
+        elif artifacts:
+            for artifact_id in inferred_missing:
+                lines.append(f"- Missing artifact: `{artifact_id}`")
         rubric = (
             acceptance.get("rubric")
             if isinstance(acceptance.get("rubric"), list)
@@ -305,6 +310,12 @@ def _build_failures(run: RunViewState, catalog: dict[str, dict[str, Any]]) -> li
             title = classify_failure(reason).title
             lines.append(f"- Task write-back: {title} (`{reason}`)")
         if str(event.get("event")) != "CLEANUP_DONE":
+            if str(event.get("event")) == "CLEANUP_SKIPPED":
+                meta = event.get("meta") if isinstance(event.get("meta"), dict) else {}
+                retained_items = int(meta.get("retained_items") or 0)
+                lines.append(
+                    f"- Cleanup preserved managed work after non-success run ({retained_items} retained item(s))."
+                )
             continue
         meta = event.get("meta") if isinstance(event.get("meta"), dict) else {}
         items = meta.get("items") if isinstance(meta.get("items"), list) else []
@@ -316,6 +327,54 @@ def _build_failures(run: RunViewState, catalog: dict[str, dict[str, Any]]) -> li
     if not lines:
         return ["- No failures or warnings recorded."]
     return lines
+
+
+def _build_retained_work(run: RunViewState) -> list[str]:
+    retained = (
+        run.metadata.get("retained_work", [])
+        if isinstance(run.metadata.get("retained_work"), list)
+        else []
+    )
+    if not retained:
+        return ["- No retained work was recorded."]
+    lines: list[str] = []
+    for entry in retained:
+        if not isinstance(entry, dict):
+            continue
+        scope = str(entry.get("scope") or "managed").strip()
+        phase = str(entry.get("phase") or "").strip()
+        node_id = str(entry.get("node_id") or "").strip()
+        reason = str(entry.get("reason") or "").strip()
+        worktree_path = str(entry.get("worktree_path") or "").strip()
+        branch = str(entry.get("branch") or "").strip()
+        commit = str(entry.get("commit") or "").strip()
+        title = f"{scope}"
+        if node_id:
+            title = f"{scope} {node_id}"
+        elif phase:
+            title = f"{scope} {phase}"
+        lines.append(f"### {title}")
+        if phase:
+            lines.append(f"- Phase: `{phase}`")
+        if reason:
+            lines.append(f"- Retained because: `{reason}`")
+        if branch:
+            lines.append(f"- Branch: `{branch}`")
+        if commit:
+            lines.append(f"- Commit: `{commit}`")
+        if worktree_path:
+            exists = bool(entry.get("worktree_exists"))
+            lines.append(
+                f"- Worktree: `{worktree_path}` ({'present' if exists else 'missing'})"
+            )
+        status_porcelain = str(entry.get("status_porcelain") or "").strip()
+        if status_porcelain:
+            lines.append("- Working tree changes were preserved.")
+        failed_command = str(entry.get("failed_command") or "").strip()
+        if failed_command:
+            lines.append(f"- Failing command: `{failed_command}`")
+        lines.append("")
+    return lines[:-1] if lines and lines[-1] == "" else lines
 
 
 def _build_next_steps(run: RunViewState) -> list[str]:
@@ -346,6 +405,20 @@ def _build_next_steps(run: RunViewState) -> list[str]:
         advice = classify_failure(str(meta.get("reason") or "task_writeback_failed"))
         actions.extend([advice.next_action, advice.command_hint])
 
+    retained = (
+        run.metadata.get("retained_work", [])
+        if isinstance(run.metadata.get("retained_work"), list)
+        else []
+    )
+    if retained:
+        actions.extend(
+            [
+                "Inspect the retained work entries in this report before discarding any managed worktree or branch.",
+                "Use `uv run ralphite salvage --workspace . --run-id <RUN_ID> --output table` to inventory preserved work.",
+                "Use `uv run ralphite cleanup --workspace . --run-id <RUN_ID> --output table` to clean only safe artifacts, or add `--discard-preserved --yes` to remove retained work explicitly.",
+            ]
+        )
+
     if not actions and run.status == "succeeded":
         actions.extend(
             [
@@ -371,6 +444,7 @@ def _build_supporting_artifacts(
         "final_report": "Human summary",
         "run_metrics": "Run metrics",
         "machine_bundle": "Machine bundle",
+        "salvage_bundle": "Salvage bundle",
         "run_state": "Run state",
         "checkpoint": "Checkpoint",
         "event_log": "Event log",
@@ -380,6 +454,7 @@ def _build_supporting_artifacts(
         "final_report",
         "run_metrics",
         "machine_bundle",
+        "salvage_bundle",
         "run_state",
         "checkpoint",
         "event_log",
@@ -402,6 +477,7 @@ def _build_highlights(run: RunViewState) -> list[str]:
         "RECOVERY_MODE_SELECTED",
         "RECOVERY_PREFLIGHT_FAILED",
         "RECOVERY_RESUMED",
+        "CLEANUP_SKIPPED",
         "CLEANUP_DONE",
         "TASK_WRITEBACK_FAILED",
         "RUN_DONE",
@@ -433,6 +509,7 @@ def build_final_report(
         *_section("Outcome", _build_outcome(run)),
         *_section("Changed Files", _build_changed_files(run, catalog)),
         *_section("Acceptance Results", _build_acceptance(run, catalog)),
+        *_section("Retained Work", _build_retained_work(run)),
         *_section("Failures and Warnings", _build_failures(run, catalog)),
         *_section("Next Steps", _build_next_steps(run)),
         *_section(

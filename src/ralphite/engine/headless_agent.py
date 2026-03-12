@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 import os
 from pathlib import Path
 from pathlib import PureWindowsPath
 import re
 import shlex
+import shutil
 import subprocess
+import tempfile
 import time
 from typing import Any
 
@@ -26,6 +29,28 @@ class BackendExecutionConfig:
     reasoning_effort: str
     cursor_command: str
     timeout_seconds: int = 900
+
+
+def build_worker_subprocess_env(*, worktree: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    env.pop("VIRTUAL_ENV", None)
+    if os.name != "nt":
+        return env
+
+    worktree_key = hashlib.sha1(
+        str(worktree.expanduser().resolve()).encode("utf-8")
+    ).hexdigest()[:12]
+    cache_root = os.path.join(tempfile.gettempdir(), "ralphite-uv-cache", worktree_key)
+    temp_root = os.path.join(cache_root, "tmp")
+    venv_root = os.path.join(cache_root, "venv")
+    os.makedirs(cache_root, exist_ok=True)
+    os.makedirs(temp_root, exist_ok=True)
+    os.makedirs(venv_root, exist_ok=True)
+    env["UV_CACHE_DIR"] = cache_root
+    env["UV_PROJECT_ENVIRONMENT"] = venv_root
+    env["TMP"] = temp_root
+    env["TEMP"] = temp_root
+    return env
 
 
 def normalize_backend_name(raw_backend: str | None) -> str:
@@ -51,7 +76,7 @@ def build_codex_exec_command(
     sandbox: str = "workspace-write",
 ) -> list[str]:
     command = [
-        "codex",
+        *_resolve_codex_command_prefix(),
         "exec",
         "--json",
         "--ephemeral",
@@ -82,7 +107,7 @@ def build_cursor_exec_command(
     cursor_command: str,
     force: bool = True,
 ) -> list[str]:
-    command = [(cursor_command or "agent").strip() or "agent", "-p"]
+    command = [*_resolve_cursor_command_prefix(cursor_command), "-p"]
     if force:
         command.append("--force")
     command.extend(
@@ -95,6 +120,168 @@ def build_cursor_exec_command(
         ]
     )
     return command
+
+
+def _split_command_words(raw_command: str, *, default_program: str) -> list[str]:
+    cleaned = (raw_command or "").strip() or default_program
+    stripped = _strip_wrapping_quotes(cleaned)
+    if _is_windows_absolute_path(stripped):
+        return [stripped]
+    try:
+        parts = shlex.split(cleaned, posix=os.name != "nt")
+    except ValueError:
+        parts = [cleaned]
+    return parts or [default_program]
+
+
+def _strip_wrapping_quotes(value: str) -> str:
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    return text
+
+
+def _is_windows_absolute_path(value: str) -> bool:
+    return bool(re.match(r"^[A-Za-z]:[\\/]", value)) or value.startswith("\\\\")
+
+
+def _candidate_command_path(raw_program: str) -> str | Path:
+    program = _strip_wrapping_quotes(raw_program)
+    if _is_windows_absolute_path(program):
+        return program
+    candidate = Path(program).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    return (Path.cwd() / candidate).resolve()
+
+
+def _default_cursor_script_candidates() -> list[Path]:
+    local_appdata = os.getenv("LOCALAPPDATA", "").strip()
+    if not local_appdata:
+        return []
+    return [Path(local_appdata) / "cursor-agent" / "agent.ps1"]
+
+
+def _resolve_path_launcher(program: str) -> str | None:
+    program = _strip_wrapping_quotes(program)
+    resolved = shutil.which(program)
+    if resolved:
+        return resolved
+    if Path(program).suffix:
+        return None
+    for suffix in (".cmd", ".exe", ".bat", ".ps1"):
+        resolved = shutil.which(f"{program}{suffix}")
+        if resolved:
+            return resolved
+    return None
+
+
+def _resolve_command_launcher(
+    raw_command: str,
+    *,
+    default_program: str,
+    default_script_candidates: list[Path] | None = None,
+) -> tuple[str, str | Path, list[str]]:
+    parts = _split_command_words(raw_command, default_program=default_program)
+    program = _strip_wrapping_quotes(parts[0])
+    remainder = parts[1:]
+    if program.lower().endswith(".ps1"):
+        return "script", _candidate_command_path(program), remainder
+
+    script_candidates = default_script_candidates or []
+    if program.lower() in {default_program.lower(), f"{default_program.lower()}.ps1"}:
+        for candidate in script_candidates:
+            if candidate.exists():
+                return "script", candidate.resolve(), remainder
+    resolved = _resolve_path_launcher(program)
+    if resolved:
+        if resolved.lower().endswith(".ps1"):
+            return "script", _candidate_command_path(resolved), remainder
+        return "direct", program, remainder
+    return "direct", program, remainder
+
+
+def _resolve_command_prefix(
+    raw_command: str,
+    *,
+    default_program: str,
+    default_script_candidates: list[Path] | None = None,
+) -> list[str]:
+    launch_kind, target, remainder = _resolve_command_launcher(
+        raw_command,
+        default_program=default_program,
+        default_script_candidates=default_script_candidates,
+    )
+    if launch_kind == "script":
+        host = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
+        script_path = str(target)
+        return [
+            host,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            script_path,
+            *remainder,
+        ]
+    return [str(target), *remainder]
+
+
+def _probe_command(
+    raw_command: str,
+    *,
+    default_program: str,
+    default_script_candidates: list[Path] | None = None,
+) -> tuple[bool, str]:
+    launch_kind, target, _remainder = _resolve_command_launcher(
+        raw_command,
+        default_program=default_program,
+        default_script_candidates=default_script_candidates,
+    )
+    if launch_kind == "script":
+        script_path = str(target)
+        if not _is_windows_absolute_path(script_path):
+            resolved_script = Path(script_path).expanduser().resolve()
+            if not resolved_script.exists():
+                return False, f"PowerShell script not found: {resolved_script}"
+            script_path = str(resolved_script)
+        host = shutil.which("pwsh") or shutil.which("powershell")
+        if not host:
+            return False, f"PowerShell host not found for script: {script_path}"
+        return True, f"{host} -> {script_path}"
+
+    program = str(target)
+    resolved = shutil.which(program)
+    if resolved:
+        return True, resolved
+    candidate = _candidate_command_path(program)
+    if candidate.exists():
+        return True, str(candidate)
+    return False, "not in PATH"
+
+
+def _resolve_codex_command_prefix() -> list[str]:
+    return _resolve_command_prefix("codex", default_program="codex")
+
+
+def _resolve_cursor_command_prefix(cursor_command: str) -> list[str]:
+    return _resolve_command_prefix(
+        cursor_command,
+        default_program="agent",
+        default_script_candidates=_default_cursor_script_candidates(),
+    )
+
+
+def probe_codex_command() -> tuple[bool, str]:
+    return _probe_command("codex", default_program="codex")
+
+
+def probe_cursor_command(cursor_command: str) -> tuple[bool, str]:
+    return _probe_command(
+        cursor_command,
+        default_program="agent",
+        default_script_candidates=_default_cursor_script_candidates(),
+    )
 
 
 def _summarize_acceptance(node: RuntimeNodeSpec) -> str:
@@ -131,6 +318,7 @@ def build_node_prompt(
     agent_role: str,
     system_prompt: str | None = None,
     behavior_prompt_template: str | None = None,
+    write_policy: dict[str, Any] | None = None,
 ) -> str:
     role_name = "worker" if node.role == "worker" else "orchestrator"
     acceptance_summary = _summarize_acceptance(node)
@@ -194,6 +382,28 @@ def build_node_prompt(
         f"- allow_mcps={permission_snapshot.get('allow_mcps', [])}",
         f"- deny_mcps={permission_snapshot.get('deny_mcps', [])}",
     ]
+    policy = write_policy if isinstance(write_policy, dict) else {}
+    allowed_roots = [
+        str(item).strip()
+        for item in policy.get("allowed_write_roots", [])
+        if str(item).strip()
+    ]
+    forbidden_roots = [
+        str(item).strip()
+        for item in policy.get("forbidden_write_roots", [])
+        if str(item).strip()
+    ]
+    if policy:
+        base.extend(
+            [
+                "",
+                "Machine-enforced write policy:",
+                f"- allowed_write_roots={allowed_roots}",
+                f"- forbidden_write_roots={forbidden_roots}",
+                f"- allow_plan_edits={bool(policy.get('allow_plan_edits'))}",
+                f"- allow_root_writes={bool(policy.get('allow_root_writes'))}",
+            ]
+        )
     if rendered_system_prompt:
         base.extend(
             [
@@ -283,7 +493,7 @@ def _parse_cursor_output(stdout: str) -> tuple[str | None, str | None]:
         except json.JSONDecodeError:
             continue
         if isinstance(payload, dict):
-            for key in ("text", "message", "final", "output"):
+            for key in ("text", "message", "final", "output", "result"):
                 value = payload.get(key)
                 if isinstance(value, str) and value.strip():
                     return value.strip(), None
@@ -317,7 +527,12 @@ def _mentions_external_path(summary: str, *, worktree: Path) -> bool:
     def _is_windows_abs(raw: str) -> bool:
         return bool(re.match(r"^[A-Za-z]:[\\/]", raw)) or raw.startswith("\\\\")
 
-    for token in summary.split():
+    candidates = set(
+        re.findall(r"[A-Za-z]:[\\/][^\"'\r\n]+", summary)
+        + re.findall(r"\\\\[^\s\"']+[^\r\n]*", summary)
+        + summary.split()
+    )
+    for token in candidates:
         candidate = token.strip(".,:;!\"'`()[]{}")
         if not candidate:
             continue
@@ -354,6 +569,7 @@ def execute_headless_agent(
     if os.getenv("RALPHITE_DEV_SIMULATED_EXECUTION", "") == "1":
         time.sleep(float(os.getenv("RALPHITE_RUNNER_SIMULATED_TASK_SECONDS", "0.2")))
         return True, {
+            "status": "success",
             "summary": f"[simulated] {prompt.splitlines()[2] if len(prompt.splitlines()) > 2 else 'Executed task'}",
             "backend": "simulated",
             "model": model,
@@ -362,6 +578,13 @@ def execute_headless_agent(
             "exit_code": 0,
             "duration_seconds": 0.2,
             "worktree": str(cwd),
+            "assigned_worktree_root": str(cwd),
+            "changed_files": [],
+            "artifact_paths": [],
+            "commit_sha": "",
+            "stdout_excerpt": "",
+            "stderr_excerpt": "",
+            "backend_payload": {},
         }
 
     if backend == "cursor":
@@ -382,10 +605,12 @@ def execute_headless_agent(
         )
 
     started = time.perf_counter()
+    runner_env = build_worker_subprocess_env(worktree=cwd)
     try:
         run = subprocess.run(
             cmd,
             cwd=cwd,
+            env=runner_env,
             check=False,
             capture_output=True,
             text=True,
@@ -393,14 +618,17 @@ def execute_headless_agent(
         )
     except FileNotFoundError as exc:
         return False, {
+            "status": "failed",
             "reason": "backend_binary_missing",
             "backend": backend,
             "error": str(exc),
             "command_fingerprint": _command_fingerprint(cmd[:-1]),
             "worktree": str(cwd),
+            "assigned_worktree_root": str(cwd),
         }
     except subprocess.TimeoutExpired as exc:
         return False, {
+            "status": "failed",
             "reason": "backend_timeout",
             "backend": backend,
             "timeout_seconds": int(config.timeout_seconds),
@@ -408,14 +636,17 @@ def execute_headless_agent(
             "stderr": exc.stderr or "",
             "command_fingerprint": _command_fingerprint(cmd[:-1]),
             "worktree": str(cwd),
+            "assigned_worktree_root": str(cwd),
         }
     except Exception as exc:  # noqa: BLE001
         return False, {
+            "status": "failed",
             "reason": "backend_execution_error",
             "backend": backend,
             "error": str(exc),
             "command_fingerprint": _command_fingerprint(cmd[:-1]),
             "worktree": str(cwd),
+            "assigned_worktree_root": str(cwd),
         }
 
     duration_seconds = round(max(0.0, time.perf_counter() - started), 3)
@@ -430,6 +661,7 @@ def execute_headless_agent(
     if run.returncode != 0:
         detail = (parse_error or stderr or stdout).strip() or f"exit={run.returncode}"
         return False, {
+            "status": "failed",
             "reason": _classify_backend_error(detail),
             "backend": backend,
             "model": model,
@@ -441,15 +673,20 @@ def execute_headless_agent(
             "command_fingerprint": _command_fingerprint(cmd[:-1]),
             "duration_seconds": duration_seconds,
             "worktree": str(cwd),
+            "assigned_worktree_root": str(cwd),
+            "stdout_excerpt": stdout[-1000:],
+            "stderr_excerpt": stderr[-1000:],
+            "backend_payload": {},
         }
 
     if parse_error:
         reason = (
-            "backend_output_malformed"
+            "backend_payload_malformed"
             if backend == "cursor"
             else _classify_backend_error(parse_error)
         )
         return False, {
+            "status": "failed",
             "reason": reason,
             "backend": backend,
             "model": model,
@@ -461,10 +698,16 @@ def execute_headless_agent(
             "command_fingerprint": _command_fingerprint(cmd[:-1]),
             "duration_seconds": duration_seconds,
             "worktree": str(cwd),
+            "assigned_worktree_root": str(cwd),
+            "stdout_excerpt": stdout[-1000:],
+            "stderr_excerpt": stderr[-1000:],
+            "backend_payload": {},
+            "diagnostics": {"payload_status": "malformed"},
         }
     if not text:
         return False, {
-            "reason": "backend_output_malformed",
+            "status": "failed",
+            "reason": "backend_payload_missing",
             "backend": backend,
             "model": model,
             "reasoning_effort": reasoning_effort,
@@ -475,22 +718,15 @@ def execute_headless_agent(
             "command_fingerprint": _command_fingerprint(cmd[:-1]),
             "duration_seconds": duration_seconds,
             "worktree": str(cwd),
+            "assigned_worktree_root": str(cwd),
+            "stdout_excerpt": stdout[-1000:],
+            "stderr_excerpt": stderr[-1000:],
+            "backend_payload": {},
+            "diagnostics": {"payload_status": "missing"},
         }
-    if _mentions_external_path(text, worktree=cwd):
-        return False, {
-            "reason": "backend_out_of_worktree_claim",
-            "backend": backend,
-            "model": model,
-            "reasoning_effort": reasoning_effort,
-            "exit_code": int(run.returncode),
-            "stdout": stdout,
-            "stderr": stderr,
-            "error": "backend output references changes outside the assigned worktree",
-            "command_fingerprint": _command_fingerprint(cmd[:-1]),
-            "duration_seconds": duration_seconds,
-            "worktree": str(cwd),
-        }
+    external_path_mentioned = _mentions_external_path(text, worktree=cwd)
     return True, {
+        "status": "success",
         "summary": text,
         "backend": backend,
         "model": model,
@@ -499,4 +735,14 @@ def execute_headless_agent(
         "command_fingerprint": _command_fingerprint(cmd[:-1]),
         "duration_seconds": duration_seconds,
         "worktree": str(cwd),
+        "assigned_worktree_root": str(cwd),
+        "changed_files": [],
+        "artifact_paths": [],
+        "commit_sha": "",
+        "stdout_excerpt": stdout[-1000:],
+        "stderr_excerpt": stderr[-1000:],
+        "backend_payload": {},
+        "diagnostics": {
+            "external_path_mentioned": external_path_mentioned,
+        },
     }

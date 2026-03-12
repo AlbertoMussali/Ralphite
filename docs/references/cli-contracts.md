@@ -1,7 +1,7 @@
 # CLI Contracts
 
 Owners: cli
-Last verified against commit: 70b0c1f
+Last verified against commit: 071697a
 
 Source file: `src/ralphite/cli/app.py`
 
@@ -16,8 +16,19 @@ Source file: `src/ralphite/cli/app.py`
 - `recover`
 - `history`
 - `replay`
+- `salvage`
+- `cleanup`
+- `reconcile`
+- `promote-salvage`
 
-Execution commands (`run`, `quickstart`, `recover`, `replay`) require the selected workspace to be inside a git worktree. `run`, `quickstart`, and `replay` also fail closed when recoverable runs or stale managed Ralphite worktrees/branches are still present. `doctor` surfaces the underlying git/runtime hygiene checks.
+Execution commands (`run`, `quickstart`, `recover`, `replay`) require the selected workspace to be inside a git worktree. `run`, `quickstart`, and `replay` also fail closed when recoverable runs or stale managed Ralphite worktrees/branches are still present. `doctor` surfaces the underlying git/runtime hygiene checks. `salvage` and `cleanup` can inspect and remove preserved/orphaned managed git artifacts even when `.ralphite/runs/<run-id>` state is partially missing. `reconcile` rebuilds a run summary from persisted state plus live git metadata and `reconcile --apply` persists repaired cached state. `promote-salvage` can promote retained committed worker work and dirty retained work after local acceptance plus an orchestrator-created commit. Stream-oriented CLI output falls back to plain ASCII-safe text if the host console cannot encode Rich output.
+
+Operational notes:
+
+- `reconcile --apply` is the supported operator path for persisting repaired cached node/phase state.
+- `salvage` rows now include salvage class values such as `dirty_uncommitted`, `committed_unmerged`, and `orphan_managed_artifact`.
+- `promote-salvage` is valid for retained committed work and for dirty retained work that can pass local acceptance and be committed by Ralphite.
+- Backend protocol failures distinguish missing final payloads from malformed payloads (`backend_payload_missing`, `backend_payload_malformed`).
 
 ## Key Override Flags
 

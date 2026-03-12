@@ -1,5 +1,7 @@
 # ADR-0005: Single-Package v1 Consolidation
 
+Last verified against commit: 071697a
+
 Owners: release, cli, engine, schemas
 Status: accepted
 Date: 2026-03-05

@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import threading
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -16,6 +17,9 @@ from ralphite.engine.models import (
 
 
 class RunStore:
+    _WRITE_RETRY_ATTEMPTS = 4
+    _WRITE_RETRY_DELAY_SECONDS = 0.05
+
     def __init__(self, runs_root: Path) -> None:
         self.runs_root = runs_root
         self.runs_root.mkdir(parents=True, exist_ok=True)
@@ -87,7 +91,7 @@ class RunStore:
         path = self._state_path(state.run_id)
         tmp = self._tmp_path(path)
         tmp.write_text(state.model_dump_json(indent=2), encoding="utf-8")
-        tmp.replace(path)
+        self._replace_with_retry(tmp, path)
 
     def load_state(self, run_id: str) -> RunPersistenceState | None:
         path = self._state_path(run_id)
@@ -132,7 +136,7 @@ class RunStore:
         path = self._checkpoint_path(checkpoint.run_id)
         tmp = self._tmp_path(path)
         tmp.write_text(checkpoint.model_dump_json(indent=2), encoding="utf-8")
-        tmp.replace(path)
+        self._replace_with_retry(tmp, path)
 
     def load_checkpoint(self, run_id: str) -> RunCheckpoint | None:
         path = self._checkpoint_path(run_id)
@@ -146,3 +150,23 @@ class RunStore:
     def _tmp_path(self, path: Path) -> Path:
         token = f"{os.getpid()}-{threading.get_ident()}-{uuid4().hex}"
         return path.with_name(f"{path.name}.{token}.tmp")
+
+    def _replace_with_retry(self, tmp: Path, path: Path) -> None:
+        last_error: OSError | None = None
+        for attempt in range(self._WRITE_RETRY_ATTEMPTS):
+            try:
+                tmp.replace(path)
+                return
+            except PermissionError as exc:
+                last_error = exc
+            except OSError as exc:
+                last_error = exc
+            if attempt + 1 < self._WRITE_RETRY_ATTEMPTS:
+                time.sleep(self._WRITE_RETRY_DELAY_SECONDS)
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        if last_error is not None:
+            raise last_error

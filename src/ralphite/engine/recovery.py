@@ -31,6 +31,15 @@ def to_paused_for_recovery(
     state: RunPersistenceState, checkpoint: RunCheckpoint | None
 ) -> RunPersistenceState:
     run = RunViewState.model_validate(state.run.model_dump())
+    if checkpoint is not None:
+        for node_id, status in checkpoint.node_statuses.items():
+            if node_id in run.nodes:
+                run.nodes[node_id].status = status
+        for node_id, attempts in checkpoint.node_attempts.items():
+            if node_id in run.nodes:
+                run.nodes[node_id].attempt_count = int(attempts or 0)
+        if checkpoint.active_node_id:
+            run.active_node_id = checkpoint.active_node_id
     for node in run.nodes.values():
         if node.status == "running":
             node.status = "queued"
@@ -44,6 +53,8 @@ def to_paused_for_recovery(
     loop_counts = dict(state.loop_counts)
     if checkpoint is not None:
         loop_counts.update(checkpoint.loop_counts)
+        if isinstance(checkpoint.git_state, dict) and checkpoint.git_state:
+            run.metadata["git_state"] = checkpoint.git_state
 
     return RunPersistenceState(
         run_id=state.run_id,

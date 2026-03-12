@@ -11,10 +11,22 @@ from rich.table import Table
 import yaml
 
 from ralphite.engine import LocalOrchestrator, suggest_fixes, validate_plan_content
-from ralphite.engine.headless_agent import build_codex_exec_command
+from ralphite.engine.headless_agent import (
+    build_codex_exec_command,
+    probe_codex_command,
+    probe_cursor_command,
+)
 
 from .core import console
 from rich.panel import Panel
+
+
+def _probe_python_command() -> tuple[str | None, str]:
+    for candidate in ("python3", "python", "py"):
+        found = shutil.which(candidate)
+        if found:
+            return candidate, found
+    return None, "not in PATH"
 
 
 def _validate_all_plans(
@@ -39,8 +51,9 @@ def _probe_codex_model(model: str, reasoning_effort: str) -> tuple[bool, str]:
         return True, "skipped in pytest"
     if os.getenv("RALPHITE_SKIP_MODEL_PROBE") == "1":
         return True, "skipped by RALPHITE_SKIP_MODEL_PROBE"
-    if not shutil.which("codex"):
-        return False, "codex not found"
+    codex_ok, codex_detail = probe_codex_command()
+    if not codex_ok:
+        return False, codex_detail
     command = build_codex_exec_command(
         prompt="Reply with exactly: OK",
         model=model,
@@ -95,7 +108,24 @@ def _doctor_snapshot(
     ok = True
     test_mode = bool(os.getenv("PYTEST_CURRENT_TEST"))
 
-    required_cmds = ["python3", "uv", "git", "rg"]
+    python_cmd, python_detail = _probe_python_command()
+    python_ok = python_cmd is not None
+    if python_ok:
+        python_status = "OK"
+    else:
+        python_status = "MISSING"
+        ok = False
+    checks.append(
+        {
+            "check": "cmd:python",
+            "status": python_status,
+            "detail": (
+                f"{python_cmd} -> {python_detail}" if python_cmd else python_detail
+            ),
+        }
+    )
+
+    required_cmds = ["uv", "git", "rg"]
     for cmd in required_cmds:
         found = shutil.which(cmd)
         if found:
@@ -148,10 +178,10 @@ def _doctor_snapshot(
     codex_required = default_backend == "codex"
     cursor_required = default_backend == "cursor"
 
-    codex_path = shutil.which("codex")
+    codex_ok, codex_detail = probe_codex_command()
     codex_status = (
         "OK"
-        if codex_path
+        if codex_ok
         else (
             "WARN"
             if (test_mode or skip_backend_checks)
@@ -162,17 +192,17 @@ def _doctor_snapshot(
         {
             "check": "cmd:codex",
             "status": codex_status,
-            "detail": codex_path or "not in PATH",
+            "detail": codex_detail,
         }
     )
-    if codex_required and not codex_path and not (test_mode or skip_backend_checks):
+    if codex_required and not codex_ok and not (test_mode or skip_backend_checks):
         ok = False
 
     cursor_command = str(orch.config.cursor_command or "agent").strip() or "agent"
-    cursor_path = shutil.which(cursor_command)
+    cursor_ok, cursor_detail = probe_cursor_command(cursor_command)
     cursor_status = (
         "OK"
-        if cursor_path
+        if cursor_ok
         else (
             "WARN"
             if (test_mode or skip_backend_checks)
@@ -183,13 +213,13 @@ def _doctor_snapshot(
         {
             "check": f"cmd:{cursor_command}",
             "status": cursor_status,
-            "detail": cursor_path or "not in PATH",
+            "detail": cursor_detail,
         }
     )
-    if cursor_required and not cursor_path and not (test_mode or skip_backend_checks):
+    if cursor_required and not cursor_ok and not (test_mode or skip_backend_checks):
         ok = False
 
-    if codex_required and codex_path and not skip_backend_checks:
+    if codex_required and codex_ok and not skip_backend_checks:
         model_ok, model_detail = _probe_codex_model(
             str(orch.config.default_model or "gpt-5.3-codex"),
             str(orch.config.default_reasoning_effort or "medium"),

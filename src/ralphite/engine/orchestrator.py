@@ -6,8 +6,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import glob
 import json
+import os
 from pathlib import Path
 from queue import Queue
+import shlex
 import subprocess
 import threading
 import time
@@ -19,6 +21,7 @@ from ralphite.engine.git_worktree import GitRequiredError
 from ralphite.engine.headless_agent import (
     BackendExecutionConfig,
     build_node_prompt,
+    build_worker_subprocess_env,
     execute_headless_agent,
 )
 from ralphite.engine.git_worktree import GitWorktreeManager
@@ -230,6 +233,49 @@ class LocalOrchestrator:
             mapping[str(getattr(task, "id", ""))] = sorted(surfaces)
         return mapping
 
+    def _task_write_policy_map(self, tasks: list[Any]) -> dict[str, dict[str, Any]]:
+        mapping: dict[str, dict[str, Any]] = {}
+        for task in tasks:
+            raw = (
+                getattr(task, "write_policy", {})
+                if isinstance(getattr(task, "write_policy", {}), dict)
+                else {}
+            )
+            allowed = [
+                str(item).strip().strip("/\\")
+                for item in raw.get("allowed_write_roots", [])
+                if str(item).strip()
+            ]
+            forbidden = [
+                str(item).strip().strip("/\\")
+                for item in raw.get("forbidden_write_roots", [])
+                if str(item).strip()
+            ]
+            if not allowed:
+                for artifact in (
+                    getattr(task, "acceptance_required_artifacts", []) or []
+                ):
+                    path_glob = (
+                        str(artifact.get("path_glob") or "").strip().replace("\\", "/")
+                    )
+                    if not path_glob:
+                        continue
+                    if "/" in path_glob:
+                        allowed.append(path_glob.split("/", 1)[0])
+                    elif not any(ch in path_glob for ch in "*?["):
+                        allowed.append(path_glob)
+            mapping[str(getattr(task, "id", ""))] = {
+                "allowed_write_roots": sorted(
+                    dict.fromkeys(item for item in allowed if item)
+                ),
+                "forbidden_write_roots": sorted(
+                    dict.fromkeys(item for item in forbidden if item)
+                ),
+                "allow_plan_edits": bool(raw.get("allow_plan_edits")),
+                "allow_root_writes": bool(raw.get("allow_root_writes")),
+            }
+        return mapping
+
     def _runtime_metadata(
         self, runtime: RuntimeExecutionPlan, *, tasks: list[Any]
     ) -> dict[str, Any]:
@@ -241,7 +287,9 @@ class LocalOrchestrator:
         team_map: dict[str, str] = {}
         behavior_map: dict[str, str] = {}
         task_surface_map = self._task_surface_map(tasks)
+        task_write_policy_map = self._task_write_policy_map(tasks)
         node_surface_map: dict[str, list[str]] = {}
+        node_write_policy_map: dict[str, dict[str, Any]] = {}
 
         for node in runtime.nodes:
             lane_map[node.id] = node.lane
@@ -257,6 +305,9 @@ class LocalOrchestrator:
                 node_surface_map[node.id] = list(
                     task_surface_map.get(node.source_task_id, [])
                 )
+                node_write_policy_map[node.id] = dict(
+                    task_write_policy_map.get(node.source_task_id, {})
+                )
 
         return {
             "plan_version": 1,
@@ -270,6 +321,8 @@ class LocalOrchestrator:
             "parallel_limit": int(runtime.parallel_limit),
             "task_surface_map": task_surface_map,
             "node_surface_map": node_surface_map,
+            "task_write_policy_map": task_write_policy_map,
+            "node_write_policy_map": node_write_policy_map,
             "task_blocks": [
                 {
                     "index": block.index,
@@ -712,6 +765,486 @@ class LocalOrchestrator:
             active_run_ids=active_run_ids, max_age_hours=max_age_hours
         )
 
+    def _retained_work_entries(self, run: RunViewState) -> list[dict[str, Any]]:
+        retained = (
+            run.metadata.get("retained_work", [])
+            if isinstance(run.metadata.get("retained_work"), list)
+            else []
+        )
+        return [item for item in retained if isinstance(item, dict)]
+
+    def _requeue_unblocked_nodes(self, handle: RuntimeHandle) -> None:
+        for node in handle.runtime.nodes:
+            node_state = handle.run.nodes.get(node.id)
+            if not node_state or node_state.status != "blocked":
+                continue
+            if all(
+                handle.run.nodes.get(dep)
+                and handle.run.nodes[dep].status == "succeeded"
+                for dep in node.depends_on
+            ):
+                node_state.status = "queued"
+
+    def _recompute_run_status(self, handle: RuntimeHandle) -> str:
+        self._requeue_unblocked_nodes(handle)
+        statuses = [node.status for node in handle.run.nodes.values()]
+        if any(status == "failed" for status in statuses):
+            return "failed"
+        if any(status in {"queued", "blocked", "running"} for status in statuses):
+            return "paused"
+        return "succeeded"
+
+    def _mark_phase_integrated_nodes_succeeded(
+        self,
+        *,
+        handle: RuntimeHandle,
+        phase: str,
+        integration: dict[str, Any],
+    ) -> None:
+        for node in handle.runtime.nodes:
+            if node.phase != phase or node.role != "orchestrator":
+                continue
+            node_state = handle.run.nodes.get(node.id)
+            if not node_state or node_state.status not in {"queued", "blocked"}:
+                continue
+            if not all(
+                handle.run.nodes.get(dep)
+                and handle.run.nodes[dep].status == "succeeded"
+                for dep in node.depends_on
+            ):
+                continue
+            node_state.status = "succeeded"
+            node_state.result = {
+                "mode": "phase_integrated_from_salvage",
+                "integration": integration,
+            }
+
+    def _build_node_reconciliation_rows(
+        self,
+        *,
+        handle: RuntimeHandle,
+        git_state: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        retained_by_node = {
+            str(item.get("node_id") or ""): item
+            for item in self._retained_work_entries(handle.run)
+            if str(item.get("node_id") or "").strip()
+        }
+        phases = git_state.get("phases", {}) if isinstance(git_state, dict) else {}
+        rows: list[dict[str, Any]] = []
+        for node in handle.runtime.nodes:
+            persisted = handle.run.nodes.get(node.id)
+            phase_state = (
+                phases.get(node.phase, {})
+                if isinstance(phases.get(node.phase, {}), dict)
+                else {}
+            )
+            workers = (
+                phase_state.get("workers", {})
+                if isinstance(phase_state.get("workers", {}), dict)
+                else {}
+            )
+            worker_state = (
+                workers.get(node.id, {})
+                if isinstance(workers.get(node.id, {}), dict)
+                else {}
+            )
+            retained = retained_by_node.get(node.id, {})
+            phase_integrated = bool(phase_state.get("integrated_to_base"))
+            merged_workers = {
+                str(item)
+                for item in phase_state.get("merged_workers", [])
+                if str(item).strip()
+            }
+            worker_branch = str(
+                worker_state.get("branch") or retained.get("branch") or ""
+            ).strip()
+            worktree_path = str(
+                worker_state.get("worktree_path") or retained.get("worktree_path") or ""
+            ).strip()
+            worktree_exists = bool(retained.get("worktree_exists"))
+            if worktree_path:
+                worktree_exists = Path(worktree_path).expanduser().exists()
+            committed = bool(worker_state.get("committed")) or bool(
+                retained.get("committed")
+            )
+            commit = str(retained.get("commit") or "").strip()
+            if commit:
+                committed = True
+            derived_status = persisted.status if persisted else "queued"
+            if node.role == "worker":
+                if phase_integrated:
+                    derived_status = "merged_to_base"
+                elif worker_branch and worker_branch in merged_workers:
+                    derived_status = "merged_to_phase"
+                elif committed:
+                    derived_status = "committed_worker"
+                elif retained and worktree_exists:
+                    derived_status = "dirty_salvage_present"
+                elif worktree_path and worktree_exists:
+                    derived_status = "prepared_worktree_present"
+            rows.append(
+                {
+                    "node_id": node.id,
+                    "phase": node.phase,
+                    "role": node.role,
+                    "persisted_status": persisted.status if persisted else "missing",
+                    "derived_status": derived_status,
+                    "branch": worker_branch,
+                    "commit": commit,
+                    "worktree_path": worktree_path,
+                    "retained": bool(retained),
+                    "worktree_exists": worktree_exists,
+                    "repair_action": "",
+                }
+            )
+        return rows
+
+    def _apply_reconciled_state(
+        self,
+        *,
+        handle: RuntimeHandle,
+        checkpoint: Any,
+        node_rows: list[dict[str, Any]],
+        phase_rows: list[dict[str, Any]],
+        git_state: dict[str, Any],
+    ) -> list[str]:
+        issues: list[str] = []
+        row_by_id = {
+            str(row.get("node_id") or ""): row
+            for row in node_rows
+            if isinstance(row, dict)
+        }
+        for node in handle.runtime.nodes:
+            persisted = handle.run.nodes.get(node.id)
+            row = row_by_id.get(node.id, {})
+            if persisted is None or not isinstance(row, dict):
+                continue
+            derived = str(row.get("derived_status") or persisted.status)
+            repair_action = ""
+            if derived in {"merged_to_base", "merged_to_phase"}:
+                persisted.status = "succeeded"
+                repair_action = "mark_succeeded_from_git_merge"
+            elif derived == "committed_worker" and persisted.status in {
+                "failed",
+                "blocked",
+            }:
+                persisted.status = "queued"
+                repair_action = "requeue_from_committed_worker"
+            elif (
+                derived in {"dirty_salvage_present", "prepared_worktree_present"}
+                and persisted.status == "blocked"
+            ):
+                persisted.status = "queued"
+                repair_action = f"requeue_from_{derived}"
+            if repair_action:
+                row["persisted_status"] = persisted.status
+                row["repair_action"] = repair_action
+
+        self._requeue_unblocked_nodes(handle)
+        phase_done = (
+            [
+                str(item)
+                for item in handle.run.metadata.get("phase_done", [])
+                if str(item).strip()
+            ]
+            if isinstance(handle.run.metadata.get("phase_done"), list)
+            else []
+        )
+        derived_complete = {
+            str(row.get("phase") or "")
+            for row in phase_rows
+            if bool(row.get("derived_complete"))
+        }
+        handle.run.metadata["phase_done"] = [
+            phase for phase in phase_done if phase in derived_complete
+        ]
+        handle.run.metadata["git_state"] = git_state
+        handle.run.metadata["retained_work"] = list(git_state.get("retained_work", []))
+        handle.run.metadata["reconciled_at"] = datetime.now(timezone.utc).isoformat()
+        handle.run.metadata["derived_from_git"] = True
+        handle.run.metadata["reconciliation_issues"] = issues
+        handle.run.status = self._recompute_run_status(handle)
+        if checkpoint is not None:
+            checkpoint.node_statuses = {
+                node_id: state.status for node_id, state in handle.run.nodes.items()
+            }
+            checkpoint.node_attempts = {
+                node_id: int(state.attempt_count or 0)
+                for node_id, state in handle.run.nodes.items()
+            }
+            checkpoint.git_state = git_state
+            self.run_store.write_checkpoint(checkpoint)
+        self._persist_runtime_state(handle, handle.run.status)
+        return issues
+
+    def reconcile_run(self, run_id: str, *, apply: bool = False) -> dict[str, Any]:
+        self.require_git_repository()
+        state = self.run_store.load_state(run_id)
+        checkpoint = self.run_store.load_checkpoint(run_id)
+        manager = GitWorktreeManager(self.workspace_root, run_id)
+        inventory = manager.managed_artifact_inventory(run_id)
+        has_artifacts = bool(inventory.get("branches") or inventory.get("worktrees"))
+        if state is None:
+            return {
+                "ok": has_artifacts,
+                "run_id": run_id,
+                "state_missing": True,
+                "status": "missing",
+                "checkpoint_status": "",
+                "plan_path": "",
+                "git_reconciliation": {
+                    "preserved_paths": [],
+                    "preserved_branches": [],
+                    "retained_work": [],
+                },
+                "inventory": inventory,
+                "retained_work": [],
+                "nodes": [],
+            }
+
+        if run_id not in self.active and not self.recover_run(run_id):
+            return {
+                "ok": False,
+                "run_id": run_id,
+                "state_missing": False,
+                "status": state.status,
+                "checkpoint_status": checkpoint.status if checkpoint else "",
+                "plan_path": state.plan_path,
+                "inventory": inventory,
+                "retained_work": [],
+                "nodes": [],
+                "issues": ["run could not be materialized for reconciliation"],
+            }
+
+        handle = self.active[run_id]
+        git_state = manager.bootstrap_state(handle.run.metadata.get("git_state"))
+        handle.run.metadata["git_state"] = git_state
+        git_reconciliation = manager.reconcile_state(git_state)
+        retained_work = list(git_state.get("retained_work", []))
+        handle.run.metadata["retained_work"] = retained_work
+        handle.run.metadata["git_reconciliation"] = git_reconciliation
+        node_rows = self._build_node_reconciliation_rows(
+            handle=handle, git_state=git_state
+        )
+        phase_rows: list[dict[str, Any]] = []
+        phases = git_state.get("phases", {}) if isinstance(git_state, dict) else {}
+        for phase, phase_state in phases.items():
+            if not isinstance(phase_state, dict):
+                continue
+            phase_nodes = [row for row in node_rows if row["phase"] == phase]
+            phase_rows.append(
+                {
+                    "phase": str(phase),
+                    "integrated_to_base": bool(phase_state.get("integrated_to_base")),
+                    "merged_workers": len(phase_state.get("merged_workers", [])),
+                    "node_count": len(phase_nodes),
+                    "derived_complete": bool(phase_nodes)
+                    and all(
+                        row["derived_status"]
+                        in {"succeeded", "merged_to_phase", "merged_to_base"}
+                        for row in phase_nodes
+                    ),
+                }
+            )
+
+        issues: list[str] = []
+        if apply:
+            issues.extend(
+                self._apply_reconciled_state(
+                    handle=handle,
+                    checkpoint=checkpoint,
+                    node_rows=node_rows,
+                    phase_rows=phase_rows,
+                    git_state=git_state,
+                )
+            )
+
+        persist_status = (
+            handle.run.status
+            if apply
+            else "paused_recovery_required"
+            if handle.run.status == "paused_recovery_required"
+            else "paused"
+        )
+        self._persist_runtime_state(handle, persist_status)
+        return {
+            "ok": True,
+            "run_id": run_id,
+            "state_missing": False,
+            "status": handle.run.status,
+            "checkpoint_status": checkpoint.status if checkpoint else "",
+            "plan_path": handle.run.plan_path,
+            "git_reconciliation": git_reconciliation,
+            "inventory": inventory,
+            "retained_work": retained_work,
+            "nodes": node_rows,
+            "phases": phase_rows,
+            "issues": issues,
+            "applied": apply,
+        }
+
+    def promote_salvage(self, run_id: str, node_id: str) -> tuple[bool, dict[str, Any]]:
+        self.require_git_repository()
+        if run_id not in self.active and not self.recover_run(run_id):
+            return False, {
+                "reason": "run_not_found",
+                "error": "run not found or unrecoverable",
+            }
+
+        handle = self.active[run_id]
+        target_node = next(
+            (node for node in handle.runtime.nodes if node.id == node_id),
+            None,
+        )
+        if target_node is None:
+            return False, {
+                "reason": "node_not_found",
+                "error": f"node '{node_id}' was not found in the recovered runtime",
+            }
+        if target_node.role != "worker":
+            return False, {
+                "reason": "salvage_not_promotable",
+                "error": "only retained worker nodes can be promoted",
+            }
+
+        retained_entry = next(
+            (
+                item
+                for item in self._retained_work_entries(handle.run)
+                if str(item.get("node_id") or "") == node_id
+            ),
+            None,
+        )
+        if retained_entry is None:
+            return False, {
+                "reason": "salvage_not_found",
+                "error": f"no retained work was found for node '{node_id}'",
+            }
+
+        branch = str(retained_entry.get("branch") or "").strip()
+        commit = str(retained_entry.get("commit") or "").strip()
+        worktree_path = str(retained_entry.get("worktree_path") or "").strip()
+        committed = bool(retained_entry.get("committed")) or bool(commit)
+        if not branch or not worktree_path:
+            return False, {
+                "reason": "salvage_not_promotable",
+                "error": "retained work must include a branch and worktree path",
+            }
+
+        worktree = Path(worktree_path).expanduser().resolve()
+        if not worktree.exists():
+            return False, {
+                "reason": "salvage_not_promotable",
+                "error": f"retained worktree is unavailable: {worktree}",
+            }
+
+        git_manager = GitWorktreeManager(self.workspace_root, run_id)
+        git_state = git_manager.bootstrap_state(handle.run.metadata.get("git_state"))
+        handle.run.metadata["git_state"] = git_state
+        phase_state = git_manager.prepare_phase(git_state, target_node.phase)
+        workers = phase_state.setdefault("workers", {})
+        worker_state = workers.setdefault(target_node.id, {})
+        worker_state["branch"] = branch
+        worker_state["worktree_path"] = str(worktree)
+        worker_state["committed"] = True
+        if str(worktree) not in git_state.get("cleanup_paths", []):
+            git_state.setdefault("cleanup_paths", []).append(str(worktree))
+        if branch not in git_state.get("cleanup_branches", []):
+            git_state.setdefault("cleanup_branches", []).append(branch)
+
+        acceptance_ok, acceptance_result = self._evaluate_acceptance(
+            target_node,
+            {"worktree": str(worktree), "branch": branch, "commit": commit},
+            timeout_seconds=int(handle.plan.constraints.acceptance_timeout_seconds),
+        )
+        if not acceptance_ok:
+            return False, acceptance_result
+
+        if not committed:
+            add = git_manager._git(["add", "-A"], cwd=worktree, check=False)  # noqa: SLF001
+            if add.returncode != 0:
+                return False, {
+                    "reason": "salvage_not_promotable",
+                    "error": add.stderr.strip()
+                    or add.stdout.strip()
+                    or "unable to stage salvaged work",
+                }
+            commit_result = git_manager._git(  # noqa: SLF001
+                [
+                    "commit",
+                    "--allow-empty",
+                    "-m",
+                    f"salvage({target_node.source_task_id or node_id}): promote retained work",
+                ],
+                cwd=worktree,
+                check=False,
+            )
+            if commit_result.returncode != 0:
+                return False, {
+                    "reason": "salvage_not_promotable",
+                    "error": commit_result.stderr.strip()
+                    or commit_result.stdout.strip()
+                    or "unable to commit salvaged work",
+                }
+            commit_meta = git_manager.inspect_managed_target(
+                worktree_path=str(worktree), branch=branch
+            )
+            commit = str(commit_meta.get("commit") or "").strip()
+            committed = bool(commit)
+            worker_state["committed"] = committed
+
+        status, integration = git_manager.integrate_phase(git_state, target_node.phase)
+        if status != "success":
+            return False, integration
+
+        retained_work = [
+            item
+            for item in self._retained_work_entries(handle.run)
+            if str(item.get("node_id") or "") != node_id
+        ]
+        git_state["retained_work"] = retained_work
+        handle.run.metadata["retained_work"] = retained_work
+        handle.run.metadata["git_reconciliation"] = git_manager.reconcile_state(
+            git_state
+        )
+        handle.run.metadata["reconciled_at"] = datetime.now(timezone.utc).isoformat()
+        handle.run.metadata["derived_from_git"] = True
+
+        node_state = handle.run.nodes.get(node_id)
+        if node_state is not None:
+            node_state.status = "succeeded"
+            node_state.result = {
+                "mode": "salvage_promoted",
+                "reason": "salvage_promoted",
+                "worktree": {
+                    "branch": branch,
+                    "worktree": str(worktree),
+                    "commit": commit,
+                },
+                "acceptance": acceptance_result,
+                "integration": integration,
+            }
+
+        self._mark_phase_integrated_nodes_succeeded(
+            handle=handle,
+            phase=target_node.phase,
+            integration=integration,
+        )
+        handle.run.status = self._recompute_run_status(handle)
+        self._persist_runtime_state(handle, handle.run.status)
+        self.history.upsert(handle.run)
+        self._write_artifacts(handle.run)
+        return True, {
+            "run_status": handle.run.status,
+            "node_id": node_id,
+            "branch": branch,
+            "commit": commit,
+            "acceptance": acceptance_result,
+            "integration": integration,
+            "retained_count": len(retained_work),
+        }
+
     def recover_run(self, run_id: str) -> bool:
         self.require_git_repository()
         if run_id in self.active:
@@ -753,6 +1286,12 @@ class LocalOrchestrator:
         run.metadata.setdefault(
             "node_surface_map", runtime_meta.get("node_surface_map", {})
         )
+        run.metadata.setdefault(
+            "task_write_policy_map", runtime_meta.get("task_write_policy_map", {})
+        )
+        run.metadata.setdefault(
+            "node_write_policy_map", runtime_meta.get("node_write_policy_map", {})
+        )
         run.metadata.setdefault("task_blocks", runtime_meta.get("task_blocks", []))
         run.metadata.setdefault(
             "resolved_execution", runtime_meta.get("resolved_execution", {})
@@ -777,6 +1316,14 @@ class LocalOrchestrator:
             "git_state",
             GitWorktreeManager(self.workspace_root, run_id).bootstrap_state(),
         )
+        git_manager = GitWorktreeManager(self.workspace_root, run_id)
+        git_reconciliation = git_manager.reconcile_state(
+            run.metadata.setdefault("git_state", {})
+        )
+        run.metadata["retained_work"] = list(
+            run.metadata.setdefault("git_state", {}).get("retained_work", [])
+        )
+        run.metadata["git_reconciliation"] = git_reconciliation
         run.metadata.setdefault("first_failure_recovery", "none")
 
         snapshot = run.metadata.get("permission_snapshot")
@@ -794,6 +1341,7 @@ class LocalOrchestrator:
         )
         handle.pause_event.set()
         self.active[run_id] = handle
+        self.reconcile_run(run_id, apply=True)
         self._persist_runtime_state(
             handle,
             "paused_recovery_required"
@@ -1017,6 +1565,8 @@ class LocalOrchestrator:
                 )
                 self._persist_runtime_state(handle, "paused_recovery_required")
                 return False
+
+        self.reconcile_run(run_id, apply=True)
 
         if not self.run_store.acquire_lock(run_id):
             if not self.run_store.lock_is_stale(run_id):
@@ -1408,6 +1958,7 @@ class LocalOrchestrator:
                 agent_role=profile.role.value,
                 system_prompt=profile.system_prompt,
                 behavior_prompt_template=node.behavior_prompt_template,
+                write_policy=self._node_write_policy(handle, node),
             )
         except ValueError as exc:
             return False, {
@@ -1502,10 +2053,97 @@ class LocalOrchestrator:
             task_id=node.id,
             meta=details,
         )
+        self._retain_all_managed_work(
+            handle,
+            GitWorktreeManager(self.workspace_root, handle.run.id),
+            reason=str(details.get("reason") or "recovery_required"),
+            failure_title="Recovery Required",
+        )
 
         handle.run.status = "paused_recovery_required"
         handle.run.active_node_id = None
         handle.pause_event.set()
+
+    def _sync_retained_work_metadata(
+        self, handle: RuntimeHandle, git_manager: GitWorktreeManager
+    ) -> None:
+        git_state = (
+            handle.run.metadata.get("git_state", {})
+            if isinstance(handle.run.metadata.get("git_state"), dict)
+            else {}
+        )
+        if not isinstance(git_state, dict):
+            return
+        reconciliation = git_manager.reconcile_state(git_state)
+        handle.run.metadata["retained_work"] = list(git_state.get("retained_work", []))
+        handle.run.metadata["git_reconciliation"] = reconciliation
+
+    def _retain_result_targets(
+        self,
+        handle: RuntimeHandle,
+        node: RuntimeNodeSpec,
+        result: dict[str, Any],
+        git_manager: GitWorktreeManager,
+    ) -> list[dict[str, Any]]:
+        git_state = handle.run.metadata.setdefault("git_state", {})
+        targets = result.get("preserve_targets") if isinstance(result, dict) else []
+        if not isinstance(targets, list):
+            targets = []
+        retained: list[dict[str, Any]] = []
+        for target in targets:
+            if not isinstance(target, dict):
+                continue
+            retained.append(
+                git_manager.retain_target(
+                    git_state,
+                    scope=str(target.get("scope") or "worker"),
+                    reason=str(result.get("reason") or "runtime_error"),
+                    phase=str(target.get("phase") or node.phase or ""),
+                    node_id=str(target.get("node_id") or node.id),
+                    worktree_path=str(target.get("worktree_path") or "") or None,
+                    branch=str(target.get("branch") or "") or None,
+                    failure_title=str(result.get("failure_title") or ""),
+                    failed_command=str(result.get("failed_command") or ""),
+                    error=str(result.get("error") or ""),
+                    stdout=str(result.get("stdout") or ""),
+                    stderr=str(result.get("stderr") or ""),
+                    backend_payload=(
+                        result.get("backend_payload")
+                        if isinstance(result.get("backend_payload"), dict)
+                        else {}
+                    ),
+                    diagnostics=(
+                        result.get("diagnostics")
+                        if isinstance(result.get("diagnostics"), dict)
+                        else {}
+                    ),
+                    committed=(
+                        bool(target.get("committed"))
+                        if target.get("committed") is not None
+                        else None
+                    ),
+                )
+            )
+        if retained:
+            self._sync_retained_work_metadata(handle, git_manager)
+        return retained
+
+    def _retain_all_managed_work(
+        self,
+        handle: RuntimeHandle,
+        git_manager: GitWorktreeManager,
+        *,
+        reason: str,
+        failure_title: str = "",
+    ) -> list[dict[str, Any]]:
+        retained = git_manager.retain_all_managed_work(
+            handle.run.metadata.setdefault("git_state", {}),
+            reason=reason,
+            failure_title=failure_title,
+        )
+        if retained:
+            self._sync_retained_work_metadata(handle, git_manager)
+        return retained
 
     def _apply_agent_result(
         self,
@@ -1515,6 +2153,7 @@ class LocalOrchestrator:
         success: bool,
         result: dict[str, Any],
         fail_fast: bool,
+        git_manager: GitWorktreeManager,
     ) -> None:
         rec = handle.run.nodes[node.id]
         if success:
@@ -1545,7 +2184,10 @@ class LocalOrchestrator:
             "backend_model_unsupported",
             "backend_auth_failed",
             "backend_output_malformed",
+            "backend_payload_missing",
+            "backend_payload_malformed",
             "backend_out_of_worktree_claim",
+            "backend_out_of_worktree_mutation",
             "backend_worktree_missing",
             "defaults.placeholder_invalid",
         }
@@ -1576,6 +2218,11 @@ class LocalOrchestrator:
         enriched_result.setdefault("failure_title", advice.title)
         enriched_result.setdefault("next_action", advice.next_action)
         enriched_result.setdefault("command_hint", advice.command_hint)
+        retained = self._retain_result_targets(
+            handle, node, enriched_result, git_manager
+        )
+        if retained:
+            enriched_result["retained_work"] = retained
         rec.result = enriched_result
         self._emit(
             handle,
@@ -1668,12 +2315,14 @@ class LocalOrchestrator:
         report_path = artifacts_dir / "final_report.md"
         metrics_path = artifacts_dir / "run_metrics.json"
         bundle_path = artifacts_dir / "machine_bundle.json"
+        salvage_path = artifacts_dir / "salvage_bundle.json"
         report = build_final_report(
             run,
             artifact_paths={
                 "final_report": str(report_path),
                 "run_metrics": str(metrics_path),
                 "machine_bundle": str(bundle_path),
+                "salvage_bundle": str(salvage_path),
             },
             run_state_paths={
                 "run_state": str(self.paths["runs"] / run.id / "run_state.json"),
@@ -1696,10 +2345,32 @@ class LocalOrchestrator:
         }
         bundle_path.write_text(json.dumps(bundle, indent=2), encoding="utf-8")
 
+        salvage_bundle = {
+            "run_id": run.id,
+            "status": run.status,
+            "retained_work": (
+                run.metadata.get("retained_work", [])
+                if isinstance(run.metadata.get("retained_work"), list)
+                else []
+            ),
+            "cleanup_decision": (
+                run.metadata.get("cleanup_decision", {})
+                if isinstance(run.metadata.get("cleanup_decision"), dict)
+                else {}
+            ),
+            "git_reconciliation": (
+                run.metadata.get("git_reconciliation", {})
+                if isinstance(run.metadata.get("git_reconciliation"), dict)
+                else {}
+            ),
+        }
+        salvage_path.write_text(json.dumps(salvage_bundle, indent=2), encoding="utf-8")
+
         items = [
             {"id": "final_report", "path": str(report_path), "format": "markdown"},
             {"id": "run_metrics", "path": str(metrics_path), "format": "json"},
             {"id": "machine_bundle", "path": str(bundle_path), "format": "json"},
+            {"id": "salvage_bundle", "path": str(salvage_path), "format": "json"},
         ]
         run.artifacts = items
         return ArtifactIndex(
@@ -1716,6 +2387,179 @@ class LocalOrchestrator:
         if not isinstance(surfaces, list):
             return set()
         return {str(item).strip().lower() for item in surfaces if str(item).strip()}
+
+    def _node_write_policy(
+        self, handle: RuntimeHandle, node: RuntimeNodeSpec
+    ) -> dict[str, Any]:
+        node_write_policy_map = (
+            handle.run.metadata.get("node_write_policy_map", {})
+            if isinstance(handle.run.metadata.get("node_write_policy_map"), dict)
+            else {}
+        )
+        raw = (
+            node_write_policy_map.get(node.id, {})
+            if isinstance(node_write_policy_map.get(node.id, {}), dict)
+            else {}
+        )
+        return {
+            "allowed_write_roots": [
+                str(item).strip().strip("/\\")
+                for item in raw.get("allowed_write_roots", [])
+                if str(item).strip()
+            ],
+            "forbidden_write_roots": [
+                str(item).strip().strip("/\\")
+                for item in raw.get("forbidden_write_roots", [])
+                if str(item).strip()
+            ],
+            "allow_plan_edits": bool(raw.get("allow_plan_edits")),
+            "allow_root_writes": bool(raw.get("allow_root_writes")),
+        }
+
+    def _snapshot_changed_files(self, snapshot: dict[str, Any]) -> list[str]:
+        files: list[str] = []
+        status_porcelain = (
+            str(snapshot.get("status_porcelain") or "")
+            if isinstance(snapshot, dict)
+            else ""
+        )
+        for raw in status_porcelain.splitlines():
+            if len(raw) < 4:
+                continue
+            payload = raw[3:]
+            if " -> " in payload:
+                payload = payload.split(" -> ", 1)[1]
+            candidate = payload.strip()
+            if candidate:
+                files.append(candidate)
+        if files:
+            return sorted(dict.fromkeys(files))
+        changed = snapshot.get("changed_files") if isinstance(snapshot, dict) else []
+        if isinstance(changed, list):
+            for item in changed:
+                if not isinstance(item, dict):
+                    continue
+                path = str(item.get("path") or "").strip()
+                if path:
+                    files.append(path)
+        return sorted(dict.fromkeys(files))
+
+    def _classify_write_scope(
+        self,
+        *,
+        changed_files: list[str],
+        write_policy: dict[str, Any],
+        plan_path: str,
+    ) -> dict[str, Any]:
+        normalized_changed = [
+            str(item).strip().replace("\\", "/").lstrip("./")
+            for item in changed_files
+            if str(item).strip()
+        ]
+        allowed_roots = {
+            str(item).strip().replace("\\", "/").strip("/")
+            for item in write_policy.get("allowed_write_roots", [])
+            if str(item).strip()
+        }
+        forbidden_roots = {
+            str(item).strip().replace("\\", "/").strip("/")
+            for item in write_policy.get("forbidden_write_roots", [])
+            if str(item).strip()
+        }
+        allow_plan_edits = bool(write_policy.get("allow_plan_edits"))
+        allow_root_writes = bool(write_policy.get("allow_root_writes"))
+        plan_rel = ""
+        try:
+            plan_rel = str(
+                Path(plan_path).expanduser().resolve().relative_to(self.workspace_root)
+            ).replace("\\", "/")
+        except Exception:
+            plan_rel = str(plan_path or "").replace("\\", "/").lstrip("./")
+
+        in_scope: list[str] = []
+        out_of_scope: list[str] = []
+        plan_edits: list[str] = []
+        forbidden_hits: list[str] = []
+        for path in normalized_changed:
+            if not path:
+                continue
+            if plan_rel and path == plan_rel:
+                if allow_plan_edits:
+                    in_scope.append(path)
+                else:
+                    plan_edits.append(path)
+                continue
+            if any(
+                path == root or path.startswith(f"{root}/")
+                for root in forbidden_roots
+                if root
+            ):
+                forbidden_hits.append(path)
+                continue
+            if allow_root_writes or not allowed_roots:
+                in_scope.append(path)
+                continue
+            if any(
+                path == root or path.startswith(f"{root}/")
+                for root in allowed_roots
+                if root
+            ):
+                in_scope.append(path)
+                continue
+            out_of_scope.append(path)
+        return {
+            "changed_files": normalized_changed,
+            "in_scope_files": sorted(dict.fromkeys(in_scope)),
+            "out_of_scope_files": sorted(dict.fromkeys(out_of_scope)),
+            "plan_edit_files": sorted(dict.fromkeys(plan_edits)),
+            "forbidden_files": sorted(dict.fromkeys(forbidden_hits)),
+            "allowed_write_roots": sorted(allowed_roots),
+            "forbidden_write_roots": sorted(forbidden_roots),
+            "allow_plan_edits": allow_plan_edits,
+            "allow_root_writes": allow_root_writes,
+            "observed_out_of_scope_mutation": bool(
+                out_of_scope or plan_edits or forbidden_hits
+            ),
+        }
+
+    def _collect_worker_evidence(
+        self,
+        *,
+        handle: RuntimeHandle,
+        node: RuntimeNodeSpec,
+        git_manager: GitWorktreeManager,
+        worktree_path: str,
+    ) -> dict[str, Any]:
+        snapshot = git_manager.inspect_managed_target(
+            worktree_path=worktree_path or None
+        )
+        write_policy = self._node_write_policy(handle, node)
+        scope = self._classify_write_scope(
+            changed_files=self._snapshot_changed_files(snapshot),
+            write_policy=write_policy,
+            plan_path=handle.run.plan_path,
+        )
+        diagnostics = {
+            "worktree_path": str(snapshot.get("worktree_path") or worktree_path or ""),
+            "worktree_exists": bool(snapshot.get("worktree_exists")),
+            "status_porcelain": str(snapshot.get("status_porcelain") or ""),
+            "changed_files": list(scope.get("changed_files", [])),
+            "in_scope_files": list(scope.get("in_scope_files", [])),
+            "out_of_scope_files": list(scope.get("out_of_scope_files", [])),
+            "forbidden_files": list(scope.get("forbidden_files", [])),
+            "plan_edit_files": list(scope.get("plan_edit_files", [])),
+            "allowed_write_roots": list(scope.get("allowed_write_roots", [])),
+            "forbidden_write_roots": list(scope.get("forbidden_write_roots", [])),
+            "observed_out_of_scope_mutation": bool(
+                scope.get("observed_out_of_scope_mutation")
+            ),
+        }
+        return {
+            "snapshot": snapshot,
+            "write_policy": write_policy,
+            "write_scope": scope,
+            "diagnostics": diagnostics,
+        }
 
     def _high_overlap_surfaces(
         self, handle: RuntimeHandle, nodes: list[RuntimeNodeSpec]
@@ -1756,6 +2600,10 @@ class LocalOrchestrator:
                 if node_id in handle.run.nodes
             ]
             if not statuses or not all(status == "succeeded" for status in statuses):
+                continue
+            if not git_manager.phase_cleanup_allowed(
+                handle.run.metadata.setdefault("git_state", {}), str(phase)
+            ):
                 continue
             cleanup_notes = git_manager.cleanup_phase(
                 handle.run.metadata.setdefault("git_state", {}),
@@ -1918,6 +2766,12 @@ class LocalOrchestrator:
     def _is_worktree_relative_glob(self, path_glob: str) -> bool:
         return self.git_orchestrator.is_worktree_relative_glob(path_glob)
 
+    def _acceptance_command_argv(self, command: str) -> list[str]:
+        text = str(command or "").strip()
+        if not text:
+            return []
+        return shlex.split(text, posix=os.name != "nt")
+
     def _evaluate_acceptance(
         self,
         node: RuntimeNodeSpec,
@@ -1945,16 +2799,20 @@ class LocalOrchestrator:
             return True, {"commands": [], "required_artifacts": [], "rubric": rubric}
 
         worktree = self._resolve_worker_worktree(commit_meta)
+        runner_env = build_worker_subprocess_env(worktree=worktree)
         command_results: list[dict[str, Any]] = []
         for command in commands:
             if not isinstance(command, str) or not command.strip():
                 continue
+            argv = self._acceptance_command_argv(command)
+            if not argv:
+                continue
             started = time.monotonic()
             try:
                 run = subprocess.run(
-                    command,
+                    argv,
                     cwd=worktree,
-                    shell=True,
+                    env=runner_env,
                     check=False,
                     capture_output=True,
                     text=True,
@@ -2087,12 +2945,43 @@ class LocalOrchestrator:
             }
 
         if node.role == "orchestrator":
+            agent_worktree = self.workspace_root
+            if node.behavior_kind == BehaviorKind.MERGE_AND_CONFLICT_RESOLUTION.value:
+                prep_status, prep_meta = git_manager.prepare_phase_integration(
+                    handle.run.metadata.setdefault("git_state", {}),
+                    node.phase,
+                )
+                if prep_status == "recovery_required":
+                    return "recovery_required", prep_meta
+                if prep_status == "failed":
+                    return "failure", {
+                        "reason": "runtime_error",
+                        **prep_meta,
+                        "preserve_targets": [
+                            {
+                                "scope": "phase",
+                                "phase": node.phase,
+                                "node_id": node.id,
+                                "worktree_path": str(prep_meta.get("worktree") or ""),
+                                "branch": str(prep_meta.get("phase_branch") or ""),
+                                "committed": None,
+                            }
+                        ],
+                    }
+                integration_worktree = (
+                    Path(str(prep_meta.get("worktree") or self.workspace_root))
+                    .expanduser()
+                    .resolve()
+                )
+                if integration_worktree.exists():
+                    agent_worktree = integration_worktree
+
             agent_ok, agent_result = self._execute_agent(
                 handle,
                 node,
                 profile,
                 handle.permission_snapshot,
-                worktree=self.workspace_root,
+                worktree=agent_worktree,
             )
             if not agent_ok:
                 return "failure", agent_result
@@ -2112,6 +3001,38 @@ class LocalOrchestrator:
                         group=node.phase,
                         task_id=node.id,
                     )
+
+                commit_ok, commit_meta = git_manager.commit_phase_integration_changes(
+                    handle.run.metadata.setdefault("git_state", {}),
+                    node.phase,
+                    f"orchestrator({node.phase}): prepare merged phase output",
+                )
+                if not commit_ok:
+                    if str(commit_meta.get("reason") or "") in {
+                        "worker_merge_conflict",
+                        "simulated_conflict",
+                    }:
+                        return "recovery_required", commit_meta
+                    if str(commit_meta.get("reason") or "") == (
+                        "base_integration_blocked_by_local_changes"
+                    ):
+                        return "recovery_required", commit_meta
+                    return "failure", {
+                        "reason": "runtime_error",
+                        **commit_meta,
+                        "preserve_targets": [
+                            {
+                                "scope": "phase",
+                                "phase": node.phase,
+                                "node_id": node.id,
+                                "worktree_path": str(commit_meta.get("worktree") or ""),
+                                "branch": str(commit_meta.get("phase_branch") or ""),
+                                "committed": bool(
+                                    str(commit_meta.get("mode") or "") == "committed"
+                                ),
+                            }
+                        ],
+                    }
 
                 status, merge_meta = git_manager.integrate_phase(
                     handle.run.metadata.setdefault("git_state", {}),
@@ -2135,8 +3056,27 @@ class LocalOrchestrator:
                 if status == "recovery_required":
                     return "recovery_required", merge_meta
                 if status == "failed":
-                    return "failure", {"reason": "runtime_error", **merge_meta}
-                return "success", {**agent_result, "integration": merge_meta}
+                    return "failure", {
+                        "reason": "runtime_error",
+                        **merge_meta,
+                        "preserve_targets": [
+                            {
+                                "scope": "phase",
+                                "phase": node.phase,
+                                "node_id": node.id,
+                                "worktree_path": str(prep_meta.get("worktree") or ""),
+                                "branch": str(prep_meta.get("phase_branch") or ""),
+                                "committed": bool(
+                                    str(commit_meta.get("mode") or "") == "committed"
+                                ),
+                            }
+                        ],
+                    }
+                return "success", {
+                    **agent_result,
+                    "phase_commit": commit_meta,
+                    "integration": merge_meta,
+                }
 
             return "success", agent_result
 
@@ -2172,7 +3112,62 @@ class LocalOrchestrator:
                 worktree=worker_worktree,
             )
             if not ok:
+                evidence = self._collect_worker_evidence(
+                    handle=handle,
+                    node=node,
+                    git_manager=git_manager,
+                    worktree_path=str(worker_info.get("worktree_path") or ""),
+                )
+                result = {
+                    **result,
+                    "worker_evidence": evidence.get("diagnostics", {}),
+                    "preserve_targets": [
+                        {
+                            "scope": "worker",
+                            "phase": node.phase,
+                            "node_id": node.id,
+                            "worktree_path": str(
+                                worker_info.get("worktree_path") or ""
+                            ),
+                            "branch": str(worker_info.get("branch") or ""),
+                            "committed": False,
+                        }
+                    ],
+                }
                 return "failure", result
+
+            evidence = self._collect_worker_evidence(
+                handle=handle,
+                node=node,
+                git_manager=git_manager,
+                worktree_path=str(worker_info.get("worktree_path") or ""),
+            )
+            if bool(evidence["write_scope"].get("observed_out_of_scope_mutation")):
+                diagnostics = (
+                    result.get("diagnostics")
+                    if isinstance(result.get("diagnostics"), dict)
+                    else {}
+                )
+                return "failure", {
+                    "reason": "backend_out_of_worktree_mutation",
+                    "error": "observed file mutations exceeded the assigned write scope",
+                    "diagnostics": {
+                        **diagnostics,
+                        **evidence["diagnostics"],
+                    },
+                    "preserve_targets": [
+                        {
+                            "scope": "worker",
+                            "phase": node.phase,
+                            "node_id": node.id,
+                            "worktree_path": str(
+                                worker_info.get("worktree_path") or ""
+                            ),
+                            "branch": str(worker_info.get("branch") or ""),
+                            "committed": False,
+                        }
+                    ],
+                }
 
             commit_ok, commit_meta = git_manager.commit_worker(
                 handle.run.metadata.setdefault("git_state", {}),
@@ -2181,6 +3176,21 @@ class LocalOrchestrator:
                 f"task({node.source_task_id or node.id}): {node.task[:72]}",
             )
             if not commit_ok:
+                commit_meta = {
+                    **commit_meta,
+                    "preserve_targets": [
+                        {
+                            "scope": "worker",
+                            "phase": node.phase,
+                            "node_id": node.id,
+                            "worktree_path": str(
+                                worker_info.get("worktree_path") or ""
+                            ),
+                            "branch": str(worker_info.get("branch") or ""),
+                            "committed": bool(worker_info.get("committed")),
+                        }
+                    ],
+                }
                 return "failure", commit_meta
             acceptance_ok, acceptance_result = self._evaluate_acceptance(
                 node,
@@ -2188,9 +3198,23 @@ class LocalOrchestrator:
                 timeout_seconds=int(handle.plan.constraints.acceptance_timeout_seconds),
             )
             if not acceptance_ok:
+                acceptance_result = {
+                    **acceptance_result,
+                    "preserve_targets": [
+                        {
+                            "scope": "worker",
+                            "phase": node.phase,
+                            "node_id": node.id,
+                            "worktree_path": str(commit_meta.get("worktree") or ""),
+                            "branch": str(commit_meta.get("branch") or ""),
+                            "committed": True,
+                        }
+                    ],
+                }
                 return "failure", acceptance_result
             return "success", {
                 **result,
+                "worker_evidence": evidence.get("diagnostics", {}),
                 "worktree": commit_meta,
                 "acceptance": acceptance_result,
             }
@@ -2204,7 +3228,7 @@ class LocalOrchestrator:
         )
         return ("success", result) if ok else ("failure", result)
 
-    def _finalize_terminal_run(
+    def _prepare_terminal_artifacts(
         self, handle: RuntimeHandle, git_manager: GitWorktreeManager
     ) -> None:
         run = handle.run
@@ -2225,6 +3249,9 @@ class LocalOrchestrator:
                 run.metadata["task_writeback"] = writeback
         run.completed_at = datetime.now(timezone.utc).isoformat()
         self._write_artifacts(run)
+
+    def _finish_terminal_run(self, handle: RuntimeHandle) -> None:
+        run = handle.run
         self._emit(
             handle,
             stage="summary",
@@ -2239,6 +3266,12 @@ class LocalOrchestrator:
         self._persist_runtime_state(handle, run.status)
         self.run_store.release_lock(run.id)
         handle.finished_event.set()
+
+    def _finalize_terminal_run(
+        self, handle: RuntimeHandle, git_manager: GitWorktreeManager
+    ) -> None:
+        self._prepare_terminal_artifacts(handle, git_manager)
+        self._finish_terminal_run(handle)
 
     def _execute_run(self, handle: RuntimeHandle) -> None:
         run = handle.run
@@ -2384,6 +3417,7 @@ class LocalOrchestrator:
                             success=True,
                             result=result,
                             fail_fast=fail_fast,
+                            git_manager=git_manager,
                         )
                     else:
                         self._apply_agent_result(
@@ -2392,6 +3426,7 @@ class LocalOrchestrator:
                             success=False,
                             result=result,
                             fail_fast=fail_fast,
+                            git_manager=git_manager,
                         )
 
                 run.active_node_id = None
@@ -2425,6 +3460,12 @@ class LocalOrchestrator:
                     run.status = "succeeded"
 
             if run.status == "paused_recovery_required":
+                self._retain_all_managed_work(
+                    handle,
+                    git_manager,
+                    reason="paused_recovery_required",
+                    failure_title="Recovery Required",
+                )
                 total_seconds = max(0.0, time.perf_counter() - run_started)
                 run.metadata["run_metrics"] = self._build_run_metrics(
                     run,
@@ -2438,10 +3479,66 @@ class LocalOrchestrator:
                 handle.finished_event.set()
                 return
 
+            total_seconds = max(0.0, time.perf_counter() - run_started)
+            execution_seconds = total_seconds
+            run.metadata["run_metrics"] = self._build_run_metrics(
+                run,
+                execution_seconds=execution_seconds,
+                cleanup_seconds=0.0,
+                total_seconds=total_seconds,
+            ).model_dump(mode="json")
+            cleanup_policy = {
+                "status": run.status,
+                "cleanup_allowed": run.status == "succeeded",
+                "mode": "terminal",
+            }
+            if run.status != "succeeded":
+                advice = classify_failure(
+                    next(
+                        (
+                            str(node.result.get("reason") or "runtime_error")
+                            for node in run.nodes.values()
+                            if node.status == "failed" and isinstance(node.result, dict)
+                        ),
+                        "runtime_error",
+                    )
+                )
+                retained = self._retain_all_managed_work(
+                    handle,
+                    git_manager,
+                    reason=f"terminal_{run.status}",
+                    failure_title=advice.title,
+                )
+                cleanup_policy["mode"] = "preserved"
+                cleanup_policy["retained_items"] = len(retained)
+                if retained:
+                    self._emit(
+                        handle,
+                        stage="orchestrator",
+                        event="CLEANUP_SKIPPED",
+                        level="warn",
+                        message="managed git artifacts preserved after non-success run",
+                        meta={
+                            "status": run.status,
+                            "retained_items": len(retained),
+                        },
+                    )
+                run.metadata["cleanup_decision"] = cleanup_policy
+                run.metadata["stale_artifacts"] = git_manager.detect_stale_artifacts(
+                    active_run_ids=self.list_active_run_ids(),
+                    max_age_hours=24,
+                )
+                self._finalize_terminal_run(handle, git_manager)
+                return
+
+            run.metadata["cleanup_decision"] = cleanup_policy
+            self._prepare_terminal_artifacts(handle, git_manager)
+
             cleanup_started = time.perf_counter()
             cleanup_notes = git_manager.cleanup_all(
                 run.metadata.setdefault("git_state", {})
             )
+            cleanup_seconds = max(0.0, time.perf_counter() - cleanup_started)
             if cleanup_notes:
                 self._emit(
                     handle,
@@ -2455,7 +3552,6 @@ class LocalOrchestrator:
                 active_run_ids=self.list_active_run_ids(),
                 max_age_hours=24,
             )
-            cleanup_seconds = max(0.0, time.perf_counter() - cleanup_started)
             total_seconds = max(0.0, time.perf_counter() - run_started)
             execution_seconds = max(0.0, total_seconds - cleanup_seconds)
             run.metadata["run_metrics"] = self._build_run_metrics(
@@ -2464,7 +3560,8 @@ class LocalOrchestrator:
                 cleanup_seconds=cleanup_seconds,
                 total_seconds=total_seconds,
             ).model_dump(mode="json")
-            self._finalize_terminal_run(handle, git_manager)
+            self._write_artifacts(run)
+            self._finish_terminal_run(handle)
         except Exception as exc:  # noqa: BLE001
             run.status = "failed"
             self._emit(
@@ -2482,4 +3579,10 @@ class LocalOrchestrator:
                 cleanup_seconds=0.0,
                 total_seconds=total_seconds,
             ).model_dump(mode="json")
+            self._retain_all_managed_work(
+                handle,
+                git_manager,
+                reason="internal_error",
+                failure_title="Runtime Error",
+            )
             self._finalize_terminal_run(handle, git_manager)

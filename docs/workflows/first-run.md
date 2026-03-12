@@ -1,7 +1,7 @@
 # First Run Workflow
 
 Owners: cli
-Last verified against commit: 70b0c1f
+Last verified against commit: 071697a
 
 ## Codex-First Path
 
@@ -66,6 +66,7 @@ Typical artifacts:
 - `.ralphite/artifacts/<run-id>/final_report.md` (human summary: outcome, changed files, acceptance results, failures, next steps)
 - `.ralphite/artifacts/<run-id>/run_metrics.json`
 - `.ralphite/artifacts/<run-id>/machine_bundle.json`
+- `.ralphite/artifacts/<run-id>/salvage_bundle.json`
 
 ## Common Follow-Up Commands
 
@@ -85,6 +86,24 @@ Recover a paused or failed run:
 
 ```bash
 uv run ralphite recover --workspace . --output table
+```
+
+Rebuild persisted state from live git/worktree truth:
+
+```bash
+uv run ralphite reconcile --workspace . --run-id <RUN_ID> --apply --output table
+```
+
+Inspect preserved work retained from a non-success run:
+
+```bash
+uv run ralphite salvage --workspace . --run-id <RUN_ID> --output table
+```
+
+Promote retained worker work after reviewing or reconciling it:
+
+```bash
+uv run ralphite promote-salvage --workspace . --run-id <RUN_ID> --node-id <NODE_ID> --output table
 ```
 
 Replay a failed run without forcing a clean primary workspace first:
@@ -108,3 +127,5 @@ uv run ralphite run --workspace . --backend codex --model gpt-5.3-codex --reason
 ## Expected Outcome
 
 - `quickstart` or `run` reaches `succeeded`, or returns a typed failure plus a concrete next action in the CLI output envelope.
+- non-success runs preserve managed work by default so the run remains inspectable
+- stream-oriented CLI output remains usable even on consoles that cannot encode Rich output cleanly

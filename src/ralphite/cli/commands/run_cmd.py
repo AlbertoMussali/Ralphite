@@ -24,6 +24,12 @@ from ..core import (
 )
 
 
+def _quote_cli_path(path: Path) -> str:
+    resolved = str(path.expanduser().resolve())
+    escaped = resolved.replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def run_command(
     workspace: Annotated[Path, typer.Option(help="Workspace root")] = Path.cwd(),
     plan: Annotated[str | None, typer.Option(help="Plan file path or name")] = None,
@@ -130,7 +136,7 @@ def run_command(
     if not quiet and output_mode != "json":
         console.print(f"Started run: [bold]{run_id}[/bold]")
         console.print(
-            f"Watch this run: `uv run ralphite watch --workspace {workspace.expanduser().resolve()} --run-id {run_id}`"
+            f"Watch this run: `uv run ralphite watch --workspace {_quote_cli_path(workspace)} --run-id {run_id}`"
         )
 
     if output_mode == "stream":

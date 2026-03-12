@@ -1,5 +1,7 @@
 # ADR-0001: Headless Backend Default
 
+Last verified against commit: 071697a
+
 - Status: Accepted
 - Date: 2026-03-05
 - Owners: engine, release
