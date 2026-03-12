@@ -475,6 +475,94 @@ def test_merge_orchestrator_edits_phase_integration_worktree_not_base(
     assert status.stdout.strip() == ""
 
 
+def test_merge_orchestrator_backend_payload_failure_with_real_output_is_salvaged(
+    workspace: Path,
+) -> None:
+    orch = LocalOrchestrator(workspace)
+
+    def merge_then_fail(self, handle, node, profile, snapshot, *, worktree):  # type: ignore[no-untyped-def]
+        target = worktree / "merge-note.md"
+        if node.role == "worker":
+            target.write_text("worker\n", encoding="utf-8")
+            return True, {"summary": "ok"}
+        if node.behavior_kind == "merge_and_conflict_resolution":
+            existing = target.read_text(encoding="utf-8") if target.exists() else ""
+            target.write_text(existing + "orchestrator\n", encoding="utf-8")
+            return False, {
+                "reason": "backend_payload_missing",
+                "error": "no final agent message",
+            }
+        return True, {"summary": "ok"}
+
+    orch._execute_agent = MethodType(merge_then_fail, orch)  # type: ignore[method-assign]
+    run_id = orch.start_run(plan_content=_conflict_plan_content())
+    assert orch.wait_for_run(run_id, timeout=8.0) is True
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "succeeded"
+    merge_node = next(
+        node
+        for node in run.nodes.values()
+        if isinstance(node.result, dict)
+        and node.result.get("backend_failure_reason") == "backend_payload_missing"
+    )
+    assert merge_node.result.get("mode") == "backend_failure_salvaged"
+    merged_note = (workspace / "merge-note.md").read_text(encoding="utf-8")
+    assert merged_note.startswith("worker\n")
+    assert "orchestrator\n" in merged_note
+
+
+def test_merge_orchestrator_backend_nonzero_after_commit_is_salvaged(
+    workspace: Path,
+) -> None:
+    orch = LocalOrchestrator(workspace)
+
+    def commit_then_fail(self, handle, node, profile, snapshot, *, worktree):  # type: ignore[no-untyped-def]
+        target = worktree / "merge-note.md"
+        if node.role == "worker":
+            target.write_text("worker\n", encoding="utf-8")
+            return True, {"summary": "ok"}
+        if node.behavior_kind == "merge_and_conflict_resolution":
+            existing = target.read_text(encoding="utf-8") if target.exists() else ""
+            target.write_text(existing + "orchestrator\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", "-A"],
+                cwd=worktree,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                ["git", "commit", "--allow-empty", "-m", "manual orchestrator commit"],
+                cwd=worktree,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return False, {
+                "reason": "backend_nonzero",
+                "error": "cursor exited after committing",
+                "exit_code": 1,
+            }
+        return True, {"summary": "ok"}
+
+    orch._execute_agent = MethodType(commit_then_fail, orch)  # type: ignore[method-assign]
+    run_id = orch.start_run(plan_content=_conflict_plan_content())
+    assert orch.wait_for_run(run_id, timeout=8.0) is True
+    run = orch.get_run(run_id)
+    assert run is not None
+    assert run.status == "succeeded"
+    merge_node = next(
+        node
+        for node in run.nodes.values()
+        if isinstance(node.result, dict)
+        and node.result.get("backend_failure_reason") == "backend_nonzero"
+    )
+    assert merge_node.result.get("mode") == "backend_failure_salvaged"
+    merged_note = (workspace / "merge-note.md").read_text(encoding="utf-8")
+    assert "orchestrator\n" in merged_note
+
+
 def test_high_overlap_branched_work_is_serialized(workspace: Path) -> None:
     orch = LocalOrchestrator(workspace)
     handle = RuntimeHandle(

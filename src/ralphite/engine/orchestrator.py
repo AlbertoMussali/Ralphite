@@ -2648,6 +2648,87 @@ class LocalOrchestrator:
             "acceptance": acceptance_result,
         }
 
+    def _should_attempt_orchestrator_backend_failure_salvage(
+        self,
+        result: dict[str, Any],
+        *,
+        git_manager: GitWorktreeManager,
+        phase_branch: str,
+        integration_worktree: str,
+    ) -> bool:
+        reason = str(result.get("reason") or "")
+        if reason not in {
+            "backend_nonzero",
+            "backend_payload_missing",
+            "backend_payload_malformed",
+            "backend_output_malformed",
+        }:
+            return False
+        snapshot = git_manager.inspect_managed_target(
+            worktree_path=integration_worktree or None,
+            branch=phase_branch or None,
+        )
+        if str(snapshot.get("status_porcelain") or "").strip():
+            return True
+        if phase_branch and git_manager._phase_touched_files(phase_branch):  # noqa: SLF001
+            return True
+        return False
+
+    def _attempt_orchestrator_backend_failure_salvage(
+        self,
+        *,
+        handle: RuntimeHandle,
+        node: RuntimeNodeSpec,
+        git_manager: GitWorktreeManager,
+        result: dict[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        recovery = handle.run.metadata.setdefault("recovery", {})
+        selected_mode = str(recovery.get("selected_mode") or "manual")
+        selected_prompt = recovery.get("prompt")
+
+        commit_ok, commit_meta = git_manager.commit_phase_integration_changes(
+            handle.run.metadata.setdefault("git_state", {}),
+            node.phase,
+            f"orchestrator({node.phase}): prepare merged phase output",
+        )
+        if not commit_ok:
+            return False, commit_meta
+
+        status, merge_meta = git_manager.integrate_phase(
+            handle.run.metadata.setdefault("git_state", {}),
+            node.phase,
+            recovery_mode=selected_mode,
+            recovery_prompt=str(selected_prompt) if selected_prompt else None,
+        )
+        if status != "success":
+            return False, merge_meta
+        diagnostics = (
+            result.get("diagnostics")
+            if isinstance(result.get("diagnostics"), dict)
+            else {}
+        )
+        return True, {
+            "mode": "backend_failure_salvaged",
+            "backend_failure_reason": str(result.get("reason") or ""),
+            "backend_failure": {
+                "reason": str(result.get("reason") or ""),
+                "error": str(result.get("error") or ""),
+                "exit_code": result.get("exit_code"),
+                "stdout_excerpt": str(result.get("stdout_excerpt") or ""),
+                "stderr_excerpt": str(result.get("stderr_excerpt") or ""),
+            },
+            "summary": str(
+                result.get("summary")
+                or "salvaged orchestrator output from local integration worktree evidence"
+            ),
+            "diagnostics": {
+                **diagnostics,
+                "salvaged_from_backend_failure": True,
+            },
+            "phase_commit": commit_meta,
+            "integration": merge_meta,
+        }
+
     def _high_overlap_surfaces(
         self, handle: RuntimeHandle, nodes: list[RuntimeNodeSpec]
     ) -> list[str]:
@@ -3033,6 +3114,7 @@ class LocalOrchestrator:
 
         if node.role == "orchestrator":
             agent_worktree = self.workspace_root
+            prep_meta: dict[str, Any] = {}
             if node.behavior_kind == BehaviorKind.MERGE_AND_CONFLICT_RESOLUTION.value:
                 prep_status, prep_meta = git_manager.prepare_phase_integration(
                     handle.run.metadata.setdefault("git_state", {}),
@@ -3071,6 +3153,26 @@ class LocalOrchestrator:
                 worktree=agent_worktree,
             )
             if not agent_ok:
+                if (
+                    node.behavior_kind
+                    == BehaviorKind.MERGE_AND_CONFLICT_RESOLUTION.value
+                    and self._should_attempt_orchestrator_backend_failure_salvage(
+                        agent_result,
+                        git_manager=git_manager,
+                        phase_branch=str(prep_meta.get("phase_branch") or ""),
+                        integration_worktree=str(prep_meta.get("worktree") or ""),
+                    )
+                ):
+                    salvaged, salvage_result = (
+                        self._attempt_orchestrator_backend_failure_salvage(
+                            handle=handle,
+                            node=node,
+                            git_manager=git_manager,
+                            result=agent_result,
+                        )
+                    )
+                    if salvaged:
+                        return "success", salvage_result
                 return "failure", agent_result
 
             if node.behavior_kind == BehaviorKind.MERGE_AND_CONFLICT_RESOLUTION.value:
